@@ -895,6 +895,47 @@ check('rpc reports cleanly when there is no bridge', () => {
   return 'resolves instead of hanging'
 })
 
+check('manager-worker.js exists and is a patch target', () => {
+  assert(archive.has('dist/js/manager-worker.js'), 'manager worker missing from the archive')
+  const flCompat2 = require('../src/compat/fluxloader')
+  assert(flCompat2.normaliseTarget('manager-worker.js') === 'js/manager-worker.js', 'alias not mapped')
+  return 'present and addressable'
+})
+
+check('sandkit is reachable through the game state', () => {
+  // 0.5.4 exposes the official API as state.sandkit.getApi(). Confirm the shape
+  // the runtime relies on is really in the bundle.
+  assert(/sandkit\s*:/.test(bundle) || /\.sandkit\s*=/.test(bundle), 'state.sandkit is never assigned')
+  assert(bundle.includes('sandkit.getApi'), 'sandkit.getApi() not found')
+  return 'state.sandkit.getApi() present'
+})
+
+check('runtime captures sandkit alongside FH', () => {
+  const { S } = bootConsole()
+  const fakeApi = { elements: {}, structures: {}, world: {} }
+  const st = { store: {}, session: {}, sandkit: { getApi: () => fakeApi } }
+  S.__capture({ events: {}, ui: { update() {} } }, st, 'game:ready')
+  assert(S.sandkit === fakeApi, 'sandkit not captured')
+  assert(S.game, 'FH capture regressed')
+  return 'both APIs exposed'
+})
+
+check('a missing or throwing sandkit does not break capture', () => {
+  const { S } = bootConsole()
+  S.__capture({ events: {} }, { store: {}, session: {} }, 'game:ready')
+  assert(S.sandkit === null, 'sandkit should be null when absent, got: ' + S.sandkit)
+  assert(S.game, 'capture failed without sandkit')
+
+  const { S: S2 } = bootConsole()
+  S2.__capture({ events: {} }, {
+    store: {}, session: {},
+    sandkit: { getApi: () => { throw new Error('nope') } },
+  }, 'game:ready')
+  assert(S2.sandkit === null, 'throwing getApi was not contained')
+  assert(S2.game, 'a throwing getApi broke the whole capture')
+  return 'degrades to FH only'
+})
+
 if (archive) archive.close()
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`)

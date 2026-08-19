@@ -108,6 +108,22 @@ function excerpt(source, index) {
  * @param {{logger?:{debug:Function,warn:Function,error:Function}}} [opts]
  * @returns {{source:string, outcomes:PatchOutcome[], ok:boolean, error?:SmlnError}}
  */
+/**
+ * Split into consecutive runs that must succeed or fail together.
+ * A patch without a `group` forms a run of its own.
+ * @param {Patch[]} patches
+ * @returns {{group:string|undefined, members:Patch[]}[]}
+ */
+function toGroups(patches) {
+  const runs = []
+  for (const p of patches) {
+    const last = runs[runs.length - 1]
+    if (p.group && last && last.group === p.group) last.members.push(p)
+    else runs.push({ group: p.group, members: [p] })
+  }
+  return runs
+}
+
 function apply(source, patches, opts = {}) {
   const log = opts.logger
   const original = source
@@ -115,7 +131,64 @@ function apply(source, patches, opts = {}) {
   const outcomes = []
   let current = source
 
-  for (const p of patches) {
+  for (const run of toGroups(patches)) {
+    // An atomic group is all-or-nothing: probe every member against the text as
+    // it stands now, and only commit if the whole group resolves. Half of a
+    // group is worse than none of it, because the mod's assumptions no longer
+    // hold in the code it did manage to change.
+    if (run.group && run.members.length > 1) {
+      const probes = run.members.map((p) => {
+        const expect = p.expect == null ? 1 : p.expect
+        const { count, firstIndex } = probe(current, p.find)
+        const ok = expect === 'any' ? count > 0 : count === expect
+        return { patch: p, count, firstIndex, ok, expect }
+      })
+      const broken = probes.filter((x) => !x.ok)
+      if (broken.length) {
+        for (const x of probes) {
+          outcomes.push({
+            id: x.patch.id,
+            status: 'skipped',
+            matches: x.count,
+            reason: x.ok
+              ? `skipped: atomic group "${run.group}" could not be applied in full`
+              : `expected ${x.expect} match(es), found ${x.count}`,
+            context: x.firstIndex >= 0 ? excerpt(current, x.firstIndex) : undefined,
+          })
+        }
+        const names = broken.map((x) => x.patch.id).join(', ')
+        log && log.error(`atomic group "${run.group}" skipped entirely - unresolved: ${names}`)
+        if (run.members.some((p) => p.required)) {
+          return {
+            source: original,
+            outcomes,
+            ok: false,
+            error: new SmlnError('E_PATCH_FAILED',
+              `required atomic group "${run.group}" could not be applied (${names})`,
+              { detail: { group: run.group, broken: broken.map((x) => x.patch.id) } }),
+          }
+        }
+        continue
+      }
+      for (const x of probes) {
+        current = current.replace(toRegExp(x.patch.find), /** @type {any} */ (x.patch.replace))
+        outcomes.push({ id: x.patch.id, status: 'applied', matches: x.count })
+      }
+      log && log.debug(`atomic group "${run.group}": ${probes.length} patch(es) applied`)
+      continue
+    }
+
+    const result = applyOne(run.members[0], current, outcomes, log, original)
+    if (result.abort) return result.value
+    current = result.source
+  }
+
+  return { source: current, outcomes, ok: true }
+}
+
+/** Apply a single ungrouped patch. Extracted so `apply` stays readable. */
+function applyOne(p, current, outcomes, log, original) {
+  {
     const expect = p.expect == null ? 1 : p.expect
     const required = p.required !== false
     const { count, firstIndex } = probe(current, p.find)
@@ -130,30 +203,43 @@ function apply(source, patches, opts = {}) {
       }
       outcomes.push(outcome)
       if (required) {
-        log && log.error(`patch ${p.id}: anchor did not match - aborting, bundle left unpatched`)
+        log && log.error(`patch ${p.id}: anchor did not match - aborting, file left unpatched`)
         return {
-          source: original,
-          outcomes,
-          ok: false,
-          error: new SmlnError('E_PATCH_FAILED', `patch "${p.id}" anchor did not match`, {
-            detail: { id: p.id, owner: p.owner, description: p.description },
-          }),
+          abort: true,
+          value: {
+            source: original,
+            outcomes,
+            ok: false,
+            error: new SmlnError('E_PATCH_FAILED', `patch "${p.id}" anchor did not match`, {
+              detail: { id: p.id, owner: p.owner, description: p.description },
+            }),
+          },
         }
       }
       log && log.warn(`patch ${p.id}: optional anchor missing, skipped`)
-      continue
+      return { abort: false, source: current }
     }
 
     if (expect !== 'any' && count !== expect) {
-      outcomes.push({ id: p.id, status: 'failed', matches: count, reason: `expected ${expect}, found ${count}`, context })
-      log && log.error(`patch ${p.id}: ambiguous anchor (${count} matches, expected ${expect}) - aborting`)
+      outcomes.push({
+        id: p.id,
+        status: required ? 'failed' : 'skipped',
+        matches: count,
+        reason: `expected ${expect}, found ${count}`,
+        context,
+      })
+      log && log.error(`patch ${p.id}: ambiguous anchor (${count} matches, expected ${expect})`)
+      if (!required) return { abort: false, source: current }
       return {
-        source: original,
-        outcomes,
-        ok: false,
-        error: new SmlnError('E_PATCH_AMBIGUOUS', `patch "${p.id}" matched ${count} times, expected ${expect}`, {
-          detail: { id: p.id, owner: p.owner, matches: count, context },
-        }),
+        abort: true,
+        value: {
+          source: original,
+          outcomes,
+          ok: false,
+          error: new SmlnError('E_PATCH_AMBIGUOUS', `patch "${p.id}" matched ${count} times, expected ${expect}`, {
+            detail: { id: p.id, owner: p.owner, matches: count, context },
+          }),
+        },
       }
     }
 
@@ -161,9 +247,8 @@ function apply(source, patches, opts = {}) {
     current = current.replace(re, /** @type {any} */ (p.replace))
     outcomes.push({ id: p.id, status: 'applied', matches: count, context })
     log && log.debug(`patch ${p.id}: applied (${count} match(es))`)
+    return { abort: false, source: current }
   }
-
-  return { source: current, outcomes, ok: true }
 }
 
-module.exports = { apply, verify, probe, escapeLiteral, toRegExp }
+module.exports = { apply, verify, probe, escapeLiteral, toRegExp, toGroups }

@@ -61,6 +61,8 @@ function urlToPath(rawUrl) {
 function install(opts) {
   const { protocol, distDir, patchesByFile, logger } = opts
   const preludeFor = opts.preludeFor || (() => null)
+  /** dist-relative path -> absolute replacement file, from mod overrides. */
+  const redirects = opts.redirects || {}
 
   const stats = { requests: 0, served: {}, failures: 0, outcomes: {} }
   /** @type {Map<string,string>} rel -> transformed source */
@@ -120,6 +122,20 @@ function install(opts) {
       }
 
       const rel = relativeOf(filePath)
+
+      // Config and texture overrides: serve the mod's file in place of the
+      // game's. Doing it here means overrides work on any build, without the
+      // game needing to know about them.
+      if (rel && redirects[rel]) {
+        try {
+          const body = fs.readFileSync(redirects[rel])
+          stats.served[rel] = (stats.served[rel] || 0) + 1
+          return new Response(body, { headers: { 'Content-Type': mimeFor(redirects[rel]) } })
+        } catch (e) {
+          logger.error(`override for ${rel} unreadable, serving the original: ${e && e.message}`)
+        }
+      }
+
       const wanted = rel && ((patchesByFile[rel] && patchesByFile[rel].length) || preludeFor(rel))
 
       if (wanted) {
@@ -150,7 +166,11 @@ function install(opts) {
   }
 
   const targets = Object.keys(patchesByFile).filter((k) => patchesByFile[k].length)
-  logger.info(`file interceptor active (dist: ${distDir}; targets: ${targets.join(', ') || 'prelude only'})`)
+  const overrideCount = Object.keys(redirects).length
+  logger.info(
+    `file interceptor active (dist: ${distDir}; targets: ${targets.join(', ') || 'prelude only'}` +
+    (overrideCount ? `; ${overrideCount} override(s)` : '') + ')'
+  )
   return {
     ok: true,
     stats: () => stats,

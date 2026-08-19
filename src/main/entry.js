@@ -33,6 +33,7 @@ const locate = require('../asar/locate')
 const modLoader = require('../mods/loader')
 const flCompat = require('../compat/fluxloader')
 const modManage = require('../mods/manage')
+const official = require('../mods/official')
 const interceptor = require('./interceptor')
 const { corePatches } = require('../patch/core-patches')
 const prelude = require('../renderer/prelude')
@@ -43,6 +44,7 @@ const VERSION = '0.1.0'
 const BUNDLE = 'js/bundle.js'
 const SIM_WORKER = 'js/simulation-worker.js'
 const UTIL_WORKER = 'js/utility-worker.js'
+const MANAGER_WORKER = 'js/manager-worker.js'
 
 const runtime = {
   host: null,
@@ -51,9 +53,11 @@ const runtime = {
   mods: [],
   flMods: [],
   /** @type {Record<string, any[]>} */
-  patchesByFile: { [BUNDLE]: [], [SIM_WORKER]: [], [UTIL_WORKER]: [] },
+  patchesByFile: { [BUNDLE]: [], [SIM_WORKER]: [], [UTIL_WORKER]: [], [MANAGER_WORKER]: [] },
   rendererScripts: [],
-  workerScripts: { [SIM_WORKER]: [], [UTIL_WORKER]: [] },
+  workerScripts: { [SIM_WORKER]: [], [UTIL_WORKER]: [], [MANAGER_WORKER]: [] },
+  officialMods: [],
+  redirects: {},
   errors: [],
   configDir: null,
   modStates: {},
@@ -327,6 +331,50 @@ async function initialize(hostAPI) {
       }
     }
 
+    // ---- official Sandustry mods (manifestVersion 1)
+    const officialFound = official.discover([...roots, ...flRoots], logger.child('official'))
+    applyModStates(officialFound.mods)
+    runtime.errors.push(...officialFound.errors)
+    officialFound.errors.forEach((e) => logger.warn(String(e)))
+    const officialActive = officialFound.mods.filter((m) => m.enabled !== false)
+    runtime.officialMods = officialFound.mods
+
+    if (officialActive.length) {
+      const { patchesByFile: officialPatchMap, errors: patchErrors } =
+        official.collectPatches(officialActive, logger.child('official'))
+      runtime.errors.push(...patchErrors)
+      for (const [target, list] of Object.entries(officialPatchMap)) addPatches(target, list)
+
+      // main-thread entry runs in the renderer alongside our runtime;
+      // workerEntry runs in the manager and simulation workers.
+      for (const mod of officialActive) {
+        if (mod.entry) {
+          runtime.rendererScripts.push(
+            `/* official mod: ${mod.id}@${mod.version} */
+` + fs.readFileSync(mod.entry, 'utf8'))
+        }
+        if (mod.workerEntry) {
+          const src = fs.readFileSync(mod.workerEntry, 'utf8')
+          runtime.workerScripts[SIM_WORKER].push(src)
+          runtime.workerScripts[MANAGER_WORKER].push(src)
+        }
+        if (mod.map) {
+          logger.warn(`${mod.id} is a map mod; map blueprints need game-side support and are not loaded yet`)
+        }
+      }
+
+      if (runtime.install) {
+        const reader = require('../asar/reader')
+        let archive = null
+        try { archive = reader.open(runtime.install.asar) } catch (_) {}
+        const has = (rel) => {
+          try { return archive ? archive.has('dist/' + rel) : false } catch (_) { return false }
+        }
+        runtime.redirects = official.buildOverrides(officialActive, has, logger.child('official'))
+        if (archive) archive.close()
+      }
+    }
+
     // ---- patches
     addPatches(BUNDLE, corePatches)
     for (const p of mainLoaded.patches) addPatches(p.target || BUNDLE, [p])
@@ -360,6 +408,7 @@ async function startManager() {
       protocol,
       distDir,
       patchesByFile: runtime.patchesByFile,
+      redirects: runtime.redirects,
       logger: logger.child('interceptor'),
       preludeFor(rel) {
         if (rel === BUNDLE) {

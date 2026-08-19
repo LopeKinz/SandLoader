@@ -44,6 +44,9 @@ const FILE_ALIASES = {
   'utility-worker.js': 'js/utility-worker.js',
   'js/utility-worker.js': 'js/utility-worker.js',
   'dist/js/utility-worker.js': 'js/utility-worker.js',
+  'manager-worker.js': 'js/manager-worker.js',
+  'js/manager-worker.js': 'js/manager-worker.js',
+  'dist/js/manager-worker.js': 'js/manager-worker.js',
   'index.html': 'index.html',
 }
 
