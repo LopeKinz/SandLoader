@@ -1,0 +1,7 @@
+{
+  "id": "example-hello",
+  "name": "Hello Example",
+  "version": "1.0.0",
+  "priority": 100,
+  "renderer": "renderer.js"
+}

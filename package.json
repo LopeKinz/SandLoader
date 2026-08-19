@@ -1,0 +1,17 @@
+{
+  "name": "sandloader",
+  "version": "0.1.0",
+  "description": "Mod loader for Sandustry",
+  "private": true,
+  "main": "src/main/entry.js",
+  "scripts": {
+    "install-loader": "node install.js",
+    "status": "node install.js --status",
+    "uninstall": "node install.js --uninstall",
+    "test": "node tools/selftest.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
