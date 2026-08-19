@@ -1,0 +1,989 @@
+{
+ "__meta": {
+  "note": "Content reference tables. Data only - no behaviour depends on this file being present.",
+  "source": "community data dump (trim.data-dump), cross-checked against the installed bundle",
+  "verifiedAgainst": "0.5.5",
+  "generated": "2026-08-19",
+  "excluded": [
+   "tech",
+   "upgrades",
+   "machineRecipes"
+  ]
+ },
+ "elements": [
+  {
+   "id": "auralite",
+   "name": "Auralite",
+   "description": "A crystalline shard that hardens into Auralite Crystal when activated.",
+   "matterType": "Powder",
+   "density": 100,
+   "color": "#FF66B3"
+  },
+  {
+   "id": "aurixite",
+   "name": "Aurixite",
+   "description": "A crystalline mass created by transmuting Florinol.",
+   "matterType": null,
+   "density": 200,
+   "color": "#8B82E0"
+  },
+  {
+   "id": "basalt",
+   "name": "Cinder",
+   "description": null,
+   "matterType": "Solid",
+   "density": 50,
+   "color": "#8B0000"
+  },
+  {
+   "id": "burntResidue",
+   "name": "Burnt Residue",
+   "description": null,
+   "matterType": "Solid",
+   "density": 50,
+   "color": "#808080"
+  },
+  {
+   "id": "caulk",
+   "name": "Caulk",
+   "description": "A quick-setting compound that solidifies on impact.",
+   "matterType": "Solid",
+   "density": 200,
+   "color": "#FF8C00"
+  },
+  {
+   "id": "cloud",
+   "name": "Cloud",
+   "description": "A slowly drifting condensation of steam that eventually falls as rain.",
+   "matterType": "Powder",
+   "density": 30,
+   "color": "#E8EEF5"
+  },
+  {
+   "id": "coolant",
+   "name": "Coolant",
+   "description": "A nuclear cooling liquid used in reactor systems.",
+   "matterType": "Liquid",
+   "density": 300,
+   "color": "#0033AA"
+  },
+  {
+   "id": "copper",
+   "name": "Copper",
+   "description": null,
+   "matterType": "Solid",
+   "density": 200,
+   "color": "#B87333"
+  },
+  {
+   "id": "dryPetalium",
+   "name": "Dry Amethelis",
+   "description": "A lighter, dried version of Amethelis that burns into Florin.",
+   "matterType": "Wisp",
+   "density": 39,
+   "color": "#FFB3D9"
+  },
+  {
+   "id": "fire",
+   "name": "Fire",
+   "description": null,
+   "matterType": "Gas",
+   "density": 25,
+   "color": "#FF4500"
+  },
+  {
+   "id": "flame",
+   "name": "Flame",
+   "description": null,
+   "matterType": "Solid",
+   "density": 50,
+   "color": "#FFA500"
+  },
+  {
+   "id": "florin",
+   "name": "Florin",
+   "description": "A gas created by burning dry petals.",
+   "matterType": "Gas",
+   "density": 20,
+   "color": "#C9A0FF"
+  },
+  {
+   "id": "florinol",
+   "name": "Florinol",
+   "description": "A liquid that stores energy and can be transmuted into Aurixite.",
+   "matterType": "Liquid",
+   "density": 30,
+   "color": "#9B4FE0"
+  },
+  {
+   "id": "freezingIce",
+   "name": "Snow",
+   "description": null,
+   "matterType": "Powder",
+   "density": 150,
+   "color": "#E0FFFF"
+  },
+  {
+   "id": "gloom",
+   "name": "Voidbloom",
+   "description": null,
+   "matterType": "Slushy",
+   "density": 30,
+   "color": "#7A00A8"
+  },
+  {
+   "id": "gold",
+   "name": "Gold",
+   "description": null,
+   "matterType": "Solid",
+   "density": 300,
+   "color": "#FFD700"
+  },
+  {
+   "id": "growingVoidSeed",
+   "name": "Growing Void Seed",
+   "description": "A void seed that has been planted and is growing into a void flower.",
+   "matterType": "Static",
+   "density": 100,
+   "color": "#5B2C8C"
+  },
+  {
+   "id": "heatedWater",
+   "name": "Heated Water",
+   "description": "Water that has been heated. Heat disperses to neighbors over time.",
+   "matterType": null,
+   "density": null,
+   "color": null
+  },
+  {
+   "id": "hyperpressure",
+   "name": "Hyperpressure",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 1,
+   "color": null
+  },
+  {
+   "id": "irradiatedCrystal",
+   "name": "Irradiated Crystal",
+   "description": "A crystalline solid formed when coolant is exposed to reactor core radiation.",
+   "matterType": "Solid",
+   "density": 300,
+   "color": "#FF69B4"
+  },
+  {
+   "id": "lava",
+   "name": "Lava",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 75,
+   "color": "#FF3300"
+  },
+  {
+   "id": "liquidCopper",
+   "name": "Liquid Copper",
+   "description": "A molten copper liquid created by smelting Copper.",
+   "matterType": "Liquid",
+   "density": 150,
+   "color": "#B87333"
+  },
+  {
+   "id": "liquidGold",
+   "name": "Liquid Gold",
+   "description": "A precious liquid metal created by smelting Gold.",
+   "matterType": "Liquid",
+   "density": 120,
+   "color": "#FFD700"
+  },
+  {
+   "id": "moonhop",
+   "name": "Moonhop",
+   "description": "A bouncy lunar element.",
+   "matterType": "Solid",
+   "density": 80,
+   "color": "#E0B8E8"
+  },
+  {
+   "id": "oil",
+   "name": "Oil",
+   "description": "A flammable liquid that can be used to create fuel.",
+   "matterType": "Liquid",
+   "density": 80,
+   "color": "#1A1410"
+  },
+  {
+   "id": "petalium",
+   "name": "Amethelis",
+   "description": null,
+   "matterType": "Wisp",
+   "density": 40,
+   "color": "#CC5CDB"
+  },
+  {
+   "id": "pressurizedWater",
+   "name": "Pressurized Water",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 200,
+   "color": null
+  },
+  {
+   "id": "prismaline",
+   "name": "Prismaline",
+   "description": "Spectral gas distilled from Prismite.",
+   "matterType": "Gas",
+   "density": 24,
+   "color": "#FF99CC"
+  },
+  {
+   "id": "prismite",
+   "name": "Prismite",
+   "description": "A prismatic slush condensed from each mined Aura crystal.",
+   "matterType": "Slushy",
+   "density": 30,
+   "color": "#FF66CC"
+  },
+  {
+   "id": "pyronol",
+   "name": "Pyronol",
+   "description": "A luminous liquid produced by smelting Aurixite.",
+   "matterType": "Liquid",
+   "density": 90,
+   "color": "#3050C8"
+  },
+  {
+   "id": "reactorCore",
+   "name": "Reactor Core",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 1,
+   "color": null
+  },
+  {
+   "id": "residue",
+   "name": "Residue",
+   "description": null,
+   "matterType": "Slushy",
+   "density": 50,
+   "color": "#CCCCCC"
+  },
+  {
+   "id": "retroConsoleCasing",
+   "name": "Console Casing",
+   "description": null,
+   "matterType": "Static",
+   "density": 100,
+   "color": null
+  },
+  {
+   "id": "retroConsolePixelOff",
+   "name": "Console Pixel (Off)",
+   "description": null,
+   "matterType": "Static",
+   "density": 100,
+   "color": null
+  },
+  {
+   "id": "retroConsolePixelOn",
+   "name": "Console Pixel (On)",
+   "description": null,
+   "matterType": "Static",
+   "density": 100,
+   "color": "#00FF00"
+  },
+  {
+   "id": "sand",
+   "name": "Sand",
+   "description": null,
+   "matterType": "Solid",
+   "density": 150,
+   "color": "#F4A460"
+  },
+  {
+   "id": "sandium",
+   "name": "Redsand",
+   "description": null,
+   "matterType": "Solid",
+   "density": 160,
+   "color": "#A04040"
+  },
+  {
+   "id": "seed",
+   "name": "Seed",
+   "description": null,
+   "matterType": "Solid",
+   "density": 150,
+   "color": "#7FFF00"
+  },
+  {
+   "id": "seedling",
+   "name": "Seedling",
+   "description": null,
+   "matterType": "Static",
+   "density": 100,
+   "color": "#1B5E20"
+  },
+  {
+   "id": "slowFlow",
+   "name": "Slow Flow",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 1,
+   "color": null
+  },
+  {
+   "id": "steam",
+   "name": "Steam",
+   "description": null,
+   "matterType": "Gas",
+   "density": 25,
+   "color": "#F7F7F7"
+  },
+  {
+   "id": "sunsand",
+   "name": "Sunsand",
+   "description": "Desert sand that hardens when it comes to rest.",
+   "matterType": "Solid",
+   "density": null,
+   "color": null
+  },
+  {
+   "id": "voidhusk",
+   "name": "Voidhusk",
+   "description": "Drained cosmic residue.",
+   "matterType": "Slushy",
+   "density": 45,
+   "color": "#B14BE5"
+  },
+  {
+   "id": "voidjuice",
+   "name": "Voidjuice",
+   "description": "A mysterious cosmic liquid created from the fusion of Void Petal and Moonhop.",
+   "matterType": "Liquid",
+   "density": 55,
+   "color": "#9B5FCF"
+  },
+  {
+   "id": "voidPetal",
+   "name": "Void Petal",
+   "description": "A mysterious petal from a void flower that contains cosmic energy.",
+   "matterType": "Wisp",
+   "density": 40,
+   "color": "#00CED1"
+  },
+  {
+   "id": "voidSeeds",
+   "name": "Void Seed",
+   "description": "Mysterious seeds from the void that contain the essence of outer space.",
+   "matterType": "Slushy",
+   "density": 30,
+   "color": "#9932CC"
+  },
+  {
+   "id": "water",
+   "name": "Water",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 100,
+   "color": "#1E90FF"
+  },
+  {
+   "id": "waterPressure",
+   "name": "Water Pressure",
+   "description": null,
+   "matterType": "Liquid",
+   "density": 1,
+   "color": null
+  },
+  {
+   "id": "wetSand",
+   "name": "Wet Sand",
+   "description": null,
+   "matterType": "Slushy",
+   "density": 150,
+   "color": "#CD853F"
+  },
+  {
+   "id": "wetSeed",
+   "name": "Wet Seed",
+   "description": null,
+   "matterType": "Slushy",
+   "density": 100,
+   "color": "#66CC66"
+  }
+ ],
+ "structures": [
+  {
+   "id": "aurixiteCrystallizer",
+   "name": "Synthesizer",
+   "description": "Converts matters by transmuting one resource into another. This allows transformations such as Florinol into Aurixite.",
+   "category": "production"
+  },
+  {
+   "id": "burnerBeltRight",
+   "name": "Burner Belt",
+   "description": "Moves elements at regular belt speed. Ignites flammable materials above when fueled by an adjacent Thermal Buffer. Without heat, acts as a normal belt.",
+   "category": "thermal"
+  },
+  {
+   "id": "clearingFrameRight",
+   "name": "Clearing Frame",
+   "description": "Moves elements inside.",
+   "category": "logistics"
+  },
+  {
+   "id": "collector",
+   "name": "Collector",
+   "description": "A collector tile that you can put Gold in, giving you {creditsSymbol}.",
+   "category": "economy"
+  },
+  {
+   "id": "conveyor",
+   "name": "Conveyor Belt",
+   "description": "Transports Sand and other solid elements. Hold {key.ReverseBuildDirection} to reverse direction when building.",
+   "category": "logistics"
+  },
+  {
+   "id": "conveyorRightMk2",
+   "name": "Conveyor Belt Mk.2",
+   "description": "Moves elements faster.",
+   "category": "logistics"
+  },
+  {
+   "id": "copperMold",
+   "name": "Copper Mold",
+   "description": "A mold that only accepts Liquid Copper. When filled, it transforms into a solid Power Brick that can be used to store Energy.",
+   "category": "energy"
+  },
+  {
+   "id": "critterFence",
+   "name": "Critter Fence",
+   "description": "A barrier that lets every element pass through but keeps critters from crossing.",
+   "category": "blocks"
+  },
+  {
+   "id": "earthStratacore",
+   "name": "Earth Stratacore",
+   "description": "Slowly generates and reinforces Earth Strataform. Only one can be placed at a time.",
+   "category": "production"
+  },
+  {
+   "id": "electricityConnector",
+   "name": "Energy Connector",
+   "description": "A passive conductor that bridges power structures so Energy can flow between them. For example, connecting a Steam Turbine to a Power Brick network.",
+   "category": "energy"
+  },
+  {
+   "id": "fiftyFifty",
+   "name": "Harmonizer",
+   "description": "Consumes two materials and converts them into one.",
+   "category": "production"
+  },
+  {
+   "id": "filter",
+   "name": "Filter",
+   "description": "Filters out elements based on the filter settings. The filtered element goes through while the rest will get transported as usual.",
+   "category": "logistics"
+  },
+  {
+   "id": "filterMk2",
+   "name": "Advanced Filter",
+   "description": "Filters multiple element types at once, including liquids and gases.",
+   "category": "logistics"
+  },
+  {
+   "id": "filterWall",
+   "name": "Filter Wall",
+   "description": "Filters elements based on filter settings without acting as a conveyor.",
+   "category": "logistics"
+  },
+  {
+   "id": "filterWallMk2",
+   "name": "Advanced Filter Wall",
+   "description": "Filters multiple element types at once, including liquids and gases, without acting as a conveyor.",
+   "category": "logistics"
+  },
+  {
+   "id": "foundation",
+   "name": "Foundation",
+   "description": "A basic block foundation. Hold {key.ReverseBuildDirection} to reverse the direction of angled blocks.",
+   "category": "blocks"
+  },
+  {
+   "id": "glassFoundation",
+   "name": "Glass Foundation",
+   "description": "A transparent glass foundation.",
+   "category": "blocks"
+  },
+  {
+   "id": "gloomEmitter",
+   "name": "Flux Emanator",
+   "description": "Converts Voidbloom into Fluxite.",
+   "category": "special"
+  },
+  {
+   "id": "goldBattery",
+   "name": "Florinol Battery",
+   "description": "Putting Florinol in a battery generates and stores Energy.",
+   "category": "energy"
+  },
+  {
+   "id": "grower",
+   "name": "Planter Box",
+   "description": "Drop Wet Seed on a Planter Box to start growing flowers that you can destroy to get Gold and Amethelis.",
+   "category": "production"
+  },
+  {
+   "id": "heatCannon",
+   "name": "Pyro Dispenser",
+   "description": "Fires a flame burst every {seconds} seconds in the direction it was placed. Each shot consumes heat from an adjacent Thermal Buffer.",
+   "category": null
+  },
+  {
+   "id": "kineticFieldEmitter",
+   "name": "Aerokinetic Fan",
+   "description": "Blows petals and powders through the air, such as Amethelis and Snow.",
+   "category": "logistics"
+  },
+  {
+   "id": "launcher",
+   "name": "Launcher",
+   "description": "Will launch elements upward (straight or to the sides). You can build a column of launchers to create a vertical conveyor lift.",
+   "category": "logistics"
+  },
+  {
+   "id": "launcherUpMk2",
+   "name": "Launcher Mk.2",
+   "description": "Launches elements faster.",
+   "category": "logistics"
+  },
+  {
+   "id": "light",
+   "name": "Wall Light",
+   "description": "A static light that illuminates the area.",
+   "category": "lighting"
+  },
+  {
+   "id": "liquidVent",
+   "name": "Liquid Vent",
+   "description": "Releases liquids from the connected pipe.",
+   "category": "fluids"
+  },
+  {
+   "id": "pipe",
+   "name": "Pipe",
+   "description": "Pipes are used to transport liquids. Can only be removed while pipes are selected.",
+   "category": "fluids"
+  },
+  {
+   "id": "powerBrick",
+   "name": "Power Brick",
+   "description": "A solid block that stores and distributes energy. Can hold up to {capacity} {ui|resources|energy}.",
+   "category": "energy"
+  },
+  {
+   "id": "prismalineWell",
+   "name": "Prismaline Well",
+   "description": "Drains the Prismaline buffer and emits Prismaline above at a fixed rate. Must be built just outside the disk of the Aura Extractor.",
+   "category": "special"
+  },
+  {
+   "id": "prismiteWell",
+   "name": "Prismite Well",
+   "description": "Drains the Prismite buffer and emits Prismite below at a fixed rate. Must be built just outside the disk of the Aura Extractor.",
+   "category": "special"
+  },
+  {
+   "id": "pump",
+   "name": "Pump",
+   "description": "Draws in liquid and runs it through the connected pipes.",
+   "category": "fluids"
+  },
+  {
+   "id": "quantumPortal",
+   "name": "Conveyor Portal",
+   "description": "A linked pair of short-range portals used to move elements across gaps or over other conveyor belt lines.",
+   "category": "logistics"
+  },
+  {
+   "id": "retroConsole",
+   "name": "Retro Console",
+   "description": "A playable gaming console. Place it and use Game Controller to play by hovering the console and pressing the arrow keys.",
+   "category": "misc"
+  },
+  {
+   "id": "shaker",
+   "name": "Shaker",
+   "description": "Place Wet Sand on the shaker to refine it automatically into Gold (↓) and Residue. Should be built diagonally to allow natural throughput.",
+   "category": "production"
+  },
+  {
+   "id": "signalAnd",
+   "name": "AND Gate",
+   "description": "Outputs On only if all inputs are On.",
+   "category": "logic"
+  },
+  {
+   "id": "signalBuffer",
+   "name": "Buffer",
+   "description": "Forwards its input unchanged.",
+   "category": "logic"
+  },
+  {
+   "id": "signalButton",
+   "name": "Signal Button",
+   "description": "Press to pulse a linked signal.",
+   "category": "logic"
+  },
+  {
+   "id": "signalGate",
+   "name": "Door",
+   "description": "Door that can be toggled by pressing or via sensor signals.",
+   "category": "blocks"
+  },
+  {
+   "id": "signalLamp",
+   "name": "Signal Lamp",
+   "description": "Indicator that lights up when its linked signal is On.",
+   "category": "logic"
+  },
+  {
+   "id": "signalNand",
+   "name": "NAND Gate",
+   "description": "Outputs On unless all inputs are On.",
+   "category": "logic"
+  },
+  {
+   "id": "signalNor",
+   "name": "NOR Gate",
+   "description": "Outputs On only if all inputs are Off.",
+   "category": "logic"
+  },
+  {
+   "id": "signalNot",
+   "name": "NOT Gate",
+   "description": "Outputs the inverse of a single input (requires exactly 1 input).",
+   "category": "logic"
+  },
+  {
+   "id": "signalOr",
+   "name": "OR Gate",
+   "description": "Outputs On if any input is On.",
+   "category": "logic"
+  },
+  {
+   "id": "signalPresenceSensor",
+   "name": "Presence Sensor",
+   "description": "Emits a signal while at least one element is inside its 4x4 area.",
+   "category": "logic"
+  },
+  {
+   "id": "signalPulseSensor",
+   "name": "Pulse Sensor",
+   "description": "Emits a short On pulse when its 4x4 area becomes full.",
+   "category": "logic"
+  },
+  {
+   "id": "signalRepeater",
+   "name": "Repeater",
+   "description": "Delays signal by one tick.",
+   "category": "logic"
+  },
+  {
+   "id": "signalSensor",
+   "name": "Signal Sensor",
+   "description": "Emits a signal when its 4x4 area is full of elements.",
+   "category": "logic"
+  },
+  {
+   "id": "signalSwitch",
+   "name": "Signal Switch",
+   "description": "Press to toggle a linked signal.",
+   "category": "logic"
+  },
+  {
+   "id": "signalToggle",
+   "name": "Toggle (T-FlipFlop)",
+   "description": "Memory bit. Toggles On/Off on each input pulse (rising edge).",
+   "category": "logic"
+  },
+  {
+   "id": "signalXnor",
+   "name": "XNOR Gate",
+   "description": "Outputs On if an even number of inputs are On.",
+   "category": "logic"
+  },
+  {
+   "id": "signalXor",
+   "name": "XOR Gate",
+   "description": "Outputs On if an odd number of inputs are On.",
+   "category": "logic"
+  },
+  {
+   "id": "smelter",
+   "name": "Smelter",
+   "description": "Periodically smelts resources placed on top into liquid form. Uses heat from an adjacent Thermal Buffer or Lava.",
+   "category": "thermal"
+  },
+  {
+   "id": "snowmaker",
+   "name": "Snowmaker",
+   "description": "Consumes Water above and {amount} Energy to spawn Snow below.",
+   "category": "thermal"
+  },
+  {
+   "id": "steamTurbine",
+   "name": "Steam Turbine",
+   "description": "Generates energy when Steam passes through the turbine.",
+   "category": "energy"
+  },
+  {
+   "id": "swarmConsole",
+   "name": "Aura Extractor",
+   "description": "Creates the Aura Extractor. Press the placed structure to command the swarm.",
+   "category": "special"
+  },
+  {
+   "id": "thermalRelay",
+   "name": "Thermal Buffer",
+   "description": "Stores and exchanges heat. Charge it with the Flamethrower, or let it consume adjacent Lava / Snow. Connected buffers equalize temperature.",
+   "category": "thermal"
+  },
+  {
+   "id": "thermodryer",
+   "name": "Steam Dryer",
+   "description": "Converts Amethelis into Dry Amethelis when put on top, using Steam below as fuel.",
+   "category": "thermal"
+  },
+  {
+   "id": "thermofroster",
+   "name": "Condenser",
+   "description": "Condenses adjacent gases into their liquid forms (e.g. Florin into Florinol). Uses cold from an adjacent Thermal Buffer or Snow above.",
+   "category": "thermal"
+  },
+  {
+   "id": "velocitySoaker",
+   "name": "Kinetic Press",
+   "description": "Drop Burnt Residue on the Kinetic Press from a great height to refine it into Gold and Seed.",
+   "category": "production"
+  },
+  {
+   "id": "voidRift",
+   "name": "Void Rift",
+   "description": "Opens a mysterious rift that produces Void Seed from the depths of space.",
+   "category": "special"
+  }
+ ],
+ "items": [
+  {
+   "id": "blinker",
+   "name": "Blinker",
+   "description": "Teleports you to where you click.",
+   "category": null
+  },
+  {
+   "id": "caulkBlaster",
+   "name": "Caulk Blaster",
+   "description": "Shoots a stream of Caulk that solidifies on impact.",
+   "category": null
+  },
+  {
+   "id": "coloringTool",
+   "name": "Coloring Tool",
+   "description": null,
+   "category": null
+  },
+  {
+   "id": "copier",
+   "name": "Select & Move",
+   "description": "A marquee tool that can be used to move or copy structures.",
+   "category": null
+  },
+  {
+   "id": "corraller",
+   "name": "Corraller",
+   "description": "Projects an energy field that captures creatures and pulls them in.",
+   "category": null
+  },
+  {
+   "id": "cryoblaster",
+   "name": "Cryoblaster",
+   "description": "Creates Snow that can freeze Water and solidify Lava.",
+   "category": null
+  },
+  {
+   "id": "demolisher",
+   "name": "Delete",
+   "description": "A demolition tool that can be used to remove structures.",
+   "category": null
+  },
+  {
+   "id": "digger",
+   "name": "Digger Drone",
+   "description": "A drone that digs autonomously until hitting a hard surface.",
+   "category": null
+  },
+  {
+   "id": "drill",
+   "name": "Drill",
+   "description": "Drills through hard materials.",
+   "category": null
+  },
+  {
+   "id": "energySiphon",
+   "name": "Energy Siphon",
+   "description": "Hold on a power line or brick: each tick moves 1 energy from stores outside that network into it.",
+   "category": null
+  },
+  {
+   "id": "flamethrower",
+   "name": "Flamethrower",
+   "description": "Burns Residue, melts Ice and vaporizes Water into Steam that rises and becomes rain.",
+   "category": null
+  },
+  {
+   "id": "flareGun",
+   "name": "Flare Gun",
+   "description": "Shoots a flare that lights up the area.",
+   "category": null
+  },
+  {
+   "id": "flashlight",
+   "name": "Flashlight",
+   "description": "Hold to shine a light where you aim.",
+   "category": null
+  },
+  {
+   "id": "grabber",
+   "name": "Grabber",
+   "description": "A grabber that can be used to pick up materials.",
+   "category": null
+  },
+  {
+   "id": "grapplingHook",
+   "name": "Grappling Hook",
+   "description": "Helps you move around.",
+   "category": null
+  },
+  {
+   "id": "gun",
+   "name": "Gun",
+   "description": "A long-distance mining tool. Strictly for digging, not killing.",
+   "category": null
+  },
+  {
+   "id": "hauler",
+   "name": "Hauler Drone",
+   "description": "Deploys hauler drones that will automatically transport materials.",
+   "category": null
+  },
+  {
+   "id": "implosionGun",
+   "name": "Void Gun",
+   "description": "Uses Voidjuice to excavate the ground.",
+   "category": null
+  },
+  {
+   "id": "laser",
+   "name": "Laser",
+   "description": "Lasers through hard materials.",
+   "category": null
+  },
+  {
+   "id": "locator",
+   "name": "Locator",
+   "description": "Uses Voidjuice to scan for the nearest artifact and pulse a directional ring toward it.",
+   "category": null
+  },
+  {
+   "id": "placeholderGun",
+   "name": "Wall Tool",
+   "description": "Use to add and remove walls.",
+   "category": null
+  },
+  {
+   "id": "precisionLaser",
+   "name": "Precision Laser",
+   "description": "A laser for shaping Caulk and Solidite.",
+   "category": null
+  },
+  {
+   "id": "prefabulator",
+   "name": "Prefabulator",
+   "description": "Use to copy terrain and place as structure.",
+   "category": null
+  },
+  {
+   "id": "recallDevice",
+   "name": "Recall Shard",
+   "description": "Places a recall portal. Using the shard again teleports back to it, consuming Voidbloom stacked directly above the recall portal's base.",
+   "category": null
+  },
+  {
+   "id": "reconDrone",
+   "name": "Recon Drone",
+   "description": "Deploys a fast scout drone. Left Click to take/release control, Right Click to recall.",
+   "category": null
+  },
+  {
+   "id": "retroConsoleController",
+   "name": "Game Controller",
+   "description": "Hover a placed Retro Console and press arrows to play. Change game above the hotbar.",
+   "category": null
+  },
+  {
+   "id": "rocketLauncher",
+   "name": "Rocket Launcher",
+   "description": "A rocket launcher. For digging big holes.",
+   "category": null
+  },
+  {
+   "id": "shotgun",
+   "name": "Shotgun",
+   "description": "Shoots slugs to make holes.",
+   "category": null
+  },
+  {
+   "id": "shovel",
+   "name": "Shovel",
+   "description": "Dig a hole.",
+   "category": null
+  },
+  {
+   "id": "signalLinker",
+   "name": "Signal Linker",
+   "description": "Press senders/receivers and drag to wire signals.",
+   "category": null
+  },
+  {
+   "id": "sweeperDroneLauncher",
+   "name": "Sweeper Drone",
+   "description": "Launches a swarm of drones to sweep materials from the ground.",
+   "category": null
+  },
+  {
+   "id": "teleporter",
+   "name": "Teleporter",
+   "description": "A teleporter that can be used to get around.",
+   "category": null
+  },
+  {
+   "id": "thruster",
+   "name": "Propulsion Trowel",
+   "description": "Destroys everything.",
+   "category": null
+  },
+  {
+   "id": "vacuum",
+   "name": "Vacuum",
+   "description": "Collects piles of elements in tanks that can be unloaded.",
+   "category": null
+  },
+  {
+   "id": "volcanizer",
+   "name": "Volcanizer",
+   "description": "Creates Lava.",
+   "category": null
+  }
+ ]
+}

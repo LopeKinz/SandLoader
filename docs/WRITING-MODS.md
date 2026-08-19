@@ -244,6 +244,25 @@ existing approval — re-prompting for strictly less access only teaches people
 to click through. An update that adds a permission shows a "Permission Change"
 dialog listing what is new, and the mod does not run until it is answered.
 
+### Granting and withdrawing later
+
+The install dialog is not the only place. **SandLoader Mods → Details** on any
+row shows what that mod can reach and lets you change the decision:
+
+- a mod waiting on approval gets an **Approve** button, and says plainly that it
+  will not load until you use it;
+- an approved mod gets **Revoke**, which stops it loading on the next reload;
+- a sandboxed mod gets neither, and says there is nothing to approve — it is
+  already running and requests nothing privileged.
+
+Approving a **native** mod from Details opens the same review dialog the
+installer shows, warning and all, with Cancel focused. A privileged grant costs
+the same deliberate confirmation wherever it is made from; otherwise the details
+panel would quietly become the way around the install warning.
+
+Either way the change takes effect on the next reload, because a native
+entrypoint is required into the main process at startup.
+
 ---
 
 ## Capabilities
@@ -337,6 +356,29 @@ reach for the global.
 only in the newer Sandkit v1. `SMLN.register.recipe()` is feature-detected: on
 a build that has it, it forwards; on 0.5.4 it rejects with a message saying so.
 It is not faked and it is not a silent no-op.
+
+---
+
+## Content reference tables
+
+`SMLN.enums` carries offline tables for the game's built-in content, so a mod
+or a console command can look something up before a save is loaded:
+
+```js
+SMLN.enums.ELEMENT_INFO.water      // {id, name, description, matterType, density, color}
+SMLN.enums.STRUCTURE_INFO.conveyor // {id, name, description, category}
+SMLN.enums.ITEM_INFO.blinker       // {id, name, description, category}
+SMLN.enums.ELEMENT_PHASE.sand      // 'Solid'
+```
+
+These come from `src/game/content.json`, cross-checked against the installed
+bundle by the self-test — every id must still exist as a translation key, and
+the game must not know an element the table lacks.
+
+They are a **convenience, not an authority**. The running game is the authority:
+prefer `FH.elements.getName(state, type)` and the live registry when a save is
+loaded. Mod-registered content never appears here, so anything reading these
+tables must degrade to the raw id.
 
 ---
 
@@ -527,6 +569,50 @@ a collision on another mod's behalf:
 ```js
 { id: 'my-patch', find: '...', replace: '...', allowOverlap: true }
 ```
+
+---
+
+## Surviving game updates
+
+SandLoader fingerprints the installation and re-resolves every hook when the
+game changes. Your patches take part in that, and you can make them
+self-healing too.
+
+Anchor on something the game's **source** controls — a string literal, an event
+name, a translation key — never on a minified identifier or a byte offset.
+Then declare fallbacks:
+
+```js
+{
+  id: 'my-mod:hook',
+  description: 'why this patch exists',
+  anchorLiteral: '"my:event"',        // the invariant, used in diagnostics
+  find: /(\w+)\.events\.emit\((\w+),"my:event",\{state:\2\}\)/g,
+  replace: (full, ns, st) => `myHook(${st}),${full}`,
+  expect: 1,
+  variants: [
+    {
+      label: 'payload gained fields',
+      find: /(\w+)\.events\.emit\((\w+),"my:event",\{state:\2[^}]*\}\)/g,
+      replace: (full, ns, st) => `myHook(${st}),${full}`,
+      expect: 1,
+    },
+  ],
+}
+```
+
+A variant inherits everything it does not override, so it only states what
+differs. They are tried in order, loosest last, and the first whose output
+still **parses** is adopted — a fallback that produces broken JavaScript is
+refused rather than shipped.
+
+`anchorLiteral` is what makes a failure actionable. When nothing resolves,
+SandLoader searches for that literal and reports whether it is still in the
+bundle (the hook point survived, only its shape moved) or gone (the hook point
+itself was removed), with surrounding excerpts so you can write the new pattern
+without going spelunking yourself.
+
+Adopted fallbacks are reported as warnings, never applied silently.
 
 ---
 

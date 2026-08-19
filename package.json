@@ -1,6 +1,6 @@
 {
   "name": "sandloader",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mod loader for Sandustry",
   "private": true,
   "main": "src/main/entry.js",

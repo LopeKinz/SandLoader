@@ -29,8 +29,10 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 - [Writing mods](docs/WRITING-MODS.md)
 - [How it works](#how-it-works) · [Project layout](#project-layout)
 - [Security model](#security-model)
+- [When the game updates](#it-re-checks-itself-when-the-game-updates)
 - [Non-Steam builds](#non-steam-builds)
 - [Limitations](#limitations-and-whats-not-built-yet)
+- [Changelog](#changelog)
 
 ---
 
@@ -494,6 +496,37 @@ FH.events.emit(state, "game:ready", { state })
 
 After that, `SandLoader.game` *is* `FH`.
 
+### It re-checks itself when the game updates
+
+SandLoader records a fingerprint of the installation - version, `app.asar`
+size and mtime. When any of it moves, the next launch re-reads the renderer
+bundle and re-resolves every hook before serving a single file. An unchanged
+install pays nothing; a changed one costs about 50 ms.
+
+Each hook may declare ordered **fallback patterns**, all anchored on the same
+invariant string literal but progressively looser about the shape around it.
+That is what the 0.5.4 → 0.5.5 diff looks like in practice:
+
+```
+0.5.4   ie.FH.events.emit(p,"game:ready",{state:p})
+0.5.5   ie.FH.events.emit(g,"game:ready",{state:g})
+```
+
+Only the local names moved. If a future build also moves the *shape* - the
+payload gains a field, the call loses its namespace prefix - the next fallback
+that resolves cleanly is adopted, and adoption is gated on the patched bundle
+still parsing. Everything adopted is reported as a warning in the log, on the
+splash and in the Problems panel; nothing changes silently.
+
+**What it cannot do**, stated plainly: it cannot invent a hook. If the game
+removes `"game:ready"` outright, no scan finds a semantic replacement, and
+guessing would be worse than failing - SandLoader would patch a place nobody
+chose. In that case it reports where the literal used to be, serves the file
+unmodified, and the game still starts.
+
+Force a re-scan any time with `node tools/selftest.js`, which reports each
+anchor and its match count.
+
 ### Version resistance
 
 1. **Anchors, never offsets.** Patches match authored strings (`"game:ready"`),
@@ -557,6 +590,11 @@ What SandLoader adds on top:
   UNC paths, device names and symlink escapes cannot leave;
 - the permission review happens **before** any mod code is read, required or
   evaluated.
+
+Permissions are not a one-shot decision at install time: **SandLoader Mods →
+Details** on any row shows what that mod can reach and lets you approve or
+withdraw it afterwards. Granting a native mod from there opens the same review
+dialog the installer shows, warning included.
 
 | Tier | Runs in | Reaches |
 |---|---|---|
@@ -647,9 +685,106 @@ An honest list:
 
 ---
 
+## Changelog
+
+### 0.2.0
+
+Verified against Sandustry 0.5.5.
+
+**Making content**
+
+- `SMLN.register` on top of the game's own `FH` registry: elements, terrains,
+  matters, structures/machines, items, sprites, projectiles, triggers, key
+  bindings, conveyor/launcher/energy types and hooks. Calls made before
+  `game:ready` queue and flush in order, duplicate ids are refused naming the
+  mod that got there first, and one failing registration never aborts the rest.
+- `SMLN.assets.url()`, served through the interceptor that already owns the
+  game's `file://` requests — no second web server.
+- Translation registration mapped onto the real `FH.i18n.register(locale, table)`,
+  namespaced per mod, with English fallback.
+- Content reference tables (`SMLN.enums.ELEMENT_INFO` and friends) for names,
+  descriptions, phases and colours before a save is loaded.
+
+**Security**
+
+- A real capability model: `SANDBOXED` / `ELEVATED` / `NATIVE`, derived from
+  where code runs plus what the manifest declares, shown as a badge on every row.
+- `SMLN.net` and `SMLN.fs` are gated on declared permissions; without them the
+  call rejects and no request is made.
+- Per-mod private storage that traversal, absolute paths, UNC paths, Windows
+  device names and symlink escapes cannot leave.
+- Install review reads the manifest **out of the archive without unpacking or
+  executing anything**. Approvals bind to mod id + version + permission set;
+  an update that adds a permission asks again, dropping one does not.
+- Permissions can also be granted or withdrawn later from **Details**. Granting
+  a native mod there opens the same review dialog, warning included.
+- Native mods are supported and clearly labelled. SandLoader does not claim to
+  sandbox them — a mod with `node` gets a real `require`, and the UI says so.
+
+**Reliability**
+
+- A broken mod no longer costs you the others: every load stage is contained
+  per mod, and failures are visible in the splash, on the row, and in a new
+  **Problems** panel with the real error text.
+- Patch conflict detection on actual source ranges, checked before anything is
+  rewritten. Cross-mod overlap fails safely; deliberate overlap needs both
+  patches to opt in.
+- Hooks re-resolve themselves when the game updates. Each anchor may declare
+  ordered fallbacks around the same invariant literal; adoption is gated on the
+  patched bundle still parsing, and everything adopted is reported, never
+  silent. It cannot invent a hook, and says so when one is genuinely gone.
+
+**Mod management**
+
+- Steam Workshop items are recognised, tagged with their published id, and
+  never deleted from disk — Steam would simply re-download them. The row offers
+  **View in Steam** instead, and the footer a **Browse Workshop** link.
+- In-game settings from `configSchema`, validated before they persist, with
+  per-field and panel-level reset.
+- Dependencies enforce semver ranges (`"library-mod": "^2.1.0"`) with five
+  distinct failure kinds instead of one vague one.
+- Hot reload with `SMLN.onDispose()` and three honest stages: renderer-only
+  swap, full context rebuild, or "restart required" when it genuinely is.
+
+**Cross-context**
+
+- Game ↔ Worker messaging in both directions, plus Fluxloader's
+  `sendWorkerMessage` / `listenGameMessage` and the remaining Fluxloader IPC.
+  Late handlers still receive earlier messages, a throwing handler cannot stall
+  the simulation worker, and two mods cannot read each other's channels.
+- Fluxloader mods now each get their own `fluxloaderAPI` — previously one
+  shared global, so the second mod overwrote the first's id, config and channels.
+
+**Platforms and UI**
+
+- GOG and standalone installs supported through an additive `resources/app`
+  bootstrap. No original file is modified. Microsoft Store and Game Pass are
+  reported as unsupported, with the specific reason.
+- English and German throughout, with a language picker.
+- Reworked console: header with live context, colour-coded output, highlighted
+  completions with colour swatches, drag to resize.
+- Rebuilt splash: a boot report listing every mod with its security badge, the
+  hook targets, and the first problems inline.
+
+**Fixed**
+
+- `ELEMENT_PHASE` was hand-written guesswork — wrong in 14 of the 18 cases that
+  could be checked, and covering only 20 of 50 elements. Now derived from the
+  game's own `matterType` values.
+- The version was hardcoded in four places and could drift; `package.json` is
+  now the single source.
+- `src/renderer/sandkit-adapter.js` was never loaded (missing from the prelude).
+
+### 0.1.0
+
+Initial release: in-game console, mod manager, in-memory patching against the
+game's own loader slot, and Fluxloader mod compatibility.
+
+---
+
 ## Status
 
-Verified against **Sandustry 0.5.4**. Self-test: **82/82**.
+SandLoader **0.2.0**, verified against **Sandustry 0.5.5**. Self-test: **91/91**.
 
 ## License
 

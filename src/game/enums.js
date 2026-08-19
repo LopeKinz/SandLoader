@@ -9,6 +9,18 @@
  * a source of stable human-readable names for console completion.
  */
 
+/**
+ * Vendored content reference tables (src/game/content.json).
+ *
+ * Data only. Everything below degrades to the hand-written fallbacks if the
+ * file is missing or unreadable, so nothing here can stop the loader booting.
+ */
+let CONTENT = { elements: [], structures: [], items: [], __meta: {} }
+try {
+  // eslint-disable-next-line global-require
+  CONTENT = require('./content.json')
+} catch (_) { /* fallbacks below cover it */ }
+
 /** @param {Record<number,string>} table @returns {Record<string,number>} */
 function invert(table) {
   const out = {}
@@ -31,19 +43,49 @@ const MatterType = {
 }
 
 /**
- * Best-effort phase grouping for the built-in elements. The live game carries
- * the authoritative value on each element definition; this is only used to
- * group console output when that definition is unreachable.
+ * Phase grouping, used to bucket console output when the live element
+ * definition is unreachable (before a save is loaded, mostly).
+ *
+ * This used to be twenty hand-written guesses and was wrong in fourteen of the
+ * eighteen cases that could be checked - `sand` is Solid, not Powder;
+ * `gloom` is Slushy, not Gas; `flame` is Solid, not Gas - and it covered
+ * only twenty of the fifty elements. It is now derived from content.json,
+ * whose `matterType` values come from the game's own registry.
+ *
+ * Keys are the lower-camel element ids the game uses (`wetSand`), with the
+ * capitalised `ElementType` spellings (`WetSand`) mirrored in for callers
+ * that hold a legacy enum name.
  */
-const ELEMENT_PHASE = {
-  Sand: 'Powder', WetSand: 'Powder', Residue: 'Powder', BurntResidue: 'Powder',
-  Gold: 'Powder', Basalt: 'Powder', Sandium: 'Powder',
-  Water: 'Liquid', Lava: 'Liquid', Petalium: 'Liquid',
-  Steam: 'Gas', Gloom: 'Gas', Fire: 'Gas', Flame: 'Gas',
-  FreezingIce: 'Solid',
-  Particle: 'Particle', Shake: 'Particle',
-  Seed: 'Particle', WetSeed: 'Particle', Seedling: 'Particle',
-}
+const ELEMENT_PHASE = (() => {
+  const out = {}
+  for (const el of CONTENT.elements || []) {
+    if (!el || !el.id || !el.matterType) continue
+    out[el.id] = el.matterType
+    out[el.id.charAt(0).toUpperCase() + el.id.slice(1)] = el.matterType
+  }
+  return out
+})()
+
+/** Element id -> {name, description, color, density, matterType}, for the console. */
+const ELEMENT_INFO = (() => {
+  const out = {}
+  for (const el of CONTENT.elements || []) if (el && el.id) out[el.id] = el
+  return out
+})()
+
+/** Structure id -> {name, description, category}. */
+const STRUCTURE_INFO = (() => {
+  const out = {}
+  for (const st of CONTENT.structures || []) if (st && st.id) out[st.id] = st
+  return out
+})()
+
+/** Item id -> {name, description, category}. */
+const ITEM_INFO = (() => {
+  const out = {}
+  for (const it of CONTENT.items || []) if (it && it.id) out[it.id] = it
+  return out
+})()
 
 /** Terrain / cell kinds (the grid itself, as opposed to loose particles). */
 const CellType = {
@@ -127,7 +169,7 @@ const UIScreen = {
  * runtime because the live registry is larger than the legacy `ElementType`
  * enum and grows when mods register their own content.
  */
-const ELEMENT_KEYS = [
+const ELEMENT_KEYS_FALLBACK = [
   'auralite', 'aurixite', 'basalt', 'burntResidue', 'caulk', 'cloud', 'coolant',
   'copper', 'dryPetalium', 'fire', 'flame', 'florin', 'florinol', 'freezingIce',
   'gloom', 'gold', 'growingVoidSeed', 'heatedWater', 'hyperpressure',
@@ -138,6 +180,11 @@ const ELEMENT_KEYS = [
   'steam', 'sunsand', 'voidPetal', 'voidSeeds', 'voidhusk', 'voidjuice',
   'water', 'waterPressure', 'wetSand', 'wetSeed',
 ]
+
+/** Prefer the vendored table; fall back to the literal list above. */
+const ELEMENT_KEYS = (CONTENT.elements || []).length
+  ? CONTENT.elements.map((e) => e.id)
+  : ELEMENT_KEYS_FALLBACK
 
 /** Terrains are created by name: `FH.terrains.createAt(state, x, y, "copper")`. */
 const TERRAIN_KEYS = [
@@ -155,10 +202,13 @@ const RESOURCES = ['gold', 'fluxite', 'energy', 'artifacts', 'lumlings', 'shinel
 module.exports = {
   ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
   WorkerMessage, UIScreen, RESOURCES, ELEMENT_KEYS, TERRAIN_KEYS,
+  ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO,
+  /** Provenance of the vendored tables; shown by the self-test. */
+  CONTENT_META: CONTENT.__meta || {},
   ElementByName: invert(ElementType),
   CellByName: invert(CellType),
   StructureByName: invert(StructureType),
   ToolByName: invert(ToolType),
   /** Bundle facts SMLN was verified against; drift is reported, never fatal. */
-  VERIFIED: { gameVersion: '0.5.4', appId: 2764460 },
+  VERIFIED: { gameVersion: '0.5.5', appId: 2764460 },
 }

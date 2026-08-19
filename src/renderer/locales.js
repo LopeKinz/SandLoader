@@ -148,6 +148,14 @@
     'perm.approve': 'Approve',
     'perm.revoke': 'Revoke approval',
     'perm.approvedAt': 'You approved this mod on {at}.',
+
+    // ------------------------------------------- approval state (details panel)
+    'perm.notApprovedYet': 'Not approved. This mod does not load until you approve it.',
+    'perm.nothingToApprove': 'Nothing to approve — this mod requests no privileged capability.',
+    'perm.approvedNow': 'Approved. It loads on the next reload.',
+    'perm.revoked': 'Approval withdrawn. It stops loading on the next reload.',
+    'perm.approveFailed': 'Could not save the approval: {error}',
+    'perm.revokeFailed': 'Could not withdraw the approval: {error}',
     'perm.classifiedBecause': 'Classified this way because:',
     'perm.legacyNative': 'This mod predates SandLoader permissions and runs privileged main-process code. Treat it as a native mod.',
     'perm.notEnforceable': 'SandLoader cannot restrict what a native mod does. It runs with a real Node.js require, so filesystem and network limits do not apply to it.',
@@ -212,6 +220,15 @@
     'mods.hint': 'Mods load at startup; use Reload Mods to apply changes now.',
     'mods.brokenCount.one': '{count} failed',
     'mods.brokenCount.other': '{count} failed',
+
+    // ------------------------------------------------------- Steam Workshop
+    'mods.source.workshop': 'Workshop',
+    'mods.source.local': 'Local',
+    'mods.openInSteam': 'View in Steam',
+    'mods.browseWorkshop': 'Browse Workshop',
+    'mods.workshopManaged': 'Managed by Steam. Disable it here, or unsubscribe in Steam to remove it.',
+    'mods.workshopUpdated': 'Steam last updated this on {at}.',
+    'mods.workshopOpenFailed': 'Could not open Steam: {error}',
   }
 
   var de = {
@@ -327,6 +344,14 @@
     'perm.approve': 'Zulassen',
     'perm.revoke': 'Zulassung entziehen',
     'perm.approvedAt': 'Du hast diesen Mod am {at} zugelassen.',
+
+    // --------------------------------------- Zulassungsstatus (Details-Panel)
+    'perm.notApprovedYet': 'Nicht zugelassen. Dieser Mod wird erst geladen, wenn du ihn zulaesst.',
+    'perm.nothingToApprove': 'Nichts zuzulassen — dieser Mod fordert keine privilegierte Faehigkeit an.',
+    'perm.approvedNow': 'Zugelassen. Wird beim naechsten Neuladen geladen.',
+    'perm.revoked': 'Zulassung entzogen. Wird beim naechsten Neuladen nicht mehr geladen.',
+    'perm.approveFailed': 'Zulassung konnte nicht gespeichert werden: {error}',
+    'perm.revokeFailed': 'Zulassung konnte nicht entzogen werden: {error}',
     'perm.classifiedBecause': 'Diese Einstufung ergibt sich aus:',
     'perm.legacyNative': 'Dieser Mod stammt aus der Zeit vor den SandLoader-Berechtigungen und fuehrt privilegierten Code im Hauptprozess aus. Behandle ihn wie einen nativen Mod.',
     'perm.notEnforceable': 'SandLoader kann einen nativen Mod nicht einschraenken. Er laeuft mit einem echten Node.js-require, deshalb greifen Datei- und Netzwerkgrenzen bei ihm nicht.',
@@ -391,6 +416,15 @@
     'mods.hint': 'Mods werden beim Start geladen; nutze "Mods neu laden", um Aenderungen sofort zu uebernehmen.',
     'mods.brokenCount.one': '{count} fehlgeschlagen',
     'mods.brokenCount.other': '{count} fehlgeschlagen',
+
+    // ------------------------------------------------------- Steam Workshop
+    'mods.source.workshop': 'Workshop',
+    'mods.source.local': 'Lokal',
+    'mods.openInSteam': 'In Steam ansehen',
+    'mods.browseWorkshop': 'Workshop durchsuchen',
+    'mods.workshopManaged': 'Wird von Steam verwaltet. Hier deaktivieren, oder in Steam abbestellen zum Entfernen.',
+    'mods.workshopUpdated': 'Steam hat das zuletzt am {at} aktualisiert.',
+    'mods.workshopOpenFailed': 'Steam konnte nicht geoeffnet werden: {error}',
   }
 
   global.__SMLN_LOCALES__ = { en: en, de: de }

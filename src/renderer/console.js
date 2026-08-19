@@ -633,6 +633,57 @@
    * Returns the candidate list plus the token being completed, so Tab can
    * replace exactly that token and nothing else.
    */
+  /**
+   * A completion hint worth reading.
+   *
+   * The argument name ("element") is the same on every row, so it tells you
+   * nothing about which row to pick. The vendored content tables carry the
+   * display name, the phase and a description, which is what actually
+   * distinguishes "auralite" from "aurixite". Falls back to the argument name
+   * when the id is not in the tables - a mod-registered element, typically.
+   */
+  /*
+   * Case-insensitive, built once. The completion lists arrive from several
+   * places - some lowercase their ids, the tables use lower-camel - so an
+   * exact-key lookup silently missed entries like "burntresidue".
+   */
+  var infoIndex = null
+  function contentInfo(value) {
+    if (!infoIndex) {
+      infoIndex = {}
+      var tables = [E.ELEMENT_INFO, E.STRUCTURE_INFO, E.ITEM_INFO]
+      for (var t = 0; t < tables.length; t++) {
+        var table = tables[t]
+        if (!table) continue
+        for (var key in table) {
+          if (!Object.prototype.hasOwnProperty.call(table, key)) continue
+          var lower = key.toLowerCase()
+          if (infoIndex[lower] == null) infoIndex[lower] = table[key]
+        }
+      }
+    }
+    return infoIndex[String(value).toLowerCase()] || null
+  }
+
+  function describeValue(value, fallback) {
+    var info = contentInfo(value)
+    if (!info) return fallback
+
+    var parts = []
+    if (info.name && info.name.toLowerCase() !== String(value).toLowerCase()) parts.push(info.name)
+    if (info.matterType) parts.push(info.matterType)
+    else if (info.category) parts.push(info.category)
+    if (info.description) parts.push(info.description)
+    var text = parts.join('  ·  ')
+    return text || fallback
+  }
+
+  /** Hex colour for a content id, so the list is scannable at a glance. */
+  function colourOf(value) {
+    var info = contentInfo(value)
+    return (info && info.color) || null
+  }
+
   function computeSuggestions(text, caret) {
     var upto = text.slice(0, caret)
     var tokens = upto.split(/\s+/)
@@ -650,7 +701,10 @@
         var spec = cmd.args[index - 1]
         var values = []
         try { values = spec.values ? spec.values() : [] } catch (_) { values = [] }
-        candidates = values.map(function (v) { return { value: String(v), hint: spec.name } })
+        candidates = values.map(function (v) {
+          var id = String(v)
+          return { value: id, hint: describeValue(id, spec.name), color: colourOf(id) }
+        })
         if (!candidates.length) candidates = [{ value: '', hint: '<' + spec.name + '>' }]
       }
     }
@@ -761,6 +815,8 @@
     'box-shadow:0 -6px 18px rgba(0,0,0,.42)}',
     '#smln-sugg .s{padding:4px 12px;display:flex;gap:16px;align-items:baseline;cursor:pointer}',
     '#smln-sugg .s:hover{background:rgba(148,163,184,.1)}',
+    '#smln-sugg .s .sw{flex:none;width:9px;height:9px;border-radius:2px;',
+    'border:1px solid rgba(148,163,184,.4);align-self:center}',
     '#smln-sugg .s .v{flex:none;color:#e2e8f0}',
     '#smln-sugg .s .m{flex:1;min-width:0;text-align:right;color:#64748b;font-size:11.5px;',
     'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -986,6 +1042,14 @@
       hint.className = 'm'
       hint.textContent = c.hint || ''
 
+      if (c.color) {
+        var dot = document.createElement('span')
+        dot.className = 'sw'
+        // The only place a value from the tables reaches CSS. Constrained to a
+        // hex literal so a malformed entry cannot inject a declaration.
+        if (/^#[0-9a-fA-F]{3,8}$/.test(c.color)) dot.style.background = c.color
+        row.appendChild(dot)
+      }
       row.appendChild(name)
       row.appendChild(hint)
       ui.sugg.appendChild(row)

@@ -18,6 +18,7 @@ const os = require('os')
 const path = require('path')
 
 const zip = require('./zip')
+const workshop = require('./workshop')
 const { SmlnError, toSmlnError } = require('../core/errors')
 
 const SMLN_MANIFEST = 'smln.mod.json'
@@ -121,6 +122,20 @@ function remove(dir, ctx) {
     if (!inside) {
       logger.error(`refused to delete ${target}: outside every known mods folder`)
       return { ok: false, error: 'that folder is not inside a mods directory - refused' }
+    }
+
+    // Steam owns Workshop folders. Deleting one does not unsubscribe you: Steam
+    // re-downloads the item on its next sync, so the mod reappears and nobody
+    // can explain why. Checked here rather than only in the UI, so the RPC
+    // cannot be talked into it either.
+    if (workshop.isWorkshopPath(target)) {
+      logger.warn(`refused to delete ${target}: Steam Workshop content is managed by Steam`)
+      return {
+        ok: false,
+        code: 'E_WORKSHOP_MANAGED',
+        error: 'that mod comes from the Steam Workshop - deleting the folder would only make Steam ' +
+          're-download it. Disable it here, or unsubscribe in Steam.',
+      }
     }
     if (!readManifest(target)) {
       logger.error(`refused to delete ${target}: no mod manifest`)

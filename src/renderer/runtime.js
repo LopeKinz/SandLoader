@@ -20,7 +20,9 @@
 ;(function initSmlnRuntime(global) {
   if (global.__SMLN__ && global.__SMLN__.__ready) return
 
-  var VERSION = '0.1.0'
+  // Injected by the prelude from package.json. The literal is only the
+  // fallback for a context that loaded runtime.js on its own.
+  var VERSION = global.__SMLN_VERSION__ || '0.0.0'
   var listeners = Object.create(null)
   var pending = []
   var captured = { FH: null, state: null, phase: null }

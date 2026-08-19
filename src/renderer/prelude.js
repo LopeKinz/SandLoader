@@ -26,6 +26,15 @@ const path = require('path')
 
 const enums = require('../game/enums')
 
+/** Read once; the renderer parts receive it as an injected global. */
+const VERSION = (() => {
+  try {
+    return String(require('../../package.json').version || '0.0.0')
+  } catch (_) {
+    return '0.0.0'
+  }
+})()
+
 /** @type {string|null} */
 let cache = null
 
@@ -48,10 +57,18 @@ const PARTS = [
   'hotreload.js',
 ]
 
-/** Emit `globalThis.<name> = <json>` without ever interpolating raw text. */
+/**
+ * Emit `<global>.<name> = <json>` without ever interpolating raw text.
+ *
+ * `self` is tried first because it is the global in a worker *and* an alias
+ * for `window` in the page, so one expression covers both. Reaching only for
+ * `globalThis` left the worker runtime reading a name the worker prelude had
+ * written somewhere else - harmless in a real worker, where the two are the
+ * same object, and wrong anywhere they are not.
+ */
 function globalAssign(name, value) {
   return ';(function(g){g.' + name + '=' + JSON.stringify(value === undefined ? null : value) + ';})' +
-    '(typeof globalThis!=="undefined"?globalThis:window);'
+    '(typeof self!=="undefined"?self:typeof globalThis!=="undefined"?globalThis:window);'
 }
 
 /**
@@ -78,6 +95,7 @@ function build(opts = {}) {
 
   // Everything the renderer parts read out of the global scope, defined before
   // the part that reads it runs.
+  chunks.push(globalAssign('__SMLN_VERSION__', VERSION))
   chunks.push(globalAssign('__SMLN_ENUMS__', serialisableEnums()))
   chunks.push(globalAssign('__SMLN_MODS__', opts.mods || []))
   chunks.push(globalAssign('__SMLN_MOD_ASSETS__', opts.modAssets || {}))
@@ -132,6 +150,7 @@ function build(opts = {}) {
  */
 function buildWorker(workerScripts) {
   const chunks = ['/* --- SMLN worker runtime (injected) --- */']
+  chunks.push(globalAssign('__SMLN_VERSION__', VERSION))
   try {
     chunks.push(';try{\n' + fs.readFileSync(path.join(__dirname, 'worker-runtime.js'), 'utf8') +
       '\n}catch(e){console.error("[SMLN] worker runtime failed to install:",e)}')
@@ -145,20 +164,30 @@ function buildWorker(workerScripts) {
   return chunks.join('\n')
 }
 
-/** Only the plain-data parts of the enum module travel to the renderer. */
+/**
+ * Only the plain-data parts of the enum module travel to the renderer.
+ *
+ * The three `*_INFO` tables are the vendored content reference (about 24 KiB
+ * of the injected script). They are what turns a completion list of bare ids
+ * into one showing display names, phases, descriptions and colours, so the
+ * cost buys the console its whole usefulness. Everything reading them degrades
+ * to the id alone if they are absent.
+ */
 function serialisableEnums() {
   const {
     ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
     WorkerMessage, UIScreen, RESOURCES, ElementByName, CellByName,
     StructureByName, ToolByName, VERIFIED, ELEMENT_KEYS, TERRAIN_KEYS,
+    ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO, CONTENT_META,
   } = enums
   return {
     ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
     WorkerMessage, UIScreen, RESOURCES, ElementByName, CellByName,
     StructureByName, ToolByName, VERIFIED, ELEMENT_KEYS, TERRAIN_KEYS,
+    ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO, CONTENT_META,
   }
 }
 
 function invalidate() { cache = null }
 
-module.exports = { build, buildWorker, invalidate, PARTS }
+module.exports = { build, buildWorker, invalidate, PARTS, VERSION }

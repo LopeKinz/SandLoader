@@ -1773,6 +1773,393 @@ check('the console chrome reports context and classifies its output', () => {
   return 'header context, severity classes, gutter glyphs'
 })
 
+check('permissions can be granted and withdrawn from the details panel', () => {
+  const { createDom } = require('./dom-harness')
+  const dom = createDom()
+  const calls = []
+  const box = {
+    console: { log() {}, warn() {}, error() {} },
+    document: dom.document, window: dom.window,
+    navigator: { language: 'en-US' }, location: { search: '' },
+    setTimeout, clearTimeout, setInterval, clearInterval, WeakSet,
+    MutationObserver: dom.window.MutationObserver,
+    electron: { log() {} },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  }
+  box.globalThis = box
+  box.self = box
+  // In the page globalThis IS window; the harness keeps them apart.
+  box.addEventListener = (t, f, c) => dom.window.addEventListener(t, f, c)
+  box.removeEventListener = () => {}
+  vm.createContext(box)
+  const mod = { id: 'online.stats', name: 'Online Stats', version: '2.0.0', needsApproval: true }
+  new vm.Script(prelude.build({ reload: true, locale: 'en', mods: [mod] })).runInContext(box)
+
+  const S = box.__SMLN__
+  S.callMain = (action, payload) => {
+    calls.push({ action, payload })
+    if (action === 'approveMod') return Promise.resolve({ ok: true, record: { approvedAt: 'now' } })
+    return Promise.resolve({ ok: true })
+  }
+
+  const footer = (m) => (m.footer.childNodes || []).map((b) => b.textContent)
+  const find = (m, re) => m.footer.childNodes.find((b) => re.test(b.textContent))
+
+  // --- elevated mod: Approve is offered, and it actually grants
+  const elevated = S.permUI.details(mod, {
+    capability: { tier: 'elevated', badge: 'NETWORK', permissions: ['network'],
+      granted: { network: true }, contexts: { game: true }, enforceable: true, reasons: [] },
+    approval: null,
+    review: { required: true, entries: [], warnings: [] },
+    problems: [],
+  })
+  assert(find(elevated, /Approve/i), 'an unapproved mod offers no Approve button: ' + footer(elevated))
+  assert(!find(elevated, /Revoke/i), 'it offers Revoke before anything was approved')
+
+  find(elevated, /Approve/i).dispatch('click', {})
+  return new Promise((r) => setTimeout(r, 20)).then(() => {
+    const call = calls.find((c) => c.action === 'approveMod')
+    assert(call, 'Approve did not reach the main process: ' + JSON.stringify(calls.map((c) => c.action)))
+    assert(call.payload.id === 'online.stats' && call.payload.version === '2.0.0',
+      'the approval was not bound to id+version: ' + JSON.stringify(call.payload))
+    assert(call.payload.permissions.join() === 'network',
+      'the permission set was not sent: ' + JSON.stringify(call.payload.permissions))
+    assert(find(elevated, /Revoke/i) && !find(elevated, /Approve/i),
+      'the footer did not flip to Revoke: ' + footer(elevated))
+    assert(box.__SMLN_MODS__[0].needsApproval === false,
+      'the manager row still says the mod needs approval')
+
+    // --- native mod: Approve must go through the review, warning and all
+    const nativeMod = { id: 'native.tool', name: 'Native Tool', version: '1.0.0', needsApproval: true }
+    const review = {
+      mod: nativeMod, capability: { tier: 'native', permissions: ['node'] },
+      kind: 'install', required: true, diff: null,
+      entries: [{ id: 'node', titleKey: 'perm.node.title', descriptionKey: 'perm.node.desc',
+        risk: 'danger', state: 'requested', isNew: false }],
+      warnings: ['perm.nativeWarning'], legacyNative: true, headlineKey: 'perm.installTitle',
+    }
+    const before = calls.filter((c) => c.action === 'approveMod').length
+    const nativePanel = S.permUI.details(nativeMod, {
+      capability: { tier: 'native', badge: 'NATIVE', permissions: ['node'],
+        granted: { node: true }, contexts: { native: true }, enforceable: false,
+        legacyNative: true, reasons: [] },
+      approval: null, review, problems: [],
+    })
+    const approveNative = find(nativePanel, /Approve/i)
+    assert(/risky/.test(approveNative.className),
+      'the native Approve button is not marked risky: ' + approveNative.className)
+    approveNative.dispatch('click', {})
+
+    return new Promise((r2) => setTimeout(r2, 20)).then(() => {
+      assert(calls.filter((c) => c.action === 'approveMod').length === before,
+        'a native mod was approved without answering the review')
+
+      // --- sandboxed mod: nothing to grant, so no button at all
+      const plain = S.permUI.details({ id: 'plain.mod', name: 'Plain', version: '1' }, {
+        capability: { tier: 'sandboxed', badge: 'SANDBOXED', permissions: [],
+          granted: {}, contexts: { game: true }, enforceable: true, reasons: [] },
+        approval: null, review: { required: false, entries: [], warnings: [] }, problems: [],
+      })
+      assert(!find(plain, /Approve/i), 'a sandboxed mod was offered an Approve button')
+      return 'grant, withdraw, native goes through the review, sandboxed offers nothing'
+    })
+  })
+})
+
+// ------------------------------------------------- anchors: self-healing
+check('anchors re-resolve when the shape around the literal moves', () => {
+  const autoheal = require('../src/patch/autoheal')
+
+  // The real bundle must resolve on the primary patterns - if a fallback were
+  // silently carrying the load, a future break would go unnoticed.
+  const clean = autoheal.heal(bundle, corePatches, { validate: false })
+  assert(clean.report.healed.length === 0 && clean.report.broken.length === 0,
+    'the shipped anchors no longer match this build: ' +
+    JSON.stringify({ healed: clean.report.healed.map((h) => h.id), broken: clean.report.broken.map((b) => b.id) }))
+
+  // Now the cases a future build plausibly produces. Each mutates the shape
+  // around the literal, never the literal itself.
+  const cases = [
+    ['payload gains a field', 'smln:capture-api',
+      'var a=1;ie.FH.events.emit(p,"game:ready",{state:p,tick:0});var b=2;'],
+    ['state stops being backreferenced', 'smln:capture-api',
+      'var a=1;ie.FH.events.emit(ctx,"game:ready",{state:world});var b=2;'],
+    ['emit loses its namespace prefix', 'smln:capture-api',
+      'var a=1;emit(p,"game:ready",{state:p});var b=2;'],
+    ['menu label loses the (0,ns.t) wrapper', 'smln:mods-menu-label',
+      'var x={children:t("ui|mainMenu|mods")};'],
+    ['modsScreen assignment count changes', 'smln:mods-menu-open',
+      'a.modsScreen.open=!0;'],
+  ]
+  for (const [name, id, src] of cases) {
+    const patches = corePatches.filter((x) => x.id === id)
+    const r = autoheal.heal(src, patches, {})
+    assert(r.report.healed.length === 1, name + ': nothing was re-resolved')
+    const applied = engine.apply(src, r.patches)
+    assert(applied.ok, name + ': the healed patch would not apply')
+    assert(autoheal.parses(applied.source), name + ': the healed output does not parse')
+    assert(/__SMLN__/.test(applied.source), name + ': the hook is not actually in the output')
+  }
+
+  // A fallback that produces broken JavaScript must be refused, not adopted.
+  const trap = [{
+    id: 'x:trap', owner: 'x', description: 'd', anchorLiteral: 'MARKER',
+    find: /NEVERMATCHES/g, replace: 'z', expect: 1, required: false,
+    variants: [
+      { label: 'garbage', find: /MARKER/g, replace: '(((', expect: 'any' },
+      { label: 'valid', find: /MARKER/g, replace: 'OK', expect: 'any' },
+    ],
+  }]
+  const trapped = autoheal.heal('var a=MARKER;', trap, {})
+  assert(trapped.report.healed.length === 1 && trapped.report.healed[0].variant === 'valid',
+    'an unparsable fallback was adopted: ' + JSON.stringify(trapped.report.healed))
+
+  return cases.length + ' shape changes recovered; unparsable fallbacks refused'
+})
+
+check('an unresolvable hook is reported with a usable diagnostic', () => {
+  const autoheal = require('../src/patch/autoheal')
+  const gone = [{
+    id: 'x:gone', owner: 'x', description: 'd', anchorLiteral: '"game:ready"',
+    find: /NOPE/g, replace: 'z', expect: 1, required: true, variants: [],
+  }]
+
+  const present = autoheal.heal('a();b("game:ready");c();', gone, {})
+  assert(present.report.broken.length === 1, 'the failure was not reported')
+  assert(present.patches.length === 1, 'the patch was silently dropped instead of left alone')
+  const d = present.report.broken[0].diagnostic
+  assert(d.found === 1 && d.hits.length === 1, 'the diagnostic did not locate the literal')
+  assert(/likely survived/.test(d.note), 'it should say the hook point probably still exists')
+
+  const removed = autoheal.heal('a();c();', gone, {})
+  assert(/removed or renamed/.test(removed.report.broken[0].diagnostic.note),
+    'a literal that is genuinely gone should be reported as such')
+  return 'names the literal, counts it, and says which case it is'
+})
+
+check('a re-scan only runs when the installation actually changed', () => {
+  const autoheal = require('../src/patch/autoheal')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-anchor-'))
+  try {
+    const asar = path.join(dir, 'app.asar')
+    fs.writeFileSync(asar, 'x'.repeat(50))
+    let reads = 0
+    const src = 'var a=1;ie.FH.events.emit(p,"game:ready",{state:p,tick:0});var b=2;'
+    const run = () => autoheal.run({
+      install: { version: '0.5.5', asar },
+      readBundle: () => { reads++; return src },
+      patches: corePatches.filter((x) => x.id === 'smln:capture-api'),
+      configDir: dir,
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+    })
+
+    const first = run()
+    assert(first.scanned && reads === 1, 'the first launch did not scan')
+    assert(first.report.healed.length === 1, 'the changed shape was not healed')
+
+    const second = run()
+    assert(!second.scanned && reads === 1,
+      'an unchanged installation re-read the bundle (reads=' + reads + ')')
+
+    fs.writeFileSync(asar, 'x'.repeat(60))
+    const third = run()
+    assert(third.scanned && reads === 2, 'a rewritten app.asar did not trigger a re-scan')
+
+    fs.writeFileSync(path.join(dir, autoheal.STATE_FILE), '{ not json')
+    assert(autoheal.readState(dir) === null, 'a corrupt state file should mean "re-scan"')
+    return 'scans on first run and on change, skips otherwise'
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ------------------------------------------------- vendored content tables
+check('the content tables match this game build', () => {
+  const info = enums.ELEMENT_INFO || {}
+  const ids = Object.keys(info)
+  assert(ids.length >= 40, 'only ' + ids.length + ' elements in the content table')
+
+  // Every id must still exist in the bundle as a translation key, or the table
+  // has drifted from the game and its phases are no longer trustworthy.
+  const missing = ids.filter((id) => !bundle.includes('elements|' + id + '|name'))
+  assert(missing.length === 0, 'not in this build: ' + missing.join(', '))
+
+  // And the bundle must not know elements the table has never heard of.
+  const inBundle = new Set()
+  for (const m of bundle.matchAll(/elements\|([a-zA-Z0-9]+)\|name/g)) inBundle.add(m[1])
+  const unknown = [...inBundle].filter((k) => !info[k])
+  assert(unknown.length === 0, 'the game has elements the table lacks: ' + unknown.join(', '))
+
+  assert(enums.ELEMENT_KEYS.length === ids.length, 'ELEMENT_KEYS and the table disagree')
+  return ids.length + ' elements, ' + Object.keys(enums.STRUCTURE_INFO || {}).length +
+    ' structures, verified against ' + (enums.CONTENT_META.verifiedAgainst || '?')
+})
+
+check('element phases come from the game, not from guesses', () => {
+  const phase = enums.ELEMENT_PHASE || {}
+  const info = enums.ELEMENT_INFO || {}
+  let checked = 0
+  for (const [id, def] of Object.entries(info)) {
+    if (!def.matterType) continue
+    checked++
+    assert(phase[id] === def.matterType, id + ': phase says ' + phase[id] + ', data says ' + def.matterType)
+    const capitalised = id.charAt(0).toUpperCase() + id.slice(1)
+    assert(phase[capitalised] === def.matterType, capitalised + ' spelling not mirrored')
+  }
+  // The old hand-written table covered 20 of 50 and was wrong 14 times; this
+  // guards against anyone reintroducing guesses.
+  assert(checked >= 40, 'only ' + checked + ' elements carry a phase')
+  assert(phase.sand === 'Solid', 'sand should be Solid, not the old Powder guess')
+  assert(phase.gloom === 'Slushy', 'gloom should be Slushy, not the old Gas guess')
+  return checked + ' phases, both spellings, all from the table'
+})
+
+check('the version is single-sourced and reaches every surface', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
+  const expected = pkg.version
+  assert(expected, 'package.json has no version')
+
+  const smln = require('../src/main/entry')
+  assert(smln.version === expected, 'entry.js reports ' + smln.version + ', package.json says ' + expected)
+  assert(prelude.VERSION === expected,
+    'the prelude reports ' + prelude.VERSION + ', package.json says ' + expected)
+
+  // The number used to be hardcoded in three more places, which is three
+  // chances for the splash to show something the manifest disagrees with.
+  for (const rel of ['src/renderer/runtime.js', 'src/renderer/worker-runtime.js', 'src/main/entry.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', rel), 'utf8')
+    const literal = new RegExp("VERSION\s*=\s*['\"]\d+\.\d+\.\d+")
+    assert(!literal.test(src), rel + ' hardcodes a version again - it must come from package.json')
+  }
+
+  // And what the player actually sees.
+  const { S, dom } = bootConsole()
+  assert(S.version === expected, 'the renderer runtime reports ' + S.version)
+  let shown = null
+  ;(function walk(n) { if (n.className === 'ver') shown = n.textContent
+    for (const c of n.childNodes || []) walk(c) })(dom.document.getElementById("smln-splash"))
+  assert(shown === 'v' + expected, 'the splash shows ' + shown + ', expected v' + expected)
+
+  // The worker half is injected separately and had its own copy.
+  const wbox = { console: { log() {}, warn() {}, error() {} },
+    Object, Array, Promise, Date, RegExp, ArrayBuffer, String, Error,
+    addEventListener() {}, postMessage() {}, name: 'simulation-worker' }
+  wbox.self = wbox
+  wbox.globalThis = wbox
+  vm.createContext(wbox)
+  new vm.Script(prelude.buildWorker([])).runInContext(wbox)
+  assert(wbox.__SMLN_WORKER__.version === expected,
+    'the worker runtime reports ' + wbox.__SMLN_WORKER__.version)
+
+  return 'package.json ' + expected + ' -> main, prelude, renderer, splash, worker'
+})
+
+check('Steam Workshop mods are recognised and never deleted from disk', () => {
+  const workshop = require('../src/mods/workshop')
+  const manage = require('../src/mods/manage')
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-ws-'))
+  try {
+    const wsRoot = path.join(tmp, 'steamapps', 'workshop', 'content', '2764460')
+    const item = path.join(wsRoot, '3141592653')
+    fs.mkdirSync(item, { recursive: true })
+    fs.writeFileSync(path.join(item, 'workshop.json'), JSON.stringify({ title: 'Fancy Mod', tags: ['content'] }))
+    const roots = [wsRoot]
+
+    // Identity comes from the path, not from a name convention.
+    assert(workshop.identify(item, roots).isWorkshop, 'a Workshop item was not recognised')
+    assert(workshop.identify(item, roots).publishedFileId === '3141592653', 'the published id was not read')
+    assert(!workshop.identify(path.join(tmp, 'mods', 'x'), roots).isWorkshop, 'a local mod was called Workshop')
+    assert(!workshop.identify(wsRoot, roots).isWorkshop, 'the content root is not itself an item')
+    assert(workshop.identify(path.join(item, 'assets'), roots).publishedFileId === '3141592653',
+      'a nested folder should belong to its item')
+    // SandLoader's own slot lives in the same directory and has no numeric id.
+    assert(workshop.identify(path.join(wsRoot, 'smln'), roots).publishedFileId === null,
+      'the loader slot should not look like a published item')
+
+    // Annotation is additive: a local mod must come back untouched.
+    const wsMod = { id: 'a.ws', version: '1', dir: item }
+    const localMod = { id: 'local', version: '1', dir: path.join(tmp, 'mods', 'local') }
+    workshop.annotate(wsMod, roots)
+    workshop.annotate(localMod, roots)
+    assert(wsMod.source === 'workshop' && wsMod.removable === false,
+      'the Workshop mod was not marked: ' + JSON.stringify(wsMod))
+    assert(wsMod.workshop && wsMod.workshop.title === 'Fancy Mod', 'workshop.json was not read')
+    assert(localMod.source === undefined && localMod.removable === undefined,
+      'a local mod was modified by annotation: ' + JSON.stringify(localMod))
+
+    // Only a numeric id becomes a URL - a folder name is attacker-adjacent input.
+    assert(workshop.pageUrl('123') === 'steam://url/CommunityFilePage/123', 'bad steam url')
+    assert(workshop.pageUrl('../evil') === null, 'a non-numeric id produced a url')
+
+    // The guard that matters. Steam re-downloads a deleted item, so removing
+    // one looks like it worked and then silently undoes itself.
+    const realRoots = workshop.roots()
+    if (realRoots.length) {
+      const fake = path.join(realRoots[0], '999888777')
+      const refused = manage.remove(fake, { roots: [realRoots[0]], logger: quiet })
+      assert(refused.ok === false, 'a Workshop folder was accepted for deletion')
+      assert(refused.code === 'E_WORKSHOP_MANAGED', 'wrong refusal code: ' + refused.code)
+      assert(/re-download/.test(refused.error) && /unsubscribe/i.test(refused.error),
+        'the refusal does not explain itself: ' + refused.error)
+    }
+
+    // ...and it must not be a blanket veto on deletion.
+    const doomed = path.join(tmp, 'mods', 'doomed')
+    fs.mkdirSync(doomed, { recursive: true })
+    fs.writeFileSync(path.join(doomed, 'smln.mod.json'), JSON.stringify({ id: 'doomed', version: '1' }))
+    const gone = manage.remove(doomed, { roots: [path.join(tmp, 'mods')], logger: quiet })
+    assert(gone.ok === true && !fs.existsSync(doomed), 'a local mod could no longer be deleted')
+
+    return 'identified by path, annotated additively, deletion refused with a reason'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('the manager offers Steam actions for Workshop mods instead of Delete', () => {
+  const mods = [
+    { id: 'a.ws', name: 'Workshop Mod', version: '1.2.0', flavour: 'official', enabled: true,
+      dir: 'C:/ws/3141592653', source: 'workshop', publishedFileId: '3141592653',
+      workshopUrl: 'steam://url/CommunityFilePage/3141592653', removable: false,
+      capability: { tier: 'sandboxed', badge: 'SANDBOXED', granted: {}, contexts: { game: true } } },
+    { id: 'local', name: 'Local Mod', version: '1.0.0', flavour: 'smln', enabled: true,
+      dir: 'C:/mods/local', source: 'local', removable: true,
+      capability: { tier: 'sandboxed', badge: 'SANDBOXED', granted: {}, contexts: { game: true } } },
+  ]
+  const { S, dom } = bootConsole({ mods })
+  const calls = []
+  S.callMain = (action, payload) => { calls.push({ action, payload }); return Promise.resolve({ ok: true }) }
+  S.modsUI.toggle(true)
+
+  const rows = []
+  ;(function walk(n) {
+    if (/(^|\s)row(\s|$)/.test(String(n.className || ''))) rows.push(n)
+    for (const c of n.childNodes || []) walk(c)
+  })(dom.document.getElementById('smln-mods'))
+  assert(rows.length === 2, 'expected 2 rows, got ' + rows.length)
+
+  const textOf = (n) => { const out = []
+    ;(function w(x) { if (x.textContent && (!x.childNodes || !x.childNodes.length)) out.push(x.textContent)
+      for (const c of x.childNodes || []) w(c) })(n); return out }
+
+  const ws = textOf(rows[0])
+  const local = textOf(rows[1])
+  assert(ws.includes('Workshop'), 'the Workshop row carries no source tag: ' + JSON.stringify(ws))
+  assert(!local.includes('Workshop'), 'a local mod was tagged as Workshop: ' + JSON.stringify(local))
+  assert(ws.some((x) => /Workshop 3141592653/.test(x)), 'the published id is not shown')
+  assert(ws.includes('View in Steam') && !ws.includes('Delete'),
+    'the Workshop row still offers Delete: ' + JSON.stringify(ws))
+  assert(local.includes('Delete'), 'the local row lost its Delete button')
+
+  let steamBtn = null
+  ;(function w(n) { if (n.tagName === 'BUTTON' && /View in Steam/.test(n.textContent)) steamBtn = n
+    for (const c of n.childNodes || []) w(c) })(rows[0])
+  steamBtn.dispatch('click', {})
+  const call = calls.find((c) => c.action === 'openWorkshop')
+  assert(call && call.payload.id === '3141592653',
+    'the Steam action did not carry the published id: ' + JSON.stringify(calls))
+
+  return 'source tag, published id, Steam hand-off, Delete withheld'
+})
+
 if (archive) archive.close()
 
 // Wait for the async checks before reporting, or their results land after the

@@ -30,7 +30,8 @@
 ;(function installSmlnWorkerRuntime(self) {
   if (self.__SMLN_WORKER__) return
 
-  var VERSION = '0.1.0'
+  // Injected by the prelude from package.json; see runtime.js.
+  var VERSION = self.__SMLN_VERSION__ || '0.0.0'
   var ENVELOPE = '__smln'
   var PROTOCOL = 1
   /** Bounded: a mod that never registers a handler must not grow memory forever. */

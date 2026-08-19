@@ -132,6 +132,16 @@
     return { el: el, body: body, footer: footer, close: close }
   }
 
+  /**
+   * Guarded because the DOM harness the self-test runs against implements only
+   * part of the element API, and modsui.js already guards these the same way.
+   */
+  function setDisabled(node, on) {
+    if (!node) return
+    if (on && typeof node.setAttribute === 'function') node.setAttribute('disabled', 'true')
+    if (!on && typeof node.removeAttribute === 'function') node.removeAttribute('disabled')
+  }
+
   function button(label, kind) {
     var b = global.document.createElement('button')
     b.textContent = label
@@ -248,8 +258,26 @@
   }
 
   // ------------------------------------------------------------ 2. details
+  /**
+   * What a mod already installed can reach, and the place to grant or withdraw
+   * that reach.
+   *
+   * Approving from here is deliberately not a bare one-click for a native mod:
+   * clicking Approve on one opens the same review dialog the installer shows,
+   * with the warning at the top and Cancel focused. A privileged grant should
+   * cost the same deliberate confirmation wherever it is made from - otherwise
+   * the details panel quietly becomes the easy way around the install warning.
+   */
   function details(mod, info) {
     var cap = (info && info.capability) || mod.capability || {}
+    var review = info && info.review
+    var approval = info && info.approval
+    var isNative = cap.tier === 'native'
+    // A sandboxed mod has nothing to grant; showing it an Approve button would
+    // imply it was being held back when it is already running.
+    var grantable = isNative || (cap.permissions && cap.permissions.length > 0)
+    var approved = !!approval && !(review && review.required)
+
     var m = modal({ title: t('perm.permissions'), wide: true })
 
     var lead = global.document.createElement('div')
@@ -257,7 +285,7 @@
     lead.textContent = (mod.name || mod.id) + '  ' + (mod.version || '')
     m.body.appendChild(lead)
 
-    var entries = (info && info.review && info.review.entries) || entriesFromCapability(cap)
+    var entries = (review && review.entries) || entriesFromCapability(cap)
     for (var i = 0; i < entries.length; i++) m.body.appendChild(permRow(entries[i]))
 
     if (cap.enforceable === false) {
@@ -288,22 +316,107 @@
       for (var p = 0; p < problems.length; p++) m.body.appendChild(problemRow(problems[p]))
     }
 
-    if (info && info.approval) {
-      var appr = global.document.createElement('div')
-      appr.className = 'note-box'
-      appr.textContent = t('perm.approvedAt', { at: info.approval.approvedAt || '?' })
-      m.body.appendChild(appr)
+    // --- approval state, and the buttons that change it
+    var status = global.document.createElement('div')
+    m.body.appendChild(status)
 
-      var revoke = button(t('perm.revoke'))
-      revoke.addEventListener('click', function () {
-        SMLN.callMain('revokeMod', { id: mod.id }).then(function () { m.close() })
-      })
-      m.footer.appendChild(revoke)
+    function paintStatus(text, danger) {
+      status.className = danger ? 'danger-box' : 'note-box'
+      status.textContent = text
     }
 
-    var close = button(t('common.close'))
-    close.addEventListener('click', m.close)
-    m.footer.appendChild(close)
+    function refreshStatus() {
+      if (!grantable) { paintStatus(t('perm.nothingToApprove')); return }
+      if (approved) {
+        paintStatus(t('perm.approvedAt', { at: (approval && approval.approvedAt) || '?' }))
+      } else {
+        paintStatus(t('perm.notApprovedYet'), isNative)
+      }
+    }
+    refreshStatus()
+
+    /** Keep the manager row in step without waiting for a reload. */
+    function syncRow(needsApproval) {
+      var list = global.__SMLN_MODS__ || []
+      for (var k = 0; k < list.length; k++) {
+        if (list[k].id === mod.id) { list[k].needsApproval = needsApproval; break }
+      }
+      mod.needsApproval = needsApproval
+      if (SMLN.modsUI && typeof SMLN.modsUI.render === 'function') SMLN.modsUI.render()
+    }
+
+    var approveBtn = null
+    var revokeBtn = null
+
+    function commitApprove() {
+      setDisabled(approveBtn, true)
+      return SMLN.callMain('approveMod', {
+        id: mod.id,
+        version: mod.version,
+        permissions: cap.permissions || [],
+      }).then(function (r) {
+        setDisabled(approveBtn, false)
+        if (!r || !r.ok) {
+          paintStatus(t('perm.approveFailed', { error: (r && r.error) || t('common.unknownError') }), true)
+          return
+        }
+        approved = true
+        approval = r.record || { approvedAt: new Date().toISOString() }
+        syncRow(false)
+        paintStatus(t('perm.approvedNow'))
+        renderButtons()
+      })
+    }
+
+    function onApprove() {
+      // Native grants go through the full review, warning and all.
+      if (isNative && review && SMLN.permUI && typeof SMLN.permUI.review === 'function') {
+        return SMLN.permUI.review(review).then(function (yes) {
+          if (yes) return commitApprove()
+        })
+      }
+      return commitApprove()
+    }
+
+    function onRevoke() {
+      setDisabled(revokeBtn, true)
+      return SMLN.callMain('revokeMod', { id: mod.id }).then(function (r) {
+        setDisabled(revokeBtn, false)
+        if (!r || !r.ok) {
+          paintStatus(t('perm.revokeFailed', { error: (r && r.error) || t('common.unknownError') }), true)
+          return
+        }
+        approved = false
+        approval = null
+        syncRow(true)
+        paintStatus(t('perm.revoked'), true)
+        renderButtons()
+      })
+    }
+
+    /** Rebuilt after every change so the footer always offers the one move left. */
+    function renderButtons() {
+      while (m.footer.firstChild) m.footer.removeChild(m.footer.firstChild)
+      approveBtn = null
+      revokeBtn = null
+
+      if (grantable && !approved) {
+        approveBtn = button(t('perm.approve'), isNative ? 'go risky' : 'go')
+        approveBtn.addEventListener('click', onApprove)
+        m.footer.appendChild(approveBtn)
+      }
+      if (grantable && approved) {
+        revokeBtn = button(t('perm.revoke'))
+        revokeBtn.addEventListener('click', onRevoke)
+        m.footer.appendChild(revokeBtn)
+      }
+
+      var close = button(t('common.close'))
+      close.addEventListener('click', m.close)
+      m.footer.appendChild(close)
+    }
+    renderButtons()
+
     return m
   }
 

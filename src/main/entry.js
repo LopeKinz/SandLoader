@@ -41,6 +41,7 @@ const locate = require('../asar/locate')
 const modLoader = require('../mods/loader')
 const flCompat = require('../compat/fluxloader')
 const modManage = require('../mods/manage')
+const workshop = require('../mods/workshop')
 const official = require('../mods/official')
 const permissions = require('../mods/permissions')
 const approvals = require('../mods/approvals')
@@ -51,10 +52,24 @@ const sandbox = require('../mods/sandbox')
 const watcher = require('../mods/watcher')
 const interceptor = require('./interceptor')
 const { corePatches } = require('../patch/core-patches')
+const autoheal = require('../patch/autoheal')
 const prelude = require('../renderer/prelude')
 const enums = require('../game/enums')
 
-const VERSION = '0.1.0'
+/**
+ * One source of truth for the loader version: package.json. It used to be
+ * hardcoded here, in runtime.js and in worker-runtime.js, which is three
+ * copies to forget - and the splash quietly showing a different number from
+ * the manifest is exactly the kind of drift nobody notices until someone
+ * reports a bug against the wrong version.
+ */
+const VERSION = (() => {
+  try {
+    return String(require('../../package.json').version || '0.0.0')
+  } catch (_) {
+    return '0.0.0'
+  }
+})()
 
 const BUNDLE = 'js/bundle.js'
 const SIM_WORKER = 'js/simulation-worker.js'
@@ -89,6 +104,8 @@ const runtime = {
   /** Extra RPC actions registered by Fluxloader electron entrypoints. */
   rpcActions: new Map(),
   watcher: null,
+  /** Last anchor scan, for the splash and the Problems panel. */
+  healReport: null,
   /** Pending two-phase installs: token -> {review, zipPath}. */
   installs: new Map(),
   flConfig: {},
@@ -299,6 +316,15 @@ function modSummary() {
       capability: cap,
       hasSettings: Object.keys(schemaFor(m)).length > 0,
       needsApproval: !isApproved(m),
+      // Workshop provenance. `removable` is false for Workshop items, and the
+      // manager hides its delete button on it; manage.remove() refuses the
+      // path independently, so the two do not have to agree to stay safe.
+      source: m.source || 'local',
+      publishedFileId: m.publishedFileId || null,
+      workshopUrl: m.workshopUrl || null,
+      workshopUpdatedAt: m.workshopUpdatedAt || null,
+      workshopTitle: (m.workshop && m.workshop.title) || null,
+      removable: m.removable !== false,
       failed: mine.some((p) => p.severity === 'error'),
       problems: mine.map((p) => p.message),
     }
@@ -394,6 +420,35 @@ async function handleRpc(msg) {
           ? { name: runtime.install.name, version: runtime.install.version, source: runtime.install.source }
           : null,
       }
+
+    case 'rescanAnchors': {
+      // Forced from the UI: re-read the bundle and re-resolve regardless of
+      // whether the fingerprint moved.
+      const result = autoheal.run({
+        install: runtime.install,
+        configDir: runtime.configDir,
+        logger: runtime.logger.child('anchors'),
+        patches: runtime.patchesByFile[BUNDLE] || [],
+        force: true,
+        readBundle() {
+          const reader = require('../asar/reader')
+          const archive = reader.open(runtime.install.asar)
+          try { return archive.readText('dist/js/bundle.js') } finally { archive.close() }
+        },
+      })
+      if (result.scanned) {
+        runtime.patchesByFile[BUNDLE] = result.patches
+        runtime.healReport = result.report
+        if (runtime.interceptor && runtime.interceptor.invalidate) runtime.interceptor.invalidate()
+      }
+      return {
+        ok: !result.error,
+        error: result.error ? String(result.error) : undefined,
+        scanned: result.scanned,
+        report: result.report,
+        fingerprint: result.fingerprint,
+      }
+    }
 
     case 'getProblems': {
       const snapshot = problems.toJSON()
@@ -512,6 +567,33 @@ async function handleRpc(msg) {
       return { ok: runtime.approvals ? runtime.approvals.revoke(p.id) : false, id: p.id }
 
     // ------------------------------------------------------------ install
+    case 'openWorkshop': {
+      // steam:// hands off to the Steam client, which is where subscribing and
+      // unsubscribing actually happen. The https form is the fallback for a
+      // machine where the protocol handler is not registered.
+      const url = p.id
+        ? workshop.pageUrl(p.id)
+        : workshop.hubUrl()
+      const webUrl = p.id
+        ? workshop.pageUrl(p.id, { web: true })
+        : workshop.hubUrl({ web: true })
+      if (!url) return { ok: false, error: 'that mod has no Steam Workshop id' }
+      try {
+        const { shell } = require('electron')
+        await shell.openExternal(url)
+        return { ok: true, url }
+      } catch (e) {
+        // Fall back to the browser rather than reporting a dead end.
+        try {
+          const { shell } = require('electron')
+          await shell.openExternal(webUrl)
+          return { ok: true, url: webUrl, fallback: true }
+        } catch (e2) {
+          return { ok: false, error: e2.message }
+        }
+      }
+    }
+
     case 'openModsFolder': {
       const dir = p.dir || modRoots(runtime.host && runtime.host.paths)[0]
       ensureDir(dir)
@@ -825,8 +907,22 @@ function assemble() {
     note(toSmlnError(e, 'official mod support'), 'official')
   }
 
+  // ---- mark whatever came from the Steam Workshop
+  //
+  // Purely additive: a mod outside a Workshop root is left untouched. What it
+  // buys is that the manager can show where a mod came from and stop offering
+  // to delete a folder Steam owns and would simply re-download.
+  try {
+    workshop.annotateAll(allMods())
+  } catch (e) {
+    note(toSmlnError(e, 'workshop scan'), 'mods', null, 'warn')
+  }
+
   // ---- core patches last, so a mod cannot displace them
   addPatches(BUNDLE, corePatches)
+
+  // ---- re-resolve the hooks if the game changed under us
+  verifyAnchors()
 
   const total = Object.values(runtime.patchesByFile).reduce((n, l) => n + l.length, 0)
   const summary = problems.summary()
@@ -839,6 +935,59 @@ function assemble() {
     logger.warn(`${summary.errors} mod problem(s) - the game still starts; open SandLoader Mods > Problems to see them`)
   }
   return { mods: allMods(), errors: runtime.errors }
+}
+
+/**
+ * Check the hooks still resolve, and re-resolve them when the game changed.
+ *
+ * Runs only when the installation's fingerprint moved - a new version, a
+ * rewritten app.asar - so the usual launch pays nothing. When it does run it
+ * costs about 50 ms against a 4 MB bundle, and rather more only in the case
+ * where a fallback has to be adopted and parse-validated.
+ *
+ * What it cannot do is invent a hook; see the header of src/patch/autoheal.js.
+ * A hook that cannot be re-resolved is left exactly as it was, so the engine
+ * reports it the way it always has and the file is served unmodified.
+ */
+function verifyAnchors() {
+  if (!runtime.install) return null
+  const logger = runtime.logger.child('anchors')
+
+  const result = autoheal.run({
+    install: runtime.install,
+    configDir: runtime.configDir,
+    logger,
+    patches: runtime.patchesByFile[BUNDLE] || [],
+    readBundle() {
+      const reader = require('../asar/reader')
+      const archive = reader.open(runtime.install.asar)
+      try { return archive.readText('dist/js/bundle.js') } finally { archive.close() }
+    },
+  })
+
+  runtime.healReport = result.report
+  if (!result.scanned) return result
+
+  runtime.patchesByFile[BUNDLE] = result.patches
+
+  for (const h of (result.report && result.report.healed) || []) {
+    note(new SmlnError('E_PATCH_FAILED',
+      `hook "${h.id}" was re-resolved after the game changed: the original anchor no longer ` +
+      `matches (${h.primaryReason}), so SandLoader adopted its "${h.variant}" fallback`,
+      { detail: { mod: h.owner, patch: h.id, variant: h.variant } }),
+    'patch', null, 'warn')
+  }
+  for (const b of (result.report && result.report.broken) || []) {
+    const d = b.diagnostic
+    note(new SmlnError('E_PATCH_FAILED',
+      `hook "${b.id}" could not be re-resolved on this game build` +
+      (d && d.literal ? ` - its anchor ${d.literal} appears ${d.found} time(s); ${d.note}` : ''),
+      { detail: { patch: b.id, tried: b.tried.map((t) => t.label) } }),
+    'patch', null, b.required ? 'error' : 'warn')
+  }
+  if (result.error) note(result.error, 'patch', null, 'warn')
+
+  return result
 }
 
 /**
@@ -877,6 +1026,7 @@ function bootReport() {
       smln: runtime.mods.length,
       fluxloader: runtime.flMods.length,
       official: runtime.officialMods.length,
+      workshop: allMods().filter((m) => m.source === 'workshop').length,
       patches: patches.length,
       rendererScripts: runtime.rendererScripts.length,
       workerScripts: Object.values(runtime.workerScripts).reduce((n, l) => n + l.length, 0),
@@ -885,6 +1035,13 @@ function bootReport() {
       warnings: summary.warnings,
     },
     targets: Object.keys(runtime.patchesByFile).filter((k) => runtime.patchesByFile[k].length),
+    anchors: runtime.healReport
+      ? {
+          holding: runtime.healReport.holding.length,
+          healed: runtime.healReport.healed.map((h) => ({ id: h.id, variant: h.variant })),
+          broken: runtime.healReport.broken.map((b) => ({ id: b.id, required: b.required })),
+        }
+      : null,
   }
 }
 

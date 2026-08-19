@@ -100,6 +100,9 @@
     '#smln-mods .tag{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;',
     'border:1px solid rgba(100,116,139,.55);color:#94a3b8;border-radius:0 4px 0 4px;flex:none}',
     '#smln-mods .tag.flux{border-color:rgba(122,162,255,.5);color:#7aa2ff}',
+    '#smln-mods .tag.ws{border-color:rgba(102,192,244,.55);color:#66c0f4}',
+    '#smln-mods .act.steam{border-color:rgba(102,192,244,.5);color:#66c0f4}',
+    '#smln-mods .act.steam:hover{background:rgba(102,192,244,.12)}',
     '#smln-mods .badge{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;',
     'border:1px solid rgba(100,116,139,.55);color:#94a3b8;border-radius:0 4px 0 4px;flex:none}',
     '#smln-mods .badge.elev{border-color:rgba(255,231,0,.55);color:#ffe700}',
@@ -183,6 +186,10 @@
     openDir.className = 'act'
     openDir.addEventListener('click', function () { doOpenFolder(openDir) })
 
+    var browseWs = document.createElement('button')
+    browseWs.className = 'act steam'
+    browseWs.addEventListener('click', function () { doOpenWorkshop(browseWs, null) })
+
     var reload = document.createElement('button')
     reload.className = 'act'
     reload.addEventListener('click', function () { doReload(reload) })
@@ -201,6 +208,7 @@
     actions.appendChild(problems)
     actions.appendChild(reload)
     actions.appendChild(openDir)
+    actions.appendChild(browseWs)
     actions.appendChild(install)
     actions.appendChild(close)
     footer.appendChild(note)
@@ -225,6 +233,7 @@
     overlay._install = install
     overlay._open = openDir
     overlay._reload = reload
+    overlay._browseWs = browseWs
     overlay._problems = problems
     overlay._close = close
     overlay._title = h2
@@ -244,6 +253,7 @@
     overlay._install.textContent = tx('mods.installFromZip', 'Install from ZIP')
     overlay._open.textContent = tx('mods.openFolder', 'Open folder')
     overlay._reload.textContent = tx('mods.reloadMods', 'Reload Mods')
+    overlay._browseWs.textContent = tx('mods.browseWorkshop', 'Browse Workshop')
     overlay._close.textContent = tx('mods.close', 'Close')
 
     var p = global.__SMLN_PROBLEMS__ || { summary: { total: 0, errors: 0 } }
@@ -354,6 +364,24 @@
             { error: (r && r.error) || '' }), 'err')
         } else say(r.dir)
       })
+  }
+
+  /**
+   * Hand off to Steam. Subscribing and unsubscribing happen there, not here -
+   * SandLoader has no business managing someone's Steam subscriptions, and
+   * could not do it reliably if it tried.
+   */
+  function doOpenWorkshop(button, publishedFileId) {
+    return busy(button, tx('mods.opening', 'Opening...'), function () {
+      return rpc('openWorkshop', { id: publishedFileId })
+    }).then(function (r) {
+      if (!r || !r.ok) {
+        say(tx('mods.workshopOpenFailed', 'could not open Steam',
+          { error: (r && r.error) || tx('common.unknownError', 'unknown error') }), 'err')
+        return
+      }
+      say(r.url || '')
+    })
   }
 
   function doReload(button) {
@@ -467,13 +495,25 @@
     }
     var id = document.createElement('div')
     id.className = 'id'
-    id.textContent = m.id + (m.dir ? '  -  ' + m.dir : '')
+    id.textContent = m.id +
+      (m.publishedFileId ? '  -  Workshop ' + m.publishedFileId : '') +
+      (m.dir ? '  -  ' + m.dir : '')
     meta.appendChild(nm)
     meta.appendChild(id)
 
     var tag = document.createElement('span')
     tag.className = 'tag' + (m.flavour === 'fluxloader' ? ' flux' : '')
     tag.textContent = m.flavour === 'fluxloader' ? 'Fluxloader' : 'SandLoader'
+
+    // Where it came from, shown separately from what format it is - a Workshop
+    // item can be either flavour, and the two answer different questions.
+    var isWorkshop = m.source === 'workshop'
+    var srcTag = null
+    if (isWorkshop) {
+      srcTag = document.createElement('span')
+      srcTag.className = 'tag ws'
+      srcTag.textContent = tx('mods.source.workshop', 'Workshop')
+    }
 
     // Always rendered, never conditional: a native mod must be visible as one
     // at a glance, without opening anything.
@@ -506,13 +546,25 @@
       updateNote()
     })
 
-    var del = document.createElement('button')
-    del.className = 'del'
-    del.textContent = tx('mods.delete', 'Delete')
-    del.addEventListener('click', function () { doRemove(m, del) })
+    // Steam owns Workshop folders: deleting one only makes Steam re-download
+    // it. Offer the page instead, which is where unsubscribing lives.
+    var del
+    if (isWorkshop) {
+      del = document.createElement('button')
+      del.className = 'act steam'
+      del.textContent = tx('mods.openInSteam', 'View in Steam')
+      del.addEventListener('click', function () { doOpenWorkshop(del, m.publishedFileId) })
+      if (!m.publishedFileId && del.setAttribute) del.setAttribute('disabled', 'true')
+    } else {
+      del = document.createElement('button')
+      del.className = 'del'
+      del.textContent = tx('mods.delete', 'Delete')
+      del.addEventListener('click', function () { doRemove(m, del) })
+    }
 
     row.appendChild(meta)
     row.appendChild(tag)
+    if (srcTag) row.appendChild(srcTag)
     row.appendChild(badge)
     if (m.hasSettings) {
       var settings = document.createElement('button')
