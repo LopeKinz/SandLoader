@@ -112,9 +112,7 @@ Administrator once, or move the Steam library somewhere outside
 <details>
 <summary><b>"no Steam Workshop content folder"</b></summary>
 
-`steamapps/workshop/content/2764460` does not exist yet. Subscribe to any
-Sandustry Workshop item once so Steam creates it, or create the folder by hand,
-then run the installer again.
+`steamapps/workshop/content/2764460` does not exist yet. Create it by Hand, or wait till the Steam Workshop arrives.
 </details>
 
 ### Update
