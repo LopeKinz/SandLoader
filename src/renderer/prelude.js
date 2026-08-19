@@ -6,8 +6,19 @@
  * ordering: the runtime is installed before a single line of game code runs,
  * so the capture hook can never fire before its receiver exists.
  *
- * The result is cached, because the interceptor is asked for it on every
- * bundle request and rebuilding it means re-reading three files.
+ * PART ORDER IS LOAD-BEARING. `runtime.js` defines `__SMLN__`; every other
+ * part starts with `var SMLN = global.__SMLN__; if (!SMLN) return`, so a part
+ * placed above it silently does nothing. Beyond that:
+ *
+ *   locales.js       only writes a global, but must precede i18n.js
+ *   i18n.js          the UI parts call SMLN.i18n.t() at build time
+ *   capabilities.js  defines SMLN.forMod, which mod wrappers call
+ *   registration.js  } capabilities.js links these onto each facade if they
+ *   messaging.js     } are present, so they must be installed before any mod
+ *   settingsui/permui defined before modsui.js, which opens them
+ *
+ * The result is cached only when nothing mod-specific went into it, because
+ * the interceptor asks for it on every bundle request.
  */
 
 const fs = require('fs')
@@ -18,38 +29,78 @@ const enums = require('../game/enums')
 /** @type {string|null} */
 let cache = null
 
-/** Files are concatenated in this order; runtime must come first. */
-const PARTS = ['runtime.js', 'splash.js', 'console.js', 'modsui.js']
+/**
+ * Concatenated in this order. `runtime.js` must stay first.
+ */
+const PARTS = [
+  'runtime.js',
+  'locales.js',
+  'i18n.js',
+  'capabilities.js',
+  'registration.js',
+  'messaging.js',
+  'sandkit-adapter.js',
+  'splash.js',
+  'console.js',
+  'settingsui.js',
+  'permui.js',
+  'modsui.js',
+  'hotreload.js',
+]
+
+/** Emit `globalThis.<name> = <json>` without ever interpolating raw text. */
+function globalAssign(name, value) {
+  return ';(function(g){g.' + name + '=' + JSON.stringify(value === undefined ? null : value) + ';})' +
+    '(typeof globalThis!=="undefined"?globalThis:window);'
+}
 
 /**
- * @param {{modScripts?: string[], mods?: any[], reload?: boolean}} [opts]
- *   modScripts: renderer-side mod sources, appended after the console so they
- *   can call SMLN.registerCommand() and SMLN.whenReady() immediately.
- *   mods: metadata for the in-game mod manager and the splash screen.
+ * @param {Object} [opts]
+ * @param {string[]} [opts.modScripts]  Renderer-side mod sources, already
+ *   wrapped per mod by src/mods/sandbox.js.
+ * @param {any[]} [opts.mods]           Metadata for the manager and the splash.
+ * @param {Record<string,{baseUrl:string}>} [opts.modAssets]  For SMLN.assets.
+ * @param {Record<string,any>} [opts.fluxConfig]  Persisted Fluxloader config.
+ * @param {string|null} [opts.locale]   Explicit SandLoader language preference.
+ * @param {any} [opts.problems]         Failures the loader survived.
+ * @param {any} [opts.boot]             What the loader did: mods, patches, hooks.
+ * @param {boolean} [opts.reload]
  * @returns {string}
  */
 function build(opts = {}) {
-  const dynamic = (opts.modScripts && opts.modScripts.length) || (opts.mods && opts.mods.length)
+  const dynamic = (opts.modScripts && opts.modScripts.length) ||
+    (opts.mods && opts.mods.length) ||
+    opts.modAssets || opts.fluxConfig || opts.locale || opts.problems || opts.boot
   if (cache && !opts.reload && !dynamic) return cache
 
   const chunks = []
   chunks.push('/* --- SMLN runtime (injected) --- */')
-  // Expose the static tables before the runtime reads them.
-  chunks.push(
-    ';(function(g){g.__SMLN_ENUMS__=' + JSON.stringify(serialisableEnums()) + ';})' +
-    '(typeof globalThis!=="undefined"?globalThis:window);'
-  )
 
-  // Mod metadata for the manager UI and splash, before any part reads it.
-  chunks.push(
-    ';(function(g){g.__SMLN_MODS__=' + JSON.stringify(opts.mods || []) + ';})' +
-    '(typeof globalThis!=="undefined"?globalThis:window);'
-  )
+  // Everything the renderer parts read out of the global scope, defined before
+  // the part that reads it runs.
+  chunks.push(globalAssign('__SMLN_ENUMS__', serialisableEnums()))
+  chunks.push(globalAssign('__SMLN_MODS__', opts.mods || []))
+  chunks.push(globalAssign('__SMLN_MOD_ASSETS__', opts.modAssets || {}))
+  chunks.push(globalAssign('__SMLN_FLUX_CONFIG__', opts.fluxConfig || {}))
+  chunks.push(globalAssign('__SMLN_LOCALE__', opts.locale || null))
+  chunks.push(globalAssign('__SMLN_PROBLEMS__', opts.problems || { problems: [], summary: { total: 0, errors: 0, warnings: 0, mods: [] } }))
+  chunks.push(globalAssign('__SMLN_BOOT__', opts.boot || null))
 
   for (const part of PARTS) {
     const file = path.join(__dirname, part)
+    let source
+    try {
+      source = fs.readFileSync(file, 'utf8')
+    } catch (e) {
+      // A missing optional part must not stop the loader; the runtime is the
+      // only one whose absence is fatal, and that is caught by the caller.
+      chunks.push(`/* --- ${part}: unavailable (${e.code || e.message}) --- */`)
+      continue
+    }
     chunks.push(`/* --- ${part} --- */`)
-    chunks.push(fs.readFileSync(file, 'utf8'))
+    // Each part is self-guarding, but a syntax-level throw at install time
+    // would abort the whole prepended script and with it the game bundle.
+    chunks.push(';try{\n' + source + '\n}catch(e){console.error("[SMLN] part ' + part + ' failed to install:",e)}')
   }
 
   // Attach the tables to the live API object once it exists.
@@ -60,14 +111,38 @@ function build(opts = {}) {
 
   for (const src of opts.modScripts || []) {
     chunks.push('/* --- mod (renderer) --- */')
-    // A throwing mod must not prevent the game bundle from executing.
+    // sandbox.wrapRendererMod already wraps each mod in its own try/catch and
+    // its own scope. The guard here is for sources that did not go through it.
     chunks.push(';try{\n' + src + '\n}catch(e){console.error("[SMLN] renderer mod failed:",e)}')
   }
 
   chunks.push('/* --- end SMLN runtime --- */\n')
   const out = chunks.join('\n')
-  if (!(opts.modScripts && opts.modScripts.length)) cache = out
+  if (!dynamic) cache = out
   return out
+}
+
+/**
+ * The worker-side prelude: SandLoader's worker runtime plus each worker mod,
+ * each in its own try/catch so one broken mod cannot stop the simulation
+ * worker from booting.
+ *
+ * @param {string[]} workerScripts
+ * @returns {string}
+ */
+function buildWorker(workerScripts) {
+  const chunks = ['/* --- SMLN worker runtime (injected) --- */']
+  try {
+    chunks.push(';try{\n' + fs.readFileSync(path.join(__dirname, 'worker-runtime.js'), 'utf8') +
+      '\n}catch(e){console.error("[SMLN] worker runtime failed to install:",e)}')
+  } catch (e) {
+    chunks.push('/* worker-runtime.js unavailable: ' + (e.code || e.message) + ' */')
+  }
+  for (const src of workerScripts || []) {
+    chunks.push(';try{\n' + src + '\n}catch(e){console.error("[SMLN] worker mod failed:",e)}')
+  }
+  chunks.push('/* --- end SMLN worker runtime --- */\n')
+  return chunks.join('\n')
 }
 
 /** Only the plain-data parts of the enum module travel to the renderer. */
@@ -86,4 +161,4 @@ function serialisableEnums() {
 
 function invalidate() { cache = null }
 
-module.exports = { build, invalidate }
+module.exports = { build, buildWorker, invalidate, PARTS }

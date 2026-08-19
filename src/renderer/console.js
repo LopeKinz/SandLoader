@@ -677,29 +677,111 @@
   var sugg = { items: [], selected: 0, typing: '', tokenStart: 0 }
   var open = false
 
+  /*
+   * Presentation only. The completion engine, history and key routing below
+   * are untouched - this is the shell they draw into.
+   *
+   * It borrows the game's dialog language (the `Play` face for chrome, the
+   * slate border at 68%, the `0 8px 0 8px` radius, `#ffe700` as the accent) so
+   * the console reads as part of Sandustry rather than a devtools panel bolted
+   * onto it. The log and the input keep a monospace face, because aligned
+   * output is the entire point of a console.
+   */
   var CSS = [
+    "@font-face{font-family:'SMLN Play';src:url('fonts/Play-Regular.ttf') format('truetype');",
+    'font-weight:400;font-display:block}',
+    "@font-face{font-family:'SMLN Play';src:url('fonts/Play-Bold.ttf') format('truetype');",
+    'font-weight:700;font-display:block}',
+
+    // --- shell
     '#smln-console{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;',
-    'font:13px/1.5 Consolas,"Cascadia Mono",monospace;color:#d7dae0;display:none}',
-    '#smln-console.open{display:block}',
-    '#smln-out{max-height:38vh;overflow-y:auto;background:rgba(12,14,18,.93);',
-    'border-top:1px solid #ffe70055;padding:8px 12px;white-space:pre-wrap;word-break:break-word}',
-    '#smln-out div{padding:1px 0}',
-    '#smln-out .u{color:#ffe700}#smln-out .e{color:#ff7a6b}#smln-out .n{color:#8b93a1}',
-    '#smln-inputrow{display:flex;align-items:center;background:rgba(8,10,13,.97);',
-    'border-top:1px solid #ffe70033;padding:6px 12px}',
-    '#smln-prompt{color:#ffe700;margin-right:8px}',
-    '#smln-input{flex:1;background:transparent;border:0;outline:0;color:#fff;font:inherit}',
-    '#smln-sugg{position:absolute;bottom:100%;left:12px;background:rgba(8,10,13,.98);',
-    'border:1px solid #ffe70044;border-bottom:0;max-height:40vh;overflow-y:auto;min-width:280px}',
-    '#smln-sugg div{padding:3px 10px;display:flex;gap:14px;justify-content:space-between}',
-    '#smln-sugg div.sel{background:#ffe700;color:#111}',
-    '#smln-sugg .h{color:#8b93a1;font-size:11px}',
-    '#smln-sugg div.sel .h{color:#553}',
+    "font:13px/1.6 'Cascadia Mono',Consolas,'SF Mono',Menlo,monospace;color:#cbd5e1;",
+    'display:none;flex-direction:column;',
+    'background:rgba(8,12,17,.97);border-top:1px solid rgba(100,116,139,.68);',
+    'box-shadow:0 -8px 24px rgba(0,0,0,.45);',
+    'transform:translateY(8px);opacity:0;transition:transform .16s ease-out,opacity .16s ease-out}',
+    '#smln-console.open{display:flex;transform:none;opacity:1}',
+
+    // --- drag handle
+    '#smln-grip{height:5px;cursor:ns-resize;background:transparent;flex:none}',
+    '#smln-grip:hover,#smln-grip.drag{background:rgba(255,231,0,.28)}',
+
+    // --- header
+    '#smln-head{display:flex;align-items:center;gap:12px;padding:7px 14px;flex:none;',
+    "font-family:'SMLN Play',system-ui,sans-serif;",
+    'border-bottom:1px solid rgba(100,116,139,.28)}',
+    '#smln-head .t{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;',
+    'color:#ffe700;flex:none}',
+    '#smln-head .meta{font-size:11px;color:#64748b;flex:1;min-width:0;overflow:hidden;',
+    'text-overflow:ellipsis;white-space:nowrap}',
+    '#smln-head .k{font-size:10px;color:#64748b;flex:none;letter-spacing:.04em}',
+    '#smln-head .k b{color:#94a3b8;font-weight:400;border:1px solid rgba(100,116,139,.45);',
+    'border-radius:3px;padding:0 4px;margin:0 2px}',
+    '#smln-head .x{cursor:pointer;border:1px solid rgba(100,116,139,.5);background:transparent;',
+    "color:#94a3b8;font:inherit;font-size:11px;line-height:1;padding:4px 9px;",
+    'border-radius:0 4px 0 4px;flex:none}',
+    '#smln-head .x:hover{background:rgba(148,163,184,.14);color:#e2e8f0}',
+
+    // --- output
+    '#smln-out{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0;',
+    'white-space:pre-wrap;word-break:break-word}',
+    '#smln-out .ln{display:flex;gap:10px;padding:1px 14px;align-items:baseline}',
+    '#smln-out .ln:hover{background:rgba(148,163,184,.05)}',
+    '#smln-out .gx{flex:none;width:.9em;text-align:center;color:#334155;user-select:none}',
+    '#smln-out .tx{flex:1;min-width:0}',
+    // severities
+    '#smln-out .u .gx{color:#ffe700}#smln-out .u .tx{color:#ffe700}',
+    '#smln-out .e .gx{color:#f87171}#smln-out .e .tx{color:#fca5a5}',
+    '#smln-out .w .gx{color:#ffe700}#smln-out .w .tx{color:#fde68a}',
+    '#smln-out .n .tx{color:#64748b}',
+    '#smln-out .g .gx{color:#4ade80}#smln-out .g .tx{color:#86efac}',
+    // scrollbar
+    '#smln-out::-webkit-scrollbar{width:10px}',
+    '#smln-out::-webkit-scrollbar-track{background:transparent}',
+    '#smln-out::-webkit-scrollbar-thumb{background:rgba(100,116,139,.35);border-radius:5px;',
+    'border:3px solid transparent;background-clip:content-box}',
+    '#smln-out::-webkit-scrollbar-thumb:hover{background:rgba(148,163,184,.55);',
+    'border:3px solid transparent;background-clip:content-box}',
+
+    // --- input
+    '#smln-inputrow{display:flex;align-items:center;gap:9px;flex:none;position:relative;',
+    'padding:9px 14px;border-top:1px solid rgba(100,116,139,.34);background:rgba(2,6,10,.6)}',
+    '#smln-prompt{color:#ffe700;flex:none;font-weight:700;user-select:none}',
+    '#smln-inputwrap{flex:1;min-width:0;position:relative;display:flex;align-items:center}',
+    '#smln-ghost{position:absolute;inset:0;color:#475569;pointer-events:none;',
+    'white-space:pre;overflow:hidden}',
+    '#smln-input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:#f1f5f9;',
+    'font:inherit;caret-color:#ffe700;position:relative}',
+    '#smln-input::placeholder{color:#475569}',
+
+    // --- suggestions
+    '#smln-sugg{position:absolute;bottom:100%;left:14px;right:14px;max-width:640px;',
+    'background:rgba(6,10,15,.99);border:1px solid rgba(100,116,139,.55);border-bottom:0;',
+    'border-radius:0 6px 0 0;max-height:44vh;overflow-y:auto;display:none;',
+    'box-shadow:0 -6px 18px rgba(0,0,0,.42)}',
+    '#smln-sugg .s{padding:4px 12px;display:flex;gap:16px;align-items:baseline;cursor:pointer}',
+    '#smln-sugg .s:hover{background:rgba(148,163,184,.1)}',
+    '#smln-sugg .s .v{flex:none;color:#e2e8f0}',
+    '#smln-sugg .s .m{flex:1;min-width:0;text-align:right;color:#64748b;font-size:11.5px;',
+    'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '#smln-sugg .s.sel{background:rgba(255,231,0,.14);box-shadow:inset 2px 0 0 #ffe700}',
+    '#smln-sugg .s.sel .v{color:#ffe700}',
+    '#smln-sugg .s.sel .m{color:#94a3b8}',
+    '#smln-sugg .s .hit{color:#ffe700}',
+    '#smln-sugg .foot{position:sticky;bottom:0;display:flex;justify-content:space-between;',
+    "gap:12px;padding:4px 12px;font-family:'SMLN Play',system-ui,sans-serif;font-size:10px;",
+    'color:#475569;background:rgba(6,10,15,.99);border-top:1px solid rgba(100,116,139,.25)}',
+    '#smln-sugg::-webkit-scrollbar{width:8px}',
+    '#smln-sugg::-webkit-scrollbar-thumb{background:rgba(100,116,139,.4);border-radius:4px}',
   ].join('')
 
-  function el(tag, id, parent) {
+  /** Glyph shown in the gutter for each line class. */
+  var GUTTER = { u: '>', e: '!', w: '!', n: ' ', g: '+' }
+
+  function el(tag, id, parent, cls) {
     var node = document.createElement(tag)
     if (id) node.id = id
+    if (cls) node.className = cls
     if (parent) parent.appendChild(node)
     return node
   }
@@ -709,20 +791,44 @@
     style.textContent = CSS
     document.head.appendChild(style)
 
-    // Built node by node rather than through innerHTML: no HTML escaping to get
-    // wrong, and the structure stays inspectable by the test harness.
+    // Built node by node rather than through innerHTML: console output carries
+    // mod names and error text, so there is no HTML escaping to get wrong, and
+    // the structure stays inspectable by the test harness.
     var root = el('div', 'smln-console')
+
+    el('div', 'smln-grip', root)
+
+    var head = el('div', 'smln-head', root)
+    var title = el('span', null, head, 't')
+    title.textContent = 'SandLoader'
+    var meta = el('span', null, head, 'meta')
+    var keys = el('span', null, head, 'k')
+    var hints = [['Tab', 'complete'], ['↑↓', 'history'], ['Esc', 'close']]
+    for (var h = 0; h < hints.length; h++) {
+      var b = document.createElement('b')
+      b.textContent = hints[h][0]
+      keys.appendChild(b)
+      var label = document.createElement('span')
+      label.textContent = hints[h][1] + (h < hints.length - 1 ? '   ' : '')
+      keys.appendChild(label)
+    }
+    var close = el('button', null, head, 'x')
+    close.textContent = 'Close'
+    close.addEventListener('click', function () { toggle(false) })
+
     var out = el('div', 'smln-out', root)
     var row = el('div', 'smln-inputrow', root)
-    row.style.position = 'relative'
     var sg = el('div', 'smln-sugg', row)
-    sg.style.display = 'none'
+
     var prompt = el('span', 'smln-prompt', row)
     prompt.textContent = '>'
-    var input = el('input', 'smln-input', row)
+    var wrap = el('div', 'smln-inputwrap', row)
+    var ghost = el('span', 'smln-ghost', wrap)
+    var input = el('input', 'smln-input', wrap)
     if (input.setAttribute) {
       input.setAttribute('autocomplete', 'off')
       input.setAttribute('spellcheck', 'false')
+      input.setAttribute('placeholder', 'type "help"')
     }
     document.body.appendChild(root)
 
@@ -730,6 +836,9 @@
     ui.output = out
     ui.input = input
     ui.sugg = sg
+    ui.ghost = ghost
+    ui.meta = meta
+    ui.grip = root.firstChild
 
     ui.input.addEventListener('input', refreshSuggestions)
     // NOTE: no keydown listener here on purpose. A capture-phase listener on
@@ -738,19 +847,83 @@
     // key handling therefore happens in onGlobalKey, which calls onInputKey
     // itself. (This was the bug that made Tab and Enter do nothing.)
     ui.sugg.addEventListener('mousedown', function (ev) {
-      var idx = Number(ev.target.closest('div[data-i]') && ev.target.closest('div[data-i]').dataset.i)
+      var hit = ev.target && ev.target.closest && ev.target.closest('div[data-i]')
+      var idx = hit ? Number(hit.dataset.i) : NaN
       if (isFinite(idx)) { ev.preventDefault(); sugg.selected = idx; acceptSuggestion() }
     })
 
-    print('SandLoader console ready. Type "help", Tab completes, Esc closes.', 'n')
+    installResize(root)
+    updateMeta()
+    print('SandLoader console ready. Type "help" for the command list.', 'n')
+  }
+
+  /**
+   * Drag the top edge to resize. Stored on the element rather than persisted:
+   * a console height is a per-session preference, and writing it to disk would
+   * mean another store to keep in sync for no real gain.
+   */
+  function installResize(root) {
+    var grip = ui.grip
+    // Guarded because this runs under the headless DOM harness too, where the
+    // pieces a drag needs (offsetHeight, window.innerHeight) do not exist. The
+    // console must still build there.
+    if (!grip || typeof grip.addEventListener !== 'function' || !root.style) return
+    root.style.height = '320px'
+    if (typeof global.innerHeight !== 'number') return
+    var startY = 0
+    var startH = 0
+
+    function move(ev) {
+      var next = Math.min(Math.max(startH + (startY - ev.clientY), 140), global.innerHeight - 80)
+      root.style.height = next + 'px'
+    }
+    function up() {
+      grip.className = ''
+      global.removeEventListener('mousemove', move, true)
+      global.removeEventListener('mouseup', up, true)
+    }
+    grip.addEventListener('mousedown', function (ev) {
+      ev.preventDefault()
+      grip.className = 'drag'
+      startY = ev.clientY
+      startH = root.offsetHeight || 320
+      global.addEventListener('mousemove', move, true)
+      global.addEventListener('mouseup', up, true)
+    })
+  }
+
+  /** The header's context line: what the console is attached to right now. */
+  function updateMeta() {
+    if (!ui.meta) return
+    var bits = ['v' + SMLN.version]
+    var boot = global.__SMLN_BOOT__
+    if (boot && boot.game) bits.push(boot.game.name + ' ' + boot.game.version)
+    if (boot && boot.counts) bits.push(boot.counts.enabled + ' mod(s)')
+    bits.push(Object.keys(commands).length + ' commands')
+    if (!SMLN.game) bits.push('game not captured yet')
+    var problems = global.__SMLN_PROBLEMS__
+    if (problems && problems.summary && problems.summary.errors) {
+      bits.push(problems.summary.errors + ' error(s) - see SandLoader Mods > Problems')
+    }
+    ui.meta.textContent = bits.join('   ·   ')
   }
 
   function print(text, cls) {
     if (!ui.output) return
-    var d = document.createElement('div')
-    if (cls) d.className = cls
-    d.textContent = text
-    ui.output.appendChild(d)
+    var line = document.createElement('div')
+    line.className = 'ln' + (cls ? ' ' + cls : '')
+
+    var gutter = document.createElement('span')
+    gutter.className = 'gx'
+    gutter.textContent = GUTTER[cls] || '·'
+
+    var body = document.createElement('span')
+    body.className = 'tx'
+    body.textContent = text
+
+    line.appendChild(gutter)
+    line.appendChild(body)
+    ui.output.appendChild(line)
     while (ui.output.childNodes.length > MAX_OUTPUT) ui.output.removeChild(ui.output.firstChild)
     ui.output.scrollTop = ui.output.scrollHeight
   }
@@ -762,6 +935,23 @@
     sugg.tokenStart = r.tokenStart
     if (sugg.selected >= sugg.items.length) sugg.selected = 0
     renderSuggestions()
+    renderGhost()
+  }
+
+  /**
+   * The rest of the highlighted completion, drawn behind the caret. Cheaper to
+   * read than the popup for the common case where the first match is the one
+   * you meant.
+   */
+  function renderGhost() {
+    if (!ui.ghost) return
+    var c = sugg.items[sugg.selected]
+    var value = ui.input.value
+    if (!c || !c.value || !sugg.typing || c.value.indexOf(sugg.typing) !== 0) {
+      ui.ghost.textContent = ''
+      return
+    }
+    ui.ghost.textContent = value + c.value.slice(sugg.typing.length)
   }
 
   function renderSuggestions() {
@@ -772,17 +962,45 @@
     var selected = null
     sugg.items.forEach(function (c, i) {
       var row = document.createElement('div')
+      row.className = 's' + (i === sugg.selected ? ' sel' : '')
       row.dataset.i = String(i)
-      if (i === sugg.selected) { row.className = 'sel'; selected = row }
+      if (i === sugg.selected) selected = row
+
       var name = document.createElement('span')
-      name.textContent = c.value
+      name.className = 'v'
+      // Highlight the part already typed, so it is obvious why a row matched.
+      var typed = sugg.typing || ''
+      if (typed && c.value.indexOf(typed) === 0) {
+        var hit = document.createElement('span')
+        hit.className = 'hit'
+        hit.textContent = c.value.slice(0, typed.length)
+        var rest = document.createElement('span')
+        rest.textContent = c.value.slice(typed.length)
+        name.appendChild(hit)
+        name.appendChild(rest)
+      } else {
+        name.textContent = c.value
+      }
+
       var hint = document.createElement('span')
-      hint.className = 'h'
+      hint.className = 'm'
       hint.textContent = c.hint || ''
+
       row.appendChild(name)
       row.appendChild(hint)
       ui.sugg.appendChild(row)
     })
+
+    var foot = document.createElement('div')
+    foot.className = 'foot'
+    var left = document.createElement('span')
+    left.textContent = (sugg.selected + 1) + ' / ' + sugg.items.length
+    var right = document.createElement('span')
+    right.textContent = 'Tab accept    ↑↓ move    Enter run'
+    foot.appendChild(left)
+    foot.appendChild(right)
+    ui.sugg.appendChild(foot)
+
     if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: 'nearest' })
   }
 
@@ -880,9 +1098,23 @@
   function toggle(force) {
     open = force == null ? !open : !!force
     ui.root.classList.toggle('open', open)
-    if (open) { ui.input.focus(); refreshSuggestions() }
-    else { ui.input.blur(); ui.sugg.style.display = 'none' }
+    if (open) {
+      // The header line is the console's context - which game build, how many
+      // mods, whether the API is captured - and all of that changes while the
+      // console is closed, so it is rebuilt on the way in rather than once.
+      updateMeta()
+      ui.input.focus()
+      refreshSuggestions()
+    } else {
+      ui.input.blur()
+      ui.sugg.style.display = 'none'
+      if (ui.ghost) ui.ghost.textContent = ''
+    }
   }
+
+  // Capture flips "game not captured yet" and can add commands, so refresh the
+  // header when it happens rather than leaving a stale line on screen.
+  SMLN.on('ready', function () { if (ui.meta) updateMeta() })
 
   SMLN.console = {
     toggle: toggle,

@@ -1,21 +1,12 @@
 # SandLoader
 
-A third-party modding runtime and tooling layer for **[Sandustry](https://store.steampowered.com/app/2764460/Sandustry/)** with an
+A mod loader for **[Sandustry](https://store.steampowered.com/app/2764460/Sandustry/)** with an
 in-game console, a mod manager, and support for existing
 [Fluxloader](https://fluxloader.app/) mods.
-
-**SandLoader is not trying to replace Sandustry's official mod support or Steam Workshop.**
-It is built to extend the modding experience with additional runtime tooling,
-compatibility, diagnostics and mod-management features.
 
 **It never modifies your game files.** Patching happens in memory while the game
 loads, so Steam's file verification stays green and a game update can't leave a
 broken patched file behind. Uninstalling is deleting one folder.
-
-> [!WARNING]
-> **SandLoader is in active development.** It is currently verified against
-> Sandustry 0.5.4. Expect rough edges, missing features and occasional breakage
-> while the project is still evolving.
 
 ```
 Press  ^  (or F1) in game        →  console
@@ -24,40 +15,8 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 ---
 
-## Why SandLoader?
-
-Sandustry already has mod support. That does **not** make a separate loader
-pointless — the game, Steam Workshop and SandLoader solve different parts of the
-modding stack.
-
-**Steam Workshop is primarily distribution.** It is a very convenient way to
-publish, discover, download and update mods. SandLoader does not need to replace
-that, and mods can still be distributed through Workshop.
-
-**SandLoader focuses on the runtime and tooling around mods.** Today that includes:
-
-- an in-game developer console with access to the running game
-- a built-in ZIP mod manager with enable / disable / remove controls
-- compatibility with existing Fluxloader mods
-- direct access to Sandustry's own `FH` modding API
-- structured logging and dependency ordering
-- anchor-based in-memory patching instead of modifying game files
-- compatibility self-tests that detect broken hooks after game updates
-
-There is also room for tooling that the base game or Workshop do not currently
-provide, such as dependency version enforcement, mod configuration UI, patch
-conflict detection, cross-context messaging and hot reload. Those features are
-on the roadmap and are listed honestly in [Limitations](#limitations-and-whats-not-built-yet).
-
-In short: **official mod support provides the foundation; SandLoader adds another
-layer on top of it.** If the official tooling already does everything you need,
-there is nothing wrong with using only that.
-
----
-
 ## Contents
 
-- [Why SandLoader?](#why-sandloader)
 - [Requirements](#requirements)
 - [Install](#install) · [Update](#update) · [Uninstall](#uninstall)
 - [Using the console](#using-the-console)
@@ -67,6 +26,8 @@ there is nothing wrong with using only that.
 - [FAQ](#faq)
 - [Writing mods](docs/WRITING-MODS.md)
 - [How it works](#how-it-works) · [Project layout](#project-layout)
+- [Security model](#security-model)
+- [Non-Steam builds](#non-steam-builds)
 - [Limitations](#limitations-and-whats-not-built-yet)
 
 ---
@@ -99,8 +60,8 @@ permanent — SandLoader runs from wherever you put it, so don't leave it in a
 temp folder.
 
 ```bash
-git clone https://github.com/LopeKinz/SandLoader.git
-cd SandLoader
+git clone https://github.com/<you>/sandloader.git
+cd sandloader
 ```
 
 **2. Run the installer.**
@@ -153,7 +114,9 @@ Administrator once, or move the Steam library somewhere outside
 <details>
 <summary><b>"no Steam Workshop content folder"</b></summary>
 
-`steamapps/workshop/content/2764460` does not exist yet. Create it by hand, or wait until Steam Workshop support arrives.
+`steamapps/workshop/content/2764460` does not exist yet. Subscribe to any
+Sandustry Workshop item once so Steam creates it, or create the folder by hand,
+then run the installer again.
 </details>
 
 ### Update
@@ -331,14 +294,6 @@ end-to-end, and tells you exactly what broke.
 
 ## FAQ
 
-**Why use SandLoader if Sandustry already supports mods?**
-SandLoader is not intended to replace Sandustry's official mod support. The game
-provides the underlying modding foundation; SandLoader adds runtime tooling,
-Fluxloader compatibility, mod management, diagnostics and development features
-around it. Steam Workshop can still be used for distribution. If the official
-system already covers everything you need, using only the official system is a
-perfectly valid choice.
-
 **Does this modify my game files?**
 No. Not one byte. Patching happens in memory as files are served to the renderer.
 
@@ -443,13 +398,18 @@ After that, `SandLoader.game` *is* `FH`.
 
 ```
 src/
-  core/       errors, Result, logging
-  asar/       archive reader, installation discovery
-  patch/      anchor-based patch engine, core patches
-  mods/       manifests, dependency ordering, ZIP install/remove
-  compat/     Fluxloader mod compatibility
-  main/       host-ABI entry point, file interceptor, IPC
-  renderer/   injected runtime, console, splash, mod manager
+  core/       errors, Result, logging, the problem registry
+  asar/       archive reader, installation discovery, platform detection
+  boot/       non-Steam bootstrap
+  patch/      anchor-based patch engine, conflict preflight, core patches
+  mods/       manifests, semver, dependency ordering, permissions, approvals,
+              config, restricted storage, network capability, sandbox, watcher,
+              ZIP install/remove
+  compat/     Fluxloader mod compatibility and its messaging bridge
+  main/       host-ABI entry point, file interceptor, RPC
+  renderer/   injected runtime, capability facades, registration API, messaging,
+              worker runtime, i18n, console, splash, mod manager, settings,
+              permission UI, hot reload
   game/       type tables extracted from the bundle
 tools/        self-test and its DOM harness
 mods/         your mods
@@ -459,38 +419,129 @@ docs/         mod authoring guide
 No dependencies. No build step. `install.js` writes a shim that points here.
 
 ```bash
-node tools/selftest.js    # 54 checks against your real installed game
+node tools/selftest.js    # runs against your real installed game
 ```
+
+---
+
+## Security model
+
+Sandustry's window runs with Electron's modern defaults — `contextIsolation:
+true`, `nodeIntegration: false`. Renderer and worker mod code therefore has no
+`require`, no `process` and no `Buffer`. That boundary is enforced by Chromium,
+not by SandLoader.
+
+What SandLoader adds on top:
+
+- mods never receive the game's `window.electron` bridge or SandLoader's own
+  `SMLN.callMain` main-process RPC;
+- `SMLN.net` and `SMLN.fs` are gated on declared permissions, and a mod without
+  them gets a rejection, not a missing function;
+- every mod gets a private storage directory that traversal, absolute paths,
+  UNC paths, device names and symlink escapes cannot leave;
+- the permission review happens **before** any mod code is read, required or
+  evaluated.
+
+| Tier | Runs in | Reaches |
+|---|---|---|
+| `SANDBOXED` | renderer / worker | game API, worker API, config, private storage |
+| `ELEVATED` | renderer / worker | the above, plus network and/or a wider filesystem root |
+| `NATIVE` | Electron main process | real Node.js — everything the game itself can |
+
+A mod declaring `node` gets a real `require`, from which `fs`, `net`, `http`
+and `child_process` are one line away. SandLoader therefore does **not** claim
+that `filesystem` and `network` restrict a native mod. They cannot, the
+capability reports `enforceable: false`, and the mod manager says so in plain
+language. Native mods are supported on purpose — they are just labelled.
+
+`vm` is not treated as a security boundary anywhere in this codebase, because
+it is not one when the sandbox object carries `require`.
+
+Full details, including the install dialog and the escalation-on-update flow,
+are in [docs/WRITING-MODS.md](docs/WRITING-MODS.md#permissions-and-the-security-model).
+
+---
+
+## Non-Steam builds
+
+On **Steam** the game loads a mod loader itself: `main.js` scans the Workshop
+content folder for a `modinfo.json` declaring `modID: "fluxloader"` and
+requires the bundle beside it. SandLoader occupies that slot. Nothing in the
+game directory is touched and file verification stays green.
+
+That scan begins with `if (PLATFORM_NAME !== 'steam') return null` — on every
+other build it never runs, which is why SandLoader used to be Steam-only.
+
+| Build | Status | How |
+|---|---|---|
+| Steam | supported | the game's own Workshop loader slot; writes nothing into the install |
+| GOG | supported | added `resources/app/` bootstrap |
+| Manual / other | supported | added `resources/app/` bootstrap |
+| Microsoft Store | **not supported** | package directory is ACL-protected and signature-verified |
+| Game Pass | **not supported** | same package, same reason |
+
+`node install.js --status` reports which one it detected, on what evidence, and
+for an unsupported build exactly why it cannot attach.
+
+**How the non-Steam bootstrap works.** Electron resolves its application
+package by searching `resources/` for `app`, then `app.asar`, then
+`default_app.asar`. Adding a `resources/app/` directory therefore loads first,
+and hands control straight back to the untouched `app.asar` once SandLoader is
+initialised. Three new files are created:
+
+```
+<game>/resources/app/package.json
+<game>/resources/app/smln-bootstrap.js
+<game>/resources/app/.smln-bootstrap.json
+```
+
+No original file is modified, overwritten or deleted, and `node install.js
+--uninstall` removes the directory again — but only if the receipt file is
+there, so a directory SandLoader did not create is never touched.
+
+Being straight about the trade-off: this writes new files *inside* the
+installation directory, it needs write permission there (administrator under
+Program Files), and afterwards `app.getAppPath()` reports `resources/app`. The
+bootstrap mirrors the real `name` and `version` so `app.getName()` and
+`app.getVersion()` stay correct.
+
+Microsoft Store and Game Pass cannot be supported without modifying the game
+package, which would break its signature. The installer says so rather than
+offering a workaround.
 
 ---
 
 ## Limitations and what's not built yet
 
-An honest list, roughly by how much they would be missed:
+An honest list:
 
-- **Gameplay registration APIs.** Custom elements, terrains, machines, items and
-  recipes. The foundation is exposed — `FH.elements.register`,
-  `FH.terrains.register`, `FH.structures.register`, `FH.items.register`, and the
-  simulation worker's `RegisterMod*` messages — but SandLoader adds no ergonomic
-  layer, no sprite pipeline and no i18n registration on top of it yet.
-- **Cross-context messaging.** Fluxloader's `sendGameMessage` /
-  `sendWorkerMessage` are not implemented. Calls are logged as unsupported rather
-  than silently ignored.
-- **Mod settings UI.** `configSchema` is read and defaults applied, but there is
-  no screen to edit them.
-- **Dependency versions.** Dependencies match by id only; version ranges are
-  parsed but not enforced.
-- **Patch conflict detection between mods.** Two mods patching the same region
-  are not checked for overlap.
-- **Hot reload.** Every change needs a game restart.
-- **Non-Steam builds.** No loader slot exists there.
-- **SandLoader's own UI is English-only.**
+- **Recipes.** Sandustry 0.5.4 has no recipe registry at all —
+  `api.structures.recipes` exists only in the newer Sandkit v1.
+  `SMLN.register.recipe()` feature-detects it and reports that it is
+  unavailable on this build rather than pretending to have registered
+  something.
+- **Map mods.** Custom-map blueprints are discovered and reported, but loading
+  them needs game-side support that is not exposed.
+- **Renderer hot reload is partial by nature.** SandLoader reclaims what it
+  handed out — listeners, timers, messaging handlers, recorded registrations.
+  A mod that monkey-patched a game function in place stays patched until the
+  window reloads, and the UI says which stage actually happened.
+- **A native (`main`) entrypoint change needs a full restart.** Node's require
+  cache can be cleared, but a module that already registered listeners or
+  opened handles cannot be un-run; two live copies would be worse than asking.
+- **Native mods are not sandboxed.** By construction, not by omission. See the
+  security model above.
+- **Microsoft Store and Game Pass builds cannot be modded** by any
+  non-destructive method.
+- **SandLoader's own UI ships English and German.** Adding a language is a
+  data-only change in `src/renderer/locales.js`; mod-supplied text is never
+  auto-translated.
 
 ---
 
 ## Status
 
-**Active development.** Verified against **Sandustry 0.5.4**. Self-test: **54/54**.
+Verified against **Sandustry 0.5.4**. Self-test: **82/82**.
 
 ## License
 

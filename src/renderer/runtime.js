@@ -75,9 +75,25 @@
       captured.phase = phase
       api.game = FH
       api.state = state
+
+      // Sandustry also carries an official, documented API - `sandkit` - which
+      // hangs off the state and is obtained through getApi(). It is the layer
+      // mods should prefer; `game`/FH is the internal engine API underneath it.
+      // Note this build's Sandkit methods are state-first
+      // (api.elements.createAt(state, x, y, ...)); newer builds bind state.
+      api.sandkit = null
+      try {
+        if (state && state.sandkit && typeof state.sandkit.getApi === 'function') {
+          api.sandkit = state.sandkit.getApi()
+        }
+      } catch (e) {
+        log('warn', 'sandkit.getApi() failed: ' + (e && e.message))
+      }
       if (!api.__ready) {
         api.__ready = true
-        log('info', 'captured game API at ' + phase + ' (' + Object.keys(FH || {}).length + ' namespaces)')
+        log('info', 'captured game API at ' + phase +
+          ' (FH: ' + Object.keys(FH || {}).length + ' namespaces' +
+          ', sandkit: ' + (api.sandkit ? Object.keys(api.sandkit).length + ' namespaces' : 'unavailable') + ')')
         for (var i = 0; i < pending.length; i++) invoke(pending[i], api)
         pending.length = 0
       }
@@ -183,8 +199,10 @@
      * hold an empty object forever.
      */
     enums: global.__SMLN_ENUMS__ || {},
-    /** The game's own modding API (`FH`). Null until capture. */
+    /** The game's internal engine API (`FH`). Null until capture. */
     game: null,
+    /** The game's official Sandkit API, if this build exposes it. */
+    sandkit: null,
     /** Live game state. Null until capture. */
     state: null,
     on: on,

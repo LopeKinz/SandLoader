@@ -22,6 +22,7 @@ const fs = require('fs')
 const path = require('path')
 
 const { apply } = require('../patch/engine')
+const conflicts = require('../patch/conflicts')
 
 const MIME = {
   '.html': 'text/html', '.js': 'application/javascript', '.mjs': 'application/javascript',
@@ -56,11 +57,23 @@ function urlToPath(rawUrl) {
  *        Keys are dist-relative posix paths, e.g. "js/bundle.js".
  * @param {(rel:string) => string|null} [opts.preludeFor]
  *        Text to prepend to a given file, if any.
+ * @param {Record<string,string>} [opts.modAssets]
+ *        modId -> absolute mod directory. Serves a mod's own files under the
+ *        virtual `smln-mods/<modId>/...` path so `SMLN.assets.url()` resolves
+ *        through the interceptor that is already here, instead of standing up
+ *        a second server just to hand a sprite to the page.
+ * @param {(problem:{error:any, scope:string, modId?:string}) => void} [opts.onProblem]
  * @param {any} opts.logger
  */
 function install(opts) {
   const { protocol, distDir, patchesByFile, logger } = opts
   const preludeFor = opts.preludeFor || (() => null)
+  /** dist-relative path -> absolute replacement file, from mod overrides. */
+  const redirects = opts.redirects || {}
+  /** modId -> absolute mod directory, for the virtual asset path. */
+  const modAssets = opts.modAssets || {}
+  const onProblem = opts.onProblem || (() => {})
+  const ASSET_PREFIX = 'smln-mods/'
 
   const stats = { requests: 0, served: {}, failures: 0, outcomes: {} }
   /** @type {Map<string,string>} rel -> transformed source */
@@ -81,6 +94,23 @@ function install(opts) {
     let body = original
 
     if (patches.length) {
+      // Preflight before anything is rewritten. Two mods editing overlapping
+      // source is a conflict nobody can debug after the fact - the resulting
+      // bundle fails at runtime naming neither mod. See src/patch/conflicts.js.
+      const pre = conflicts.preflight(original, patches, { target: rel })
+      if (pre.report.conflicts.length) logger.warn(conflicts.formatReport(pre.report))
+      if (!pre.ok) {
+        stats.failures++
+        stats.outcomes[rel] = (pre.report.conflicts || []).map((c) => ({
+          id: `${c.a.id} x ${c.b.id}`, status: 'failed', matches: 0,
+          reason: `overlaps ${c.b.owner}:${c.b.id} at ${c.overlap.start}..${c.overlap.end}`,
+        }))
+        logger.error(`${rel}: ${String(pre.error)} - serving it unmodified so the game still boots`)
+        onProblem({ error: pre.error, scope: 'patch' })
+        cache.set(rel, original)
+        return original
+      }
+
       const result = apply(original, patches, { logger })
       stats.outcomes[rel] = result.outcomes
       if (!result.ok) {
@@ -89,6 +119,7 @@ function install(opts) {
         for (const o of result.outcomes) {
           if (o.status === 'failed') logger.error(`  ${o.id}: ${o.reason}`)
         }
+        onProblem({ error: result.error, scope: 'patch' })
         // Deliberate: a broken loader must not become a broken game.
         cache.set(rel, original)
         return original
@@ -120,6 +151,45 @@ function install(opts) {
       }
 
       const rel = relativeOf(filePath)
+
+      // A mod's own assets, under a virtual path inside dist so the page can
+      // reach them with an ordinary relative URL. Containment is re-checked
+      // here rather than trusted from the URL: the request comes from the
+      // page, and a mod could have built the string by hand.
+      if (rel && rel.startsWith(ASSET_PREFIX)) {
+        const rest = rel.slice(ASSET_PREFIX.length)
+        const slash = rest.indexOf('/')
+        const modId = slash < 0 ? rest : rest.slice(0, slash)
+        const wanted = slash < 0 ? '' : rest.slice(slash + 1)
+        const root = modAssets[modId]
+        if (!root || !wanted) return new Response('Not found', { status: 404 })
+        const abs = path.resolve(root, wanted)
+        if (abs !== path.resolve(root) && !abs.startsWith(path.resolve(root) + path.sep)) {
+          logger.warn(`refused an asset request escaping ${modId}: ${wanted}`)
+          return new Response('Forbidden', { status: 403 })
+        }
+        try {
+          return new Response(fs.readFileSync(abs), { headers: { 'Content-Type': mimeFor(abs) } })
+        } catch (e) {
+          if (e && e.code === 'ENOENT') return new Response('Not found', { status: 404 })
+          logger.warn(`asset read failed for ${modId}/${wanted}: ${e && e.message}`)
+          return new Response('Read error', { status: 500 })
+        }
+      }
+
+      // Config and texture overrides: serve the mod's file in place of the
+      // game's. Doing it here means overrides work on any build, without the
+      // game needing to know about them.
+      if (rel && redirects[rel]) {
+        try {
+          const body = fs.readFileSync(redirects[rel])
+          stats.served[rel] = (stats.served[rel] || 0) + 1
+          return new Response(body, { headers: { 'Content-Type': mimeFor(redirects[rel]) } })
+        } catch (e) {
+          logger.error(`override for ${rel} unreadable, serving the original: ${e && e.message}`)
+        }
+      }
+
       const wanted = rel && ((patchesByFile[rel] && patchesByFile[rel].length) || preludeFor(rel))
 
       if (wanted) {
@@ -150,7 +220,11 @@ function install(opts) {
   }
 
   const targets = Object.keys(patchesByFile).filter((k) => patchesByFile[k].length)
-  logger.info(`file interceptor active (dist: ${distDir}; targets: ${targets.join(', ') || 'prelude only'})`)
+  const overrideCount = Object.keys(redirects).length
+  logger.info(
+    `file interceptor active (dist: ${distDir}; targets: ${targets.join(', ') || 'prelude only'}` +
+    (overrideCount ? `; ${overrideCount} override(s)` : '') + ')'
+  )
   return {
     ok: true,
     stats: () => stats,

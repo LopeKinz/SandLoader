@@ -30,8 +30,15 @@ const path = require('path')
 const vm = require('vm')
 
 const { SmlnError } = require('../core/errors')
+const permissions = require('../mods/permissions')
+const semver = require('../mods/semver')
+const configStore = require('../mods/config')
+const fluxMessaging = require('./flux-messaging')
 
 const MODINFO = 'modinfo.json'
+
+/** What SMLN reports as its Fluxloader API level. */
+const FLUXLOADER_COMPAT_VERSION = '2.0.0'
 
 /** Renderer-bundle aliases a mod might name in addPatch(). */
 const FILE_ALIASES = {
@@ -44,6 +51,9 @@ const FILE_ALIASES = {
   'utility-worker.js': 'js/utility-worker.js',
   'js/utility-worker.js': 'js/utility-worker.js',
   'dist/js/utility-worker.js': 'js/utility-worker.js',
+  'manager-worker.js': 'js/manager-worker.js',
+  'js/manager-worker.js': 'js/manager-worker.js',
+  'dist/js/manager-worker.js': 'js/manager-worker.js',
   'index.html': 'index.html',
 }
 
@@ -121,6 +131,72 @@ function readMod(dir) {
     return fs.existsSync(abs) ? abs : undefined
   }
 
+  const entrypoints = {
+    electron: resolve(info.electronEntrypoint),
+    game: resolve(info.gameEntrypoint),
+    worker: resolve(info.workerEntrypoint),
+  }
+
+  // Fluxloader declares dependencies as {id: range}. Keeping only the ids -
+  // which is what this did before - silently loaded an incompatible library
+  // mod and left the failure to surface as a runtime TypeError somewhere in
+  // the dependent. The range is the whole point of declaring it.
+  const dependencies = []
+  const warnings = []
+  if (info.dependencies && typeof info.dependencies === 'object' && !Array.isArray(info.dependencies)) {
+    for (const [depId, raw] of Object.entries(info.dependencies)) {
+      const range = typeof raw === 'string' ? raw : '*'
+      const parsed = semver.parseRange(range)
+      if (!parsed.ok) {
+        warnings.push(`unparsable range for dependency "${depId}": "${range}" (${parsed.reason})`)
+        dependencies.push({ id: depId, range: '*', raw: String(raw), optional: false })
+        continue
+      }
+      dependencies.push({ id: depId, range: range.trim() || '*', raw: String(raw), optional: false })
+    }
+  } else if (Array.isArray(info.dependencies)) {
+    for (const depId of info.dependencies) {
+      if (typeof depId === 'string' && depId) dependencies.push({ id: depId, range: '*', raw: '*', optional: false })
+    }
+  }
+
+  // Legacy Fluxloader manifests have no `permissions` field at all, so the
+  // capability has to come from where the code runs. An electronEntrypoint is
+  // handed a real `require` (see loadElectronEntrypoints) and is therefore
+  // NATIVE; a game- or worker-only mod runs in a context Chromium already
+  // denies Node, so it is sandboxed. Where a manifest does declare
+  // permissions, classify() takes both inputs and the stricter one wins.
+  let declared = []
+  if (info.permissions != null) {
+    const checked = permissions.validate(info.permissions, { modId: info.modID, source: `${dir}/${MODINFO}` })
+    if (!checked.ok) return { ok: false, error: checked.error }
+    declared = checked.permissions
+  }
+
+  const capability = permissions.classify({
+    id: info.modID,
+    version: String(info.version || '0.0.0'),
+    flavour: 'fluxloader',
+    permissions: declared,
+    entrypoints: {
+      native: !!entrypoints.electron,
+      game: !!entrypoints.game,
+      worker: !!entrypoints.worker,
+    },
+  })
+
+  // SMLN is not Fluxloader, so a strict `fluxloaderVersion` match would refuse
+  // every mod that pins one. Record the mismatch and load anyway: a warning
+  // the author can act on beats a working mod that will not start.
+  if (typeof info.fluxloaderVersion === 'string' && info.fluxloaderVersion) {
+    const parsed = semver.parseRange(info.fluxloaderVersion)
+    if (parsed.ok && !semver.satisfies(FLUXLOADER_COMPAT_VERSION, info.fluxloaderVersion)) {
+      warnings.push(
+        `declares fluxloaderVersion "${info.fluxloaderVersion}"; SandLoader reports ` +
+        `${FLUXLOADER_COMPAT_VERSION} and loads it anyway`)
+    }
+  }
+
   return {
     ok: true,
     mod: {
@@ -129,16 +205,14 @@ function readMod(dir) {
       version: String(info.version || '0.0.0'),
       dir,
       flavour: 'fluxloader',
-      dependencies: info.dependencies && typeof info.dependencies === 'object'
-        ? Object.keys(info.dependencies)
-        : [],
+      dependencies,
+      dependencyIds: dependencies.map((d) => d.id),
       priority: 100,
       enabled: info.enabled !== false,
-      entrypoints: {
-        electron: resolve(info.electronEntrypoint),
-        game: resolve(info.gameEntrypoint),
-        worker: resolve(info.workerEntrypoint),
-      },
+      entrypoints,
+      permissions: declared,
+      capability,
+      warnings,
       configSchema: info.configSchema || {},
       manifest: info,
     },
@@ -176,48 +250,41 @@ function discover(roots, logger) {
   return { mods, errors }
 }
 
-/** Config persistence for `fluxloaderAPI.modConfig`, one JSON file per mod. */
+/**
+ * `fluxloaderAPI.modConfig`, backed by SandLoader's one config store.
+ *
+ * This used to be a private JSON reader/writer living in this file, which
+ * meant two stores with two notions of what a value was allowed to be: the
+ * settings UI could accept a number the Fluxloader half would later read back
+ * as a string. src/mods/config.js is now the only store, and it keeps the
+ * same on-disk layout so config files written by the old code still load.
+ *
+ * The async/sync split is Fluxloader's: mods call `get`/`set` expecting
+ * promises and `getSync` expecting a value, so both are offered.
+ */
 function makeConfigStore(configDir, mod, logger) {
-  const file = path.join(configDir, `${mod.id}.json`)
-  let data = null
-
-  function defaults() {
-    const out = {}
-    for (const [k, spec] of Object.entries(mod.configSchema || {})) {
-      if (spec && 'default' in spec) out[k] = spec.default
-    }
-    return out
+  const normalised = configStore.normaliseSchema(mod.configSchema)
+  if (!normalised.ok) {
+    logger.warn(`configSchema for ${mod.id} is invalid, treating it as empty: ${normalised.error.message}`)
   }
-
-  function load() {
-    if (data) return data
-    data = defaults()
-    try {
-      if (fs.existsSync(file)) Object.assign(data, JSON.parse(fs.readFileSync(file, 'utf8')))
-    } catch (e) {
-      logger.warn(`config for ${mod.id} unreadable, using defaults: ${e.message}`)
-    }
-    return data
-  }
-
-  function save() {
-    try {
-      fs.mkdirSync(configDir, { recursive: true })
-      fs.writeFileSync(file, JSON.stringify(load(), null, 2))
-      return true
-    } catch (e) {
-      logger.error(`could not save config for ${mod.id}: ${e.message}`)
-      return false
-    }
-  }
+  const schema = normalised.ok ? normalised.schema : {}
+  const store = configStore.createStore({ dir: configDir, id: mod.id, schema, logger })
 
   return {
     schema: mod.configSchema,
-    async get(key) { const d = load(); return key == null ? { ...d } : d[key] },
-    async set(key, value) { load()[key] = value; save(); return true },
-    async getAll() { return { ...load() } },
-    async setAll(obj) { Object.assign(load(), obj || {}); save(); return true },
-    getSync(key) { const d = load(); return key == null ? { ...d } : d[key] },
+    store,
+    async get(key) { return store.getSync(key) },
+    async set(key, value) {
+      const r = store.set(key, value)
+      if (!r.ok) logger.warn(`${mod.id}: rejected config "${key}": ${r.error.message}`)
+      return r.ok
+    },
+    async getAll() { return store.getAllSync() },
+    async setAll(obj) {
+      const r = store.setAll(obj || {})
+      return r.ok
+    },
+    getSync(key) { return store.getSync(key) },
   }
 }
 
@@ -294,11 +361,21 @@ function loadElectronEntrypoints(mods, ctx, logger) {
           }
         }
       },
-      // Cross-context messaging is not wired yet; be loud rather than silent.
-      sendGameMessage: unsupported('sendGameMessage', modLog),
-      sendWorkerMessage: unsupported('sendWorkerMessage', modLog),
       log: (...a) => modLog.info(a.map(String).join(' ')),
     }
+
+    // Real cross-context messaging and IPC, on SandLoader's existing
+    // transports. See src/compat/flux-messaging.js.
+    Object.assign(api, fluxMessaging.electronSurface({
+      modId: mod.id,
+      logger: modLog,
+      sendToRenderer: ctx.sendToRenderer || (() => {
+        modLog.warn('sendGameEvent: the game window is not attached yet')
+      }),
+      rpc: ctx.rpc || { register: () => {
+        modLog.warn('IPC handler registered before the RPC bridge existed; it will not receive calls')
+      } },
+    }))
 
     try {
       const source = fs.readFileSync(entry, 'utf8')
@@ -337,54 +414,90 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   return { patches, errors, events: bus }
 }
 
-function unsupported(name, logger) {
-  return function () {
-    logger.warn(`fluxloaderAPI.${name}() is not implemented by SMLN yet - call ignored`)
-    return Promise.resolve(null)
-  }
-}
-
 /**
  * Renderer/worker-side shim source. Prepended before a mod's game or worker
  * entrypoint so `fluxloaderAPI` exists in that environment too.
  */
 function environmentShim(mod, environment) {
   const schema = mod.configSchema || {}
-  const cfg = JSON.stringify(schema)
-  // Seed the renderer/worker-side store with the schema defaults, then let any
-  // persisted values from the main process override them.
   const defaults = {}
   for (const [k, spec] of Object.entries(schema)) {
     if (spec && typeof spec === 'object' && 'default' in spec) defaults[k] = spec.default
   }
-  return `;(function(){
-var g=typeof globalThis!=="undefined"?globalThis:self;
+  const id = JSON.stringify(mod.id)
+  const messaging = environment === 'worker'
+    ? fluxMessaging.workerShim(mod.id)
+    : fluxMessaging.gameShim(mod.id)
+
+  return `var g=typeof globalThis!=="undefined"?globalThis:self;
 var S=g.__SMLN__;
-var store=Object.assign(${JSON.stringify(defaults)},
-  (S&&S.__flConfig&&S.__flConfig[${JSON.stringify(mod.id)}])||{});
-function bus(){
+var api={};
+var __store=Object.assign(${JSON.stringify(defaults)},
+  (g.__SMLN_FLUX_CONFIG__&&g.__SMLN_FLUX_CONFIG__[${id}])||{});
+function __bus(){
   var L=Object.create(null);
-  return {on:function(n,f){(L[n]||(L[n]=[])).push(f)},
+  return {on:function(n,f){(L[n]||(L[n]=[])).push(f);return function(){var a=L[n]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1)}},
           off:function(n,f){var a=L[n]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1)},
           emit:function(n){var a=L[n]||[],r=[].slice.call(arguments,1);
-            for(var i=0;i<a.length;i++){try{a[i].apply(null,r)}catch(e){console.error("[SMLN] fl event",n,e)}}}}
+            for(var i=0;i<a.length;i++){try{a[i].apply(null,r)}catch(e){console.error("[SMLN] fl event",n,e)}}}};
 }
-var api=g.fluxloaderAPI=g.fluxloaderAPI||{};
-api.modID=${JSON.stringify(mod.id)};
+api.version=${JSON.stringify(FLUXLOADER_COMPAT_VERSION + '-smln')};
+api.modID=${id};
 api.environment=${JSON.stringify(environment)};
-api.events=api.events||bus();
-api.modConfig=api.modConfig||{
-  schema:${cfg},
-  get:function(k){return Promise.resolve(k==null?store:store[k])},
-  getSync:function(k){return k==null?store:store[k]},
-  set:function(k,v){store[k]=v;return Promise.resolve(true)}
+api.events=__bus();
+api.modConfig={
+  schema:${JSON.stringify(schema)},
+  get:function(k){return Promise.resolve(k==null?__store:__store[k])},
+  getSync:function(k){return k==null?__store:__store[k]},
+  set:function(k,v){
+    __store[k]=v;
+    if(S&&typeof S.callMain==="function"){
+      return S.callMain("setModConfig",{mod:${id},id:${id},key:k,value:v})
+        .then(function(r){return !!(r&&r.ok)});
+    }
+    return Promise.resolve(true);
+  }
 };
-api.log=api.log||function(){console.log.apply(console,["[".concat(api.modID,"]")].concat([].slice.call(arguments)))};
+api.log=function(){console.log.apply(console,["["+api.modID+"]"].concat([].slice.call(arguments)))};
+${messaging}
 if(S){
   // Bridge the game's own lifecycle onto the fl:* names mods listen for.
-  S.on&&S.on("ready",function(){try{api.events.emit("fl:scene-loaded","game")}catch(e){}});
+  if(S.on)S.on("ready",function(){try{api.events.emit("fl:scene-loaded",${JSON.stringify(environment)})}catch(e){}});
   api.game=function(){return S.game};
   api.state=function(){return S.getState()};
+}
+// Kept for mods that reach for the global rather than the local binding. The
+// local one below is authoritative; this is a best-effort convenience and the
+// last mod to load wins it, which is exactly why the local exists.
+try{g.fluxloaderAPI=api}catch(e){}
+var fluxloaderAPI=api;
+`
+}
+
+/**
+ * Wrap one Fluxloader entrypoint together with its shim.
+ *
+ * The wrapping IIFE is the point. Fluxloader hands each mod a global called
+ * `fluxloaderAPI`, and SMLN concatenates every mod into one script - so a
+ * single global meant the second mod's shim overwrote the first's `modID`,
+ * config store and message channels, and mod A started receiving mod B's
+ * messages. A function scope per mod gives each one its own object while
+ * keeping the name mods actually write.
+ *
+ * @param {any} mod
+ * @param {'game'|'worker'} environment
+ * @param {string} source
+ * @returns {string}
+ */
+function wrapEntrypoint(mod, environment, source) {
+  return `/* --- fluxloader mod (${environment}): ${mod.id}@${mod.version} --- */
+;(function(){
+'use strict';
+try{
+${environmentShim(mod, environment)}
+${source}
+}catch(e){
+  console.error("[SMLN] fluxloader mod ${JSON.stringify(mod.id).slice(1, -1)} (${environment}) failed:", e);
 }
 })();`
 }
@@ -396,6 +509,8 @@ module.exports = {
   normaliseTarget,
   loadElectronEntrypoints,
   environmentShim,
+  wrapEntrypoint,
   makeConfigStore,
+  FLUXLOADER_COMPAT_VERSION,
   MODINFO,
 }
