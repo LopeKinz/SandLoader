@@ -1,0 +1,60 @@
+{
+  "id": "discord-rich-presence",
+  "name": "Discord Rich Presence",
+  "version": "1.0.0",
+  "main": "native.js",
+  "permissions": ["node"],
+  "configSchema": {
+    "clientId": {
+      "type": "string",
+      "default": "",
+      "maxLength": 32,
+      "label": "Discord Application ID",
+      "description": "Application ID from the Discord Developer Portal. Required for Rich Presence.",
+      "requiresReload": true,
+      "order": 1
+    },
+    "details": {
+      "type": "string",
+      "default": "Playing Sandustry",
+      "maxLength": 128,
+      "label": "Details",
+      "description": "Main Rich Presence text.",
+      "requiresReload": true,
+      "order": 2
+    },
+    "state": {
+      "type": "string",
+      "default": "Using SandLoader",
+      "maxLength": 128,
+      "label": "State",
+      "description": "Secondary Rich Presence text.",
+      "requiresReload": true,
+      "order": 3
+    },
+    "showElapsed": {
+      "type": "boolean",
+      "default": true,
+      "label": "Show elapsed time",
+      "requiresReload": true,
+      "order": 4
+    },
+    "largeImage": {
+      "type": "string",
+      "default": "",
+      "maxLength": 128,
+      "label": "Large image asset key",
+      "description": "Optional Rich Presence asset key uploaded in your Discord application.",
+      "requiresReload": true,
+      "order": 5
+    },
+    "largeText": {
+      "type": "string",
+      "default": "Sandustry",
+      "maxLength": 128,
+      "label": "Large image tooltip",
+      "requiresReload": true,
+      "order": 6
+    }
+  }
+}
