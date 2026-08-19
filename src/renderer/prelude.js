@@ -15,6 +15,8 @@
  *   capabilities.js  defines SMLN.forMod, which mod wrappers call
  *   registration.js  } capabilities.js links these onto each facade if they
  *   messaging.js     } are present, so they must be installed before any mod
+ *   sandkit-adapter  normalises the legacy/v1 game API before official mods
+ *   official-runtime delays official entries until that adapter is ready
  *   settingsui/permui defined before modsui.js, which opens them
  *
  * The result is cached only when nothing mod-specific went into it, because
@@ -49,6 +51,7 @@ const PARTS = [
   'registration.js',
   'messaging.js',
   'sandkit-adapter.js',
+  'official-runtime.js',
   'splash.js',
   'console.js',
   'settingsui.js',
@@ -72,9 +75,43 @@ function globalAssign(name, value) {
 }
 
 /**
+ * Main-thread official entries are currently tagged by src/main/entry.js as:
+ *   `/* official mod: <id>@<version> *\/\n<source>`
+ *
+ * They cannot be executed as ordinary prepended scripts: Sandustry normally
+ * gives them a lexical `sandkit` value and an async function body. Detect the
+ * tag here and restore those semantics through official-runtime.js.
+ */
+function officialRendererMeta(src) {
+  const m = /^\/\* official mod: ([a-zA-Z0-9._-]+)@([^*\r\n]+) \*\/\s*/.exec(String(src || ''))
+  if (!m) return null
+  return { id: m[1], version: m[2].trim(), body: String(src).slice(m[0].length) }
+}
+
+function wrapOfficialRenderer(src) {
+  const meta = officialRendererMeta(src)
+  if (!meta) return src
+  const id = JSON.stringify(meta.id)
+  return (
+    '/* --- official Sandkit main entry: ' + meta.id + '@' + meta.version + ' --- */\n' +
+    ';(function(g){\n' +
+    '  var S=g.__SMLN__;\n' +
+    '  if(!S||!S.official||typeof S.official.execute!=="function"){\n' +
+    '    console.error("[SMLN] official mod ' + meta.id + ' cannot start: Sandkit adapter unavailable");\n' +
+    '    return;\n' +
+    '  }\n' +
+    '  S.official.execute(' + id + ',1,async function(sandkit){\n' +
+    '    "use strict";\n' +
+    meta.body + '\n' +
+    '  });\n' +
+    '})(typeof globalThis!=="undefined"?globalThis:window);\n'
+  )
+}
+
+/**
  * @param {Object} [opts]
  * @param {string[]} [opts.modScripts]  Renderer-side mod sources, already
- *   wrapped per mod by src/mods/sandbox.js.
+ *   wrapped per mod by src/mods/sandbox.js where applicable.
  * @param {any[]} [opts.mods]           Metadata for the manager and the splash.
  * @param {Record<string,{baseUrl:string}>} [opts.modAssets]  For SMLN.assets.
  * @param {Record<string,any>} [opts.fluxConfig]  Persisted Fluxloader config.
@@ -129,9 +166,11 @@ function build(opts = {}) {
 
   for (const src of opts.modScripts || []) {
     chunks.push('/* --- mod (renderer) --- */')
-    // sandbox.wrapRendererMod already wraps each mod in its own try/catch and
-    // its own scope. The guard here is for sources that did not go through it.
-    chunks.push(';try{\n' + src + '\n}catch(e){console.error("[SMLN] renderer mod failed:",e)}')
+    // Official Sandustry entries need their own `sandkit` lexical and must run
+    // after the game exposes its API. SMLN/Fluxloader scripts keep their
+    // existing wrappers and execute immediately as before.
+    const prepared = officialRendererMeta(src) ? wrapOfficialRenderer(src) : src
+    chunks.push(';try{\n' + prepared + '\n}catch(e){console.error("[SMLN] renderer mod failed:",e)}')
   }
 
   chunks.push('/* --- end SMLN runtime --- */\n')
@@ -144,6 +183,12 @@ function build(opts = {}) {
  * The worker-side prelude: SandLoader's worker runtime plus each worker mod,
  * each in its own try/catch so one broken mod cannot stop the simulation
  * worker from booting.
+ *
+ * Official Sandkit worker entries are intentionally not reinterpreted here.
+ * The main and worker Sandkit surfaces are different, and pretending the main
+ * adapter is a worker API would corrupt simulation state. Until SandLoader can
+ * hand them through Sandustry's native worker-entry bridge, a missing worker
+ * API should fail visibly rather than silently execute against the wrong one.
  *
  * @param {string[]} workerScripts
  * @returns {string}
@@ -190,4 +235,4 @@ function serialisableEnums() {
 
 function invalidate() { cache = null }
 
-module.exports = { build, buildWorker, invalidate, PARTS, VERSION }
+module.exports = { build, buildWorker, invalidate, PARTS, VERSION, officialRendererMeta, wrapOfficialRenderer }
