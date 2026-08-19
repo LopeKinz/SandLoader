@@ -8,6 +8,8 @@ in-game console, a mod manager, and support for existing
 loads, so Steam's file verification stays green and a game update can't leave a
 broken patched file behind. Uninstalling is deleting one folder.
 
+Works on **Steam**, **GOG** and **manual/standalone** installs.
+
 ```
 Press  ^  (or F1) in game        →  console
 Main menu → "SandLoader Mods"    →  install / enable / remove mods
@@ -17,7 +19,7 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 ## Contents
 
-- [Requirements](#requirements)
+- [Requirements](#requirements) · [Which stores work](#which-stores-work)
 - [Install](#install) · [Update](#update) · [Uninstall](#uninstall)
 - [Using the console](#using-the-console)
 - [Managing mods](#managing-mods)
@@ -36,14 +38,34 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 | | |
 |---|---|
-| **Game** | Sandustry **0.5.4** on **Steam** |
+| **Game** | Sandustry **0.5.4** |
+| **Stores** | Steam, GOG, manual/standalone |
 | **OS** | Windows, Linux or macOS |
 | **Node.js** | **18 or newer**, only to run the installer — [nodejs.org](https://nodejs.org) |
 
-> **Steam only.** Sandustry looks for a mod loader inside its Steam Workshop
-> folder. GOG and Microsoft Store builds have no such slot, so SandLoader cannot
-> load there. That is the game's design, not something we can patch around
-> without modifying game files.
+### Which stores work
+
+| Store | Status | How SandLoader attaches |
+|---|---|---|
+| **Steam** | supported | the game's own Workshop loader slot — writes nothing into the install |
+| **GOG** | supported | an added `resources/app/` bootstrap — no original file is modified |
+| **Manual / standalone** | supported | same bootstrap |
+| **Microsoft Store** | **not supported** | package is ACL-protected and signature-verified |
+| **Game Pass** | **not supported** | same package, same reason |
+
+Sandustry only scans for a mod loader on Steam — its own `main.js` starts that
+check with `if (PLATFORM_NAME !== 'steam') return null`. On GOG and standalone
+builds SandLoader supplies its own entry point instead, by *adding* a directory
+Electron already looks for. Nothing is overwritten and uninstalling removes it
+again. Details in [Non-Steam builds](#non-steam-builds).
+
+Microsoft Store and Game Pass builds live under `WindowsApps`, which refuses
+writes even to an administrator and verifies its own signature. There is no file
+we are allowed to add and no non-destructive way in, so the installer says so
+plainly rather than offering a workaround that would modify game files.
+
+`node install.js --status` reports which build you have, on what evidence, and
+for an unsupported one exactly why it cannot attach.
 
 Check Node is installed:
 
@@ -70,16 +92,37 @@ cd sandloader
 node install.js
 ```
 
-You should see:
+The installer detects your build and picks the right attach point on its own.
+
+On **Steam** you should see:
 
 ```
   game      sandustry 0.5.4
   at        C:\Program Files (x86)\Steam\steamapps\common\Sandustry
+  platform  steam (certain)  -  resources/steam_appid.txt
   slot      C:\Program Files (x86)\Steam\steamapps\workshop\content\2764460\smln
   loader    C:\...\sandloader\src\main\entry.js
 
   Installed. Start Sandustry and press ^ (or F1) to open the console.
   Nothing in the game directory was modified.
+```
+
+On **GOG** or a standalone copy:
+
+```
+  game      sandustry 0.5.4
+  at        C:\GOG Games\Sandustry
+  platform  gog (certain)  -  goggame-1234567890.info beside the executable
+  attach    resources-app-bootstrap
+  bootstrap C:\GOG Games\Sandustry\resources\app
+  loader    C:\...\sandloader\src\boot\bootstrap.js
+
+  Installed. The original app.asar was not touched; these three files were added:
+    C:\GOG Games\Sandustry\resources\app\package.json
+    C:\GOG Games\Sandustry\resources\app\smln-bootstrap.js
+    C:\GOG Games\Sandustry\resources\app\.smln-bootstrap.json
+
+  Uninstall with: node install.js --uninstall
 ```
 
 **3. Start Sandustry.** A "SandLoader" splash appears while the game loads.
@@ -112,6 +155,32 @@ Administrator once, or move the Steam library somewhere outside
 </details>
 
 <details>
+<summary><b>"SandLoader cannot write to ... resources"</b> (GOG / standalone)</summary>
+
+The non-Steam bootstrap adds three files inside the game folder, which needs
+write permission there. Run the terminal as Administrator once, or install the
+game somewhere outside `C:\Program Files`.
+</details>
+
+<details>
+<summary><b>"resources\app already exists and is not ours"</b></summary>
+
+Something else is already attached at that path — another loader, or a leftover
+from one. SandLoader refuses to overwrite a directory it did not create, because
+doing so would silently break whatever put it there. Remove or rename it
+yourself if you are sure it is no longer needed, then run the installer again.
+</details>
+
+<details>
+<summary><b>"SandLoader cannot attach to this build"</b> (Microsoft Store / Game Pass)</summary>
+
+Not fixable, and not for lack of trying. That package sits under `WindowsApps`
+with ACLs that deny writes even to an administrator, and Windows verifies its
+signature on launch. Every way in would mean modifying game files, which
+SandLoader does not do. Run `node install.js --status` for the specific reason.
+</details>
+
+<details>
 <summary><b>"no Steam Workshop content folder"</b></summary>
 
 `steamapps/workshop/content/2764460` does not exist yet. Subscribe to any
@@ -136,13 +205,34 @@ node tools/selftest.js     # confirm it still matches your game version
 node install.js --uninstall
 ```
 
-That deletes one folder. Your game was never touched; saves and mods stay where
-they are.
+That deletes one folder — the Workshop slot on Steam, or the added
+`resources/app` directory on GOG and standalone builds. The bootstrap is only
+removed if it carries SandLoader's receipt file, so a directory we did not
+create is never touched.
+
+Your game was never modified; saves and mods stay where they are.
 
 ### Check what is installed
 
 ```bash
 node install.js --status
+```
+
+It reports the detected store, the evidence it used, which attach method applies,
+and — on an unsupported build — exactly why it cannot attach:
+
+```
+Platform
+  Installation : gog (certain)
+  Location     : C:\GOG Games\Sandustry
+  Evidence     : goggame-1234567890.info beside the executable
+  Attach       : resources-app-bootstrap
+  Why          : Electron searches resources/ for 'app' before 'app.asar', so an
+                 added app/ directory loads first. No original file is modified.
+  Would create : C:\GOG Games\Sandustry\resources\app\package.json
+                 C:\GOG Games\Sandustry\resources\app\smln-bootstrap.js
+                 C:\GOG Games\Sandustry\resources\app\.smln-bootstrap.json
+  Writable     : yes
 ```
 
 ---
@@ -280,6 +370,9 @@ effect of typing a command — it is always your explicit call.
 | `spawn` says "nothing was placed" | The target cells are solid terrain or outside the world. Move the cursor or pass explicit coordinates. |
 | A mod doesn't load | The log names the mod and the reason. Bad manifests, missing dependencies and dependency cycles are each reported separately. |
 | The game won't start at all | Remove the loader with `node install.js --uninstall`. If it still won't start, SandLoader wasn't the cause. |
+| GOG/standalone: game starts but no splash | The bootstrap did not take. Run `node install.js --status` — it says whether `resources/app` is installed and whether it is ours. |
+| GOG/standalone: game launcher reports changed files | Expected. The bootstrap *adds* `resources/app/`; it modifies nothing. `--uninstall` restores the original layout exactly. |
+| `SandLoader cannot attach to this build` | Microsoft Store / Game Pass. Not supported — see [Which stores work](#which-stores-work). |
 
 Verify compatibility with your installed game at any time:
 
@@ -298,8 +391,20 @@ end-to-end, and tells you exactly what broke.
 No. Not one byte. Patching happens in memory as files are served to the renderer.
 
 **Will Steam file verification flag it?**
-No, because nothing in the game folder changes. SandLoader lives in the Workshop
-content folder.
+No, because nothing in the game folder changes. On Steam, SandLoader lives in the
+Workshop content folder.
+
+**What about GOG?**
+Supported. Since GOG builds never scan for a loader, SandLoader adds its own
+`resources/app/` directory — three new files beside the untouched `app.asar`.
+Electron already searches for `app` before `app.asar`, so it loads first and
+hands control straight back to the real game. No original file is modified, and
+`--uninstall` removes the directory again.
+
+**Why not Microsoft Store or Game Pass?**
+That package is ACL-protected and signature-verified. There is no file we are
+allowed to add, and forcing one would mean modifying the game — so it is
+reported as unsupported instead of half-working.
 
 **Can this get me banned?**
 Sandustry is single-player and ships no anti-cheat. There is nothing to ban.
@@ -326,7 +431,7 @@ like any other software you install.
 
 ## How it works
 
-### The game has a loader slot
+### On Steam, the game has a loader slot
 
 Sandustry's own `main.js` scans `steamapps/workshop/content/2764460/*/` for a
 `modinfo.json` declaring `modID: "fluxloader"`, `require`s the
@@ -342,6 +447,17 @@ setGameWindow(win) · onGameStarted() · closeGame()
 That is the **game's ABI** — the contract a host offers a loader. SandLoader
 implements it directly. It shares no code with the Fluxloader project; it answers
 the same phone number, and separately knows how to read Fluxloader's mods.
+
+### Everywhere else, SandLoader brings its own
+
+That Workshop scan is Steam-gated, so on GOG and standalone builds nothing ever
+looks for a loader. There SandLoader adds a `resources/app/` directory: Electron
+resolves its app package by searching `resources/` for `app`, then `app.asar`,
+then `default_app.asar`, so an added `app/` loads first. It initialises the
+loader, installs the file interceptor, and only then `require`s the real
+`app.asar/main.js` — the same order the Steam host uses, which is what makes the
+patches land. If any of that fails it loads the original `main.js` untouched, so
+a broken loader still leaves you a working game.
 
 The payoff: SandLoader runs in the Electron **main process with full Node
 access**, before the game window exists.
@@ -464,30 +580,15 @@ are in [docs/WRITING-MODS.md](docs/WRITING-MODS.md#permissions-and-the-security-
 
 ## Non-Steam builds
 
-On **Steam** the game loads a mod loader itself: `main.js` scans the Workshop
-content folder for a `modinfo.json` declaring `modID: "fluxloader"` and
-requires the bundle beside it. SandLoader occupies that slot. Nothing in the
-game directory is touched and file verification stays green.
+Which stores work is summarised [above](#which-stores-work); this is the
+mechanism and the trade-offs.
 
-That scan begins with `if (PLATFORM_NAME !== 'steam') return null` — on every
-other build it never runs, which is why SandLoader used to be Steam-only.
-
-| Build | Status | How |
-|---|---|---|
-| Steam | supported | the game's own Workshop loader slot; writes nothing into the install |
-| GOG | supported | added `resources/app/` bootstrap |
-| Manual / other | supported | added `resources/app/` bootstrap |
-| Microsoft Store | **not supported** | package directory is ACL-protected and signature-verified |
-| Game Pass | **not supported** | same package, same reason |
-
-`node install.js --status` reports which one it detected, on what evidence, and
-for an unsupported build exactly why it cannot attach.
-
-**How the non-Steam bootstrap works.** Electron resolves its application
-package by searching `resources/` for `app`, then `app.asar`, then
-`default_app.asar`. Adding a `resources/app/` directory therefore loads first,
-and hands control straight back to the untouched `app.asar` once SandLoader is
-initialised. Three new files are created:
+**How the bootstrap works.** Electron resolves its application package by
+searching `resources/` for `app`, then `app.asar`, then `default_app.asar`.
+Adding a `resources/app/` directory therefore loads first, and hands control
+straight back to the untouched `app.asar` once SandLoader is initialised — after
+the file interceptor is live, which is the ordering that makes patches land at
+all. Three new files are created:
 
 ```
 <game>/resources/app/package.json
@@ -504,6 +605,13 @@ installation directory, it needs write permission there (administrator under
 Program Files), and afterwards `app.getAppPath()` reports `resources/app`. The
 bootstrap mirrors the real `name` and `version` so `app.getName()` and
 `app.getVersion()` stay correct.
+
+Detection is evidence-based, not guesswork: Steam is recognised by
+`resources/steam_appid.txt` and `installscript.vdf` plus a `steamapps/common`
+path, GOG by its `goggame-*.info` files, and Microsoft Store by `WindowsApps` /
+`AppxManifest.xml`. Writability is tested by actually creating and removing a
+file, not inferred from the path. `node install.js --status` prints what it
+found and why.
 
 Microsoft Store and Game Pass cannot be supported without modifying the game
 package, which would break its signature. The installer says so rather than
