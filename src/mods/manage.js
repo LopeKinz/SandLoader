@@ -19,28 +19,65 @@ const path = require('path')
 
 const zip = require('./zip')
 const workshop = require('./workshop')
-const { SmlnError, toSmlnError } = require('../core/errors')
+const { toSmlnError } = require('../core/errors')
 
 const SMLN_MANIFEST = 'smln.mod.json'
 const FLUX_MANIFEST = 'modinfo.json'
 
 /** Read whichever manifest an unpacked directory carries. */
 function readManifest(dir) {
-  for (const [file, flavour] of [[SMLN_MANIFEST, 'smln'], [FLUX_MANIFEST, 'fluxloader']]) {
-    const p = path.join(dir, file)
-    if (!fs.existsSync(p)) continue
+  const smlnPath = path.join(dir, SMLN_MANIFEST)
+  if (fs.existsSync(smlnPath)) {
     try {
-      const json = JSON.parse(fs.readFileSync(p, 'utf8'))
-      const id = flavour === 'smln' ? json.id : json.modID
-      if (typeof id === 'string' && id) {
-        return { id, flavour, version: String(json.version || '0.0.0'), name: json.name || id, json }
+      const json = JSON.parse(fs.readFileSync(smlnPath, 'utf8'))
+      if (typeof json.id === 'string' && json.id) {
+        return {
+          id: json.id,
+          flavour: 'smln',
+          version: String(json.version || '0.0.0'),
+          name: json.name || json.id,
+          json,
+        }
       }
       return null
     } catch (_) {
       return null
     }
   }
-  return null
+
+  const modinfoPath = path.join(dir, FLUX_MANIFEST)
+  if (!fs.existsSync(modinfoPath)) return null
+  try {
+    const json = JSON.parse(fs.readFileSync(modinfoPath, 'utf8'))
+
+    // `modinfo.json` is shared by two unrelated formats. Official Sandkit uses
+    // manifestVersion + id; Fluxloader uses modID. Test the discriminator
+    // before choosing the id field so a valid official ZIP is not rejected as
+    // "missing modID".
+    if (json && json.manifestVersion != null) {
+      if (typeof json.id !== 'string' || !json.id) return null
+      return {
+        id: json.id,
+        flavour: 'official',
+        version: String(json.version || '0.0.0'),
+        name: json.name || json.id,
+        json,
+      }
+    }
+
+    if (typeof json.modID === 'string' && json.modID) {
+      return {
+        id: json.modID,
+        flavour: 'fluxloader',
+        version: String(json.version || '0.0.0'),
+        name: json.name || json.modID,
+        json,
+      }
+    }
+    return null
+  } catch (_) {
+    return null
+  }
 }
 
 function rmrf(dir) {
@@ -49,6 +86,11 @@ function rmrf(dir) {
 
 /**
  * Install a mod from a .zip.
+ *
+ * Official Sandkit mods intentionally live in SandLoader's normal local root,
+ * not directly in <userData>/mods. src/mods/official-native.js mirrors only
+ * enabled official mods into the native folder at boot, which keeps
+ * SandLoader's enable/disable switch authoritative and makes removal safe.
  *
  * @param {string} zipPath
  * @param {{smlnRoot:string, fluxRoot:string, logger:any}} ctx

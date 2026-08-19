@@ -15,10 +15,13 @@
  * this one, Fluxloader's (`modID`), and SandLoader's own `smln.mod.json`. They
  * are told apart by which keys are present, never by guessing.
  *
- * Note on scope: the loader-side format is implemented here in full, but the
- * *game* only consumes some of it on the `mods` branch. Overrides are served by
- * SandLoader's own file interceptor, so they work on any build; `map` mods
- * need game support and are parsed and reported, not executed.
+ * Official entrypoints are lifecycle-sensitive. Sandustry must execute the
+ * main entry during world initialisation and workerEntry through its own
+ * worker-only Sandkit surface. SandLoader therefore does not prepend those
+ * sources to bundle.js anymore: discover() mirrors enabled official mods into
+ * the game's native local-mod directory and lets Sandustry's own loader run
+ * them. Patches/overrides remain handled here because SandLoader owns the file
+ * interceptor on builds where the host patcher is inactive.
  */
 
 const fs = require('fs')
@@ -26,6 +29,7 @@ const path = require('path')
 
 const { SmlnError } = require('../core/errors')
 const officialPatches = require('../patch/official')
+const nativeBridge = require('./official-native')
 
 const MANIFEST = 'modinfo.json'
 const SUPPORTED_MANIFEST_VERSION = 1
@@ -146,8 +150,16 @@ function readMod(dir) {
       // `loadOrder` is the official spelling of what SandLoader calls priority.
       priority: Number.isFinite(json.loadOrder) ? Number(json.loadOrder) : 0,
       enabled: json.enabled !== false,
-      entry: entry.value,
-      workerEntry: workerEntry.value,
+
+      // Do NOT expose these as SandLoader renderer/worker injection fields.
+      // entry.js checks `mod.entry` / `mod.workerEntry`; leaving them undefined
+      // prevents the old too-early/raw execution path. The resolved paths are
+      // retained under explicit native names for diagnostics and tooling.
+      entry: undefined,
+      workerEntry: undefined,
+      nativeEntry: entry.value,
+      nativeWorkerEntry: workerEntry.value,
+
       configOverrides,
       textureOverrides,
       map,
@@ -157,7 +169,8 @@ function readMod(dir) {
 }
 
 /**
- * Scan directories for official mods.
+ * Scan directories for official mods and make enabled ones visible to
+ * Sandustry's native loader before the game renderer starts.
  * @returns {{mods:any[], errors:SmlnError[]}}
  */
 function discover(roots, logger) {
@@ -192,6 +205,14 @@ function discover(roots, logger) {
       )
     }
   }
+
+  // entry.js applies persisted enable/disable state immediately after this
+  // function returns. The native bridge reads that same mods.json itself so it
+  // can stage the right set *now*, before startGame() lets Sandustry discover
+  // local official mods.
+  const native = nativeBridge.sync(mods, { logger })
+  errors.push(...native.errors)
+
   return { mods, errors }
 }
 
