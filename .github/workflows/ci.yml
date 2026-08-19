@@ -1,0 +1,66 @@
+name: SandLoader CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  javascript:
+    name: JavaScript checks (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - "18.x"
+          - "24.x"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . \
+            -type f \
+            -name '*.js' \
+            -not -path './node_modules/*' \
+            -print0 | xargs -0 -n1 node --check
+
+      - name: Run CI-safe regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tests=(tools/test-*.js)
+
+          if (( ${#tests[@]} == 0 )); then
+            echo 'No tools/test-*.js regression tests found.'
+            exit 0
+          fi
+
+          for test_file in "${tests[@]}"; do
+            echo "Running ${test_file}"
+            node "${test_file}"
+          done
