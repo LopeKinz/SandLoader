@@ -1,26 +1,14 @@
 /* eslint-env browser */
 'use strict'
 /**
- * Runtime adapter for Sandustry's official `manifestVersion: 1` main entries.
+ * Fallback runtime adapter for Sandustry's official `manifestVersion: 1` main
+ * entries.
  *
- * Official entries are not ordinary scripts. Sandustry compiles each entry as
- * `new Function("__sandkit", ...)`, exposes `const sandkit = __sandkit`, and
- * runs the body inside an async IIFE. SandLoader injects before the game bundle,
- * so executing an official entry at injection time is always too early: neither
- * the game state nor the Sandkit API exists yet.
- *
- * This adapter preserves the important parts of the official contract while
- * using the API surface SandLoader captured from the current game build:
- *
- *   - exactly-once execution after the game and the Sandkit adapter are ready;
- *   - an async body, so top-level `await` keeps working;
- *   - `sandkit.api`, `sandkit.state`, `sandkit.engine`, `sandkit.enums`;
- *   - synchronous per-mod settings backed by SandLoader's config store;
- *   - mod-relative `assets.getUrl()` / `sprites.loadFromMod()`.
- *
- * It deliberately does NOT invent APIs a legacy game build does not have. A
- * v1-only method on Sandustry 0.5.4 must fail clearly as unavailable instead of
- * silently pretending a registration succeeded.
+ * SandLoader now prefers src/mods/official-native.js, which stages official
+ * mods into Sandustry's native local-mod folder so the game can own the real
+ * main + worker lifecycle. This adapter remains as a compatibility fallback for
+ * any explicitly wrapped official renderer entry and therefore must still fail
+ * loudly and handle late installation correctly.
  */
 ;(function installOfficialRuntime(global) {
   var SMLN = global.__SMLN__
@@ -106,11 +94,31 @@
     return api
   }
 
+  function validVersion(value) {
+    if (value == null) return null
+    var n = Number(value)
+    if (!Number.isFinite(n) || n < 0) return null
+    return Math.floor(n)
+  }
+
   function makeSandkit(modId, apiVersion, settingsValues) {
     var st = SMLN.getState()
     var raw = SMLN.sandkit || {}
+
+    // Prefer version metadata exposed by the live game when available. The
+    // wrapper's manifest/fallback value is only a fallback, so a game reporting
+    // apiVersion 0 stays 0 instead of being rewritten by `|| 1`.
+    var runtimeVersion = validVersion(raw && raw.apiVersion)
+    if (runtimeVersion == null && st && st.sandkit) runtimeVersion = validVersion(st.sandkit.apiVersion)
+    if (runtimeVersion == null) runtimeVersion = validVersion(SMLN.apiVersion)
+
+    var requestedVersion = validVersion(apiVersion)
+    var versionNum = runtimeVersion != null
+      ? runtimeVersion
+      : (requestedVersion != null ? requestedVersion : 1)
+
     return {
-      apiVersion: Number(apiVersion) || 1,
+      apiVersion: versionNum,
       state: st,
       api: makeApi(modId, settingsValues),
       engine: { api: SMLN.game, state: st },
@@ -145,9 +153,6 @@
 
     function start() {
       if (started || running[modId]) return
-      // The Sandkit adapter listens to the same `ready` event and is installed
-      // before this adapter in prelude.js, so by the time this listener runs
-      // SMLN.api has already been built when the game exposes Sandkit.
       if (!SMLN.game) return
       started = true
       running[modId] = true
@@ -163,8 +168,23 @@
       })
     }
 
-    if (typeof SMLN.on === 'function') SMLN.on('ready', start)
-    else if (typeof SMLN.whenReady === 'function') SMLN.whenReady(function () { global.setTimeout(start, 0) })
+    // A fallback entry can be installed after the ready event already fired.
+    // Do not wait for an event that will never repeat.
+    if (SMLN.game) {
+      start()
+      return
+    }
+
+    if (typeof SMLN.on === 'function') {
+      SMLN.on('ready', start)
+    } else if (typeof SMLN.whenReady === 'function') {
+      SMLN.whenReady(function () { global.setTimeout(start, 0) })
+    } else if (typeof SMLN.log === 'function') {
+      SMLN.log(
+        'warn',
+        '[official:' + modId + '] no supported ready handler (SMLN.on or SMLN.whenReady); main entry will not run'
+      )
+    }
   }
 
   SMLN.official = {
