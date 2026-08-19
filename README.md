@@ -1,12 +1,21 @@
 # SandLoader
 
-A mod loader for **[Sandustry](https://store.steampowered.com/app/2764460/Sandustry/)** with an
+A third-party modding runtime and tooling layer for **[Sandustry](https://store.steampowered.com/app/2764460/Sandustry/)** with an
 in-game console, a mod manager, and support for existing
 [Fluxloader](https://fluxloader.app/) mods.
+
+**SandLoader is not trying to replace Sandustry's official mod support or Steam Workshop.**
+It is built to extend the modding experience with additional runtime tooling,
+compatibility, diagnostics and mod-management features.
 
 **It never modifies your game files.** Patching happens in memory while the game
 loads, so Steam's file verification stays green and a game update can't leave a
 broken patched file behind. Uninstalling is deleting one folder.
+
+> [!WARNING]
+> **SandLoader is in active development.** It is currently verified against
+> Sandustry 0.5.4. Expect rough edges, missing features and occasional breakage
+> while the project is still evolving.
 
 ```
 Press  ^  (or F1) in game        →  console
@@ -15,8 +24,40 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 ---
 
+## Why SandLoader?
+
+Sandustry already has mod support. That does **not** make a separate loader
+pointless — the game, Steam Workshop and SandLoader solve different parts of the
+modding stack.
+
+**Steam Workshop is primarily distribution.** It is a very convenient way to
+publish, discover, download and update mods. SandLoader does not need to replace
+that, and mods can still be distributed through Workshop.
+
+**SandLoader focuses on the runtime and tooling around mods.** Today that includes:
+
+- an in-game developer console with access to the running game
+- a built-in ZIP mod manager with enable / disable / remove controls
+- compatibility with existing Fluxloader mods
+- direct access to Sandustry's own `FH` modding API
+- structured logging and dependency ordering
+- anchor-based in-memory patching instead of modifying game files
+- compatibility self-tests that detect broken hooks after game updates
+
+There is also room for tooling that the base game or Workshop do not currently
+provide, such as dependency version enforcement, mod configuration UI, patch
+conflict detection, cross-context messaging and hot reload. Those features are
+on the roadmap and are listed honestly in [Limitations](#limitations-and-whats-not-built-yet).
+
+In short: **official mod support provides the foundation; SandLoader adds another
+layer on top of it.** If the official tooling already does everything you need,
+there is nothing wrong with using only that.
+
+---
+
 ## Contents
 
+- [Why SandLoader?](#why-sandloader)
 - [Requirements](#requirements)
 - [Install](#install) · [Update](#update) · [Uninstall](#uninstall)
 - [Using the console](#using-the-console)
@@ -58,8 +99,8 @@ permanent — SandLoader runs from wherever you put it, so don't leave it in a
 temp folder.
 
 ```bash
-git clone https://github.com/<you>/sandloader.git
-cd sandloader
+git clone https://github.com/LopeKinz/SandLoader.git
+cd SandLoader
 ```
 
 **2. Run the installer.**
@@ -112,7 +153,7 @@ Administrator once, or move the Steam library somewhere outside
 <details>
 <summary><b>"no Steam Workshop content folder"</b></summary>
 
-`steamapps/workshop/content/2764460` does not exist yet. Create it by Hand, or wait till the Steam Workshop arrives.
+`steamapps/workshop/content/2764460` does not exist yet. Create it by hand, or wait until Steam Workshop support arrives.
 </details>
 
 ### Update
@@ -290,6 +331,14 @@ end-to-end, and tells you exactly what broke.
 
 ## FAQ
 
+**Why use SandLoader if Sandustry already supports mods?**
+SandLoader is not intended to replace Sandustry's official mod support. The game
+provides the underlying modding foundation; SandLoader adds runtime tooling,
+Fluxloader compatibility, mod management, diagnostics and development features
+around it. Steam Workshop can still be used for distribution. If the official
+system already covers everything you need, using only the official system is a
+perfectly valid choice.
+
 **Does this modify my game files?**
 No. Not one byte. Patching happens in memory as files are served to the renderer.
 
@@ -441,7 +490,7 @@ An honest list, roughly by how much they would be missed:
 
 ## Status
 
-Verified against **Sandustry 0.5.4**. Self-test: **54/54**.
+**Active development.** Verified against **Sandustry 0.5.4**. Self-test: **54/54**.
 
 ## License
 
