@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/LopeKinz/SandLoader#troubleshooting
+    about: Check common installation, loading, and runtime problems before opening an issue.
+  - name: Writing mods
+    url: https://github.com/LopeKinz/SandLoader/blob/main/docs/WRITING-MODS.md
+    about: Read the SandLoader mod development documentation and API guidance.

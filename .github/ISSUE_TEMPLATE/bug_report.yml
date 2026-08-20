@@ -1,0 +1,132 @@
+name: Bug report
+description: Report a reproducible problem with SandLoader
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a SandLoader bug.
+
+        Before submitting, please make sure the issue is reproducible and attach the relevant SandLoader log. Logs are normally stored at `<userData>/smln/logs/smln-<timestamp>.log`.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I reproduced the issue with the latest SandLoader version available to me.
+          required: true
+        - label: I have removed passwords, tokens, personal paths, or other sensitive information from logs.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly. Include any error messages you saw.
+      placeholder: SandLoader starts, but...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the shortest reliable sequence that triggers the problem.
+      placeholder: |
+        1. Install SandLoader with ...
+        2. Start Sandustry
+        3. Enable ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: input
+    id: sandloader_version
+    attributes:
+      label: SandLoader version / commit
+      description: Release version, tag, or commit SHA if known.
+      placeholder: e.g. v0.2.0 or abc1234
+    validations:
+      required: true
+
+  - type: input
+    id: sandustry_version
+    attributes:
+      label: Sandustry version
+      placeholder: e.g. 0.5.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: store
+    attributes:
+      label: Game store / distribution
+      options:
+        - Steam
+        - GOG
+        - Manual / standalone
+        - Microsoft Store
+        - Game Pass
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Installer status output
+      description: Paste the full output of `node install.js --status` in a code block.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: mods
+    attributes:
+      label: Installed / enabled mods
+      description: List all enabled SandLoader or Fluxloader mods. Say `None` if you reproduced it without mods.
+      placeholder: |
+        - ExampleMod 1.2.0
+        - Legacy Fluxloader mod
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: SandLoader log
+      description: Drag and drop the relevant `smln-*.log` file here, or paste the relevant section. Please do not omit startup errors.
+      placeholder: Attach the log file here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, videos, crash dialogs, recent game updates, or anything else that may help.
+    validations:
+      required: false
