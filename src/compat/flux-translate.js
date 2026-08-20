@@ -85,4 +85,82 @@ function hslToRgba(hsl) {
   return { ok: true, value: rgb.map((v) => Math.round((v + m) * 255)).concat(255) }
 }
 
-module.exports = { matterTypeToNumber, nameKeyFor, rgbaToMetaColor, hslToRgba }
+/**
+ * Convert one `corelib.elements.registerElement(config)` argument into the
+ * definition `SMLN.register.element` expects.
+ *
+ * `colors` is passed through rather than consumed: Sandkit's own
+ * `elements.register` installs `def.colors` into the session colour scheme, so
+ * converting them here would do the work twice and disagree with the built-ins.
+ */
+function translateElement(config, enumTable) {
+  const c = config || {}
+  if (!c.id || typeof c.id !== 'string') {
+    return { ok: false, reason: 'an element needs a string "id"' }
+  }
+
+  const matter = matterTypeToNumber(c.matterType == null ? 'Solid' : c.matterType, enumTable)
+  if (!matter.ok) return { ok: false, reason: `element "${c.id}": ${matter.reason}` }
+
+  const colors = Array.isArray(c.colors) ? c.colors : []
+  const def = {
+    id: c.id,
+    // Passing `name` lets the game register the English fallback itself; the
+    // explicit nameKey keeps the entry readable if it ever inspects it first.
+    name: c.name || c.id,
+    nameKey: nameKeyFor(c.id),
+    density: typeof c.density === 'number' ? c.density : 100,
+    matterType: matter.value,
+    colors,
+  }
+
+  if (colors.length) {
+    const meta = rgbaToMetaColor(colors[0])
+    if (!meta.ok) return { ok: false, reason: `element "${c.id}": ${meta.reason}` }
+    def.metaColor = meta.value
+  }
+  if (Array.isArray(c.interactsWithHoverText)) def.interactions = c.interactsWithHoverText
+  if (c.addToFilterList !== undefined) def.addToFilterList = !!c.addToFilterList
+
+  return { ok: true, def }
+}
+
+/**
+ * Convert `corelib.elements.registerSoil(config)`. Soils are mineable terrain
+ * that drops an element, so the output fields travel with the definition.
+ */
+function translateSoil(config, enumTable) {
+  const c = config || {}
+  if (!c.id || typeof c.id !== 'string') {
+    return { ok: false, reason: 'a soil needs a string "id"' }
+  }
+
+  const def = {
+    id: c.id,
+    name: c.name || c.id,
+    nameKey: nameKeyFor(c.id),
+    hp: typeof c.hp === 'number' ? c.hp : 1,
+    onlyRocketBreakable: !!c.onlyRocketBreakable,
+  }
+
+  if (Array.isArray(c.colorHSL)) {
+    const rgba = hslToRgba(c.colorHSL)
+    if (!rgba.ok) return { ok: false, reason: `soil "${c.id}": ${rgba.reason}` }
+    def.colors = [rgba.value]
+    const meta = rgbaToMetaColor(rgba.value)
+    if (meta.ok) def.metaColor = meta.value
+  } else if (Array.isArray(c.colors)) {
+    def.colors = c.colors
+  }
+
+  if (c.outputElement) def.outputElement = c.outputElement
+  if (typeof c.chanceForOutput === 'number') def.chanceForOutput = c.chanceForOutput
+  if (Array.isArray(c.interactsWithHoverText)) def.interactions = c.interactsWithHoverText
+
+  return { ok: true, def }
+}
+
+module.exports = {
+  matterTypeToNumber, nameKeyFor, rgbaToMetaColor, hslToRgba,
+  translateElement, translateSoil,
+}

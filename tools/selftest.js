@@ -343,6 +343,63 @@ check('soil colorHSL converts to rgba', () => {
   return 'hsl(306,6,37) -> rgba(' + r.value.join(',') + ')'
 })
 
+check('a corelib element definition translates to a 0.5.5 definition', () => {
+  // This is trashelement's real first registration, copied from its source.
+  const r = flTranslate.translateElement({
+    id: 'Trash',
+    name: 'Trash',
+    colors: [[88, 74, 74, 255], [108, 74, 74, 255]],
+    density: 150,
+    interactsWithHoverText: ['⬇️'],
+    matterType: 'Slushy',
+    addToFilterList: true,
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.def.id === 'Trash', 'id lost')
+  assert(r.def.matterType === 6, 'matterType is ' + r.def.matterType + ', not the numeric 6')
+  assert(r.def.nameKey === 'elements|trash|name', 'nameKey is ' + r.def.nameKey)
+  assert(typeof r.def.metaColor === 'number', 'metaColor is not a number')
+  assert(Array.isArray(r.def.colors) && r.def.colors.length === 2, 'colours were dropped')
+  return 'Trash -> matterType 6, ' + r.def.nameKey
+})
+
+check('an element with a bad matter type is refused with a reason', () => {
+  const r = flTranslate.translateElement({
+    id: 'Weird', name: 'Weird', colors: [[1, 2, 3, 255]], density: 10, matterType: 'Plasma',
+  }, LIVE_MATTER)
+  assert(!r.ok, 'a bad matterType was accepted')
+  assert(/Plasma/.test(r.reason), 'reason does not name the value: ' + r.reason)
+  return r.reason
+})
+
+check('an element without an id is refused', () => {
+  const r = flTranslate.translateElement({ name: 'No Id', density: 1 }, LIVE_MATTER)
+  assert(!r.ok, 'an element with no id was accepted')
+  assert(/id/.test(r.reason), 'reason does not mention the id: ' + r.reason)
+  return r.reason
+})
+
+check('a corelib soil definition translates, including its HSL colour', () => {
+  // trashelement's real soil registration.
+  const r = flTranslate.translateSoil({
+    id: 'TrashSoil',
+    name: 'Trashsoil',
+    hp: 3,
+    interactsWithHoverText: ['🔨💥'],
+    chanceForOutput: 0.7,
+    outputElement: 'Trash',
+    colorHSL: [306, 6, 37],
+    onlyRocketBreakable: false,
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.def.id === 'TrashSoil', 'id lost')
+  assert(Array.isArray(r.def.colors) && r.def.colors[0].length === 4,
+    'colorHSL was not converted to rgba')
+  assert(r.def.hp === 3, 'hp lost')
+  assert(r.def.outputElement === 'Trash', 'outputElement lost')
+  return 'TrashSoil -> rgba(' + r.def.colors[0].join(',') + ')'
+})
+
 check('fluxloader modinfo is read into an SMLN mod', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-fl-'))
   fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
