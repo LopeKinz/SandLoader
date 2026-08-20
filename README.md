@@ -687,7 +687,7 @@ An honest list:
 
 ## Changelog
 
-### Unreleased
+### 0.3.0
 
 Verified against Sandustry 0.5.5. Self-test: 104 checks.
 
