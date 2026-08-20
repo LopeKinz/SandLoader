@@ -253,6 +253,12 @@ function readMod(dir) {
       capability,
       warnings,
       configSchema: info.configSchema || {},
+      // Fluxloader's `scriptPath` names a module exporting modifySchema(schema),
+      // which the loader calls so a mod can compute its own dropdown options at
+      // load time. Custom Map Loader and Skin Loader both use it to list the
+      // installed maps/skins; without it their dropdowns only ever offer
+      // "default" and the mods look broken.
+      scriptPath: resolve(info.scriptPath),
       manifest: info,
     },
   }
@@ -301,6 +307,54 @@ function discover(roots, logger) {
  * The async/sync split is Fluxloader's: mods call `get`/`set` expecting
  * promises and `getSync` expecting a value, so both are offered.
  */
+/**
+ * Run a mod's `scriptPath` module so it can rewrite its own config schema.
+ *
+ * Fluxloader lets a mod compute options at load time: Custom Map Loader lists
+ * every installed mod tagged "map", Skin Loader every mod tagged "skin". The
+ * module is ESM (`export function modifySchema(schema)`), so the export keyword
+ * is stripped and the function is called in a context carrying this mod's
+ * `fluxloaderAPI` - the same one its entrypoint gets, so `getEnabledMods()`
+ * inside the script sees the real mod list.
+ *
+ * A script that throws costs that mod its computed options and nothing else:
+ * the schema it was handed is left as the manifest declared it.
+ *
+ * @param {any} mod
+ * @param {object} schema  mutated in place
+ * @param {any} api        the mod's fluxloaderAPI
+ * @param {any} logger
+ */
+function runSchemaScript(mod, schema, api, logger) {
+  if (!mod.scriptPath) return schema
+  try {
+    const source = fs.readFileSync(mod.scriptPath, 'utf8')
+    const sandbox = {
+      console, fluxloaderAPI: api, module: { exports: {} },
+      require, path, fs, JSON, Object, Array, String, Number, Boolean,
+    }
+    sandbox.globalThis = sandbox
+    sandbox.exports = sandbox.module.exports
+    vm.createContext(sandbox)
+    // `export function modifySchema` is not valid in a classic script, and the
+    // scripts are small and self-contained, so the keyword is simply dropped
+    // rather than standing up an ESM loader for one function.
+    const classic = source.replace(/^\s*export\s+/gm, '')
+    new vm.Script(classic, { filename: mod.scriptPath }).runInContext(sandbox)
+    const fn = sandbox.modifySchema ||
+      (sandbox.module.exports && sandbox.module.exports.modifySchema)
+    if (typeof fn !== 'function') {
+      logger.warn(`${mod.id}: scriptPath exports no modifySchema(), leaving the schema as declared`)
+      return schema
+    }
+    fn(schema)
+    logger.debug(`${mod.id}: schema script applied`)
+  } catch (e) {
+    logger.warn(`${mod.id}: schema script failed, leaving the schema as declared: ${e && e.message}`)
+  }
+  return schema
+}
+
 function makeConfigStore(configDir, mod, logger) {
   const normalised = configStore.normaliseSchema(mod.configSchema)
   if (!normalised.ok) {
@@ -312,7 +366,39 @@ function makeConfigStore(configDir, mod, logger) {
   return {
     schema: mod.configSchema,
     store,
-    async get(key) { return store.getSync(key) },
+    /**
+     * Fluxloader's `get` is awaited by some mods and used directly by others:
+     * corelib opens with `const config = fluxloaderAPI.modConfig.get("corelib")`
+     * and skinloader passes the result straight into `data.config`, then reads
+     * `config.skin`. A plain Promise satisfies the first group and silently
+     * gives the second `undefined` for every key - skinloader dies on
+     * "Skin 'undefined' could not be found".
+     *
+     * So the value is returned with a `then` bolted on: reading a property
+     * works, and awaiting works, because a thenable is all `await` requires.
+     */
+    get(key) {
+      // Fluxloader mods call `get(<their own modID>)` to fetch the WHOLE config
+      // object, not a key inside it - corelib opens with
+      // `get("corelib")`, skinloader with `get("skinloader")`, custommaploader
+      // awaits `get("custommaploader")`. Treating that as a key name returns
+      // undefined and the mod reads `config.skin` off nothing, dying with
+      // "Skin 'undefined' could not be found". A key that happens to equal the
+      // mod id is not a real ambiguity: no schema here declares one.
+      const value = (key == null || key === mod.id) ? store.getAllSync() : store.getSync(key)
+      if (value === null || typeof value !== 'object') {
+        // A primitive cannot carry a `then`, so hand back a resolved promise
+        // that also coerces sensibly - mods read objects here in practice.
+        return Promise.resolve(value)
+      }
+      if (typeof value.then === 'function') return value
+      return Object.defineProperty(value, 'then', {
+        value: (onFulfilled) => Promise.resolve(value).then(onFulfilled),
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      })
+    },
     async set(key, value) {
       const r = store.set(key, value)
       if (!r.ok) logger.warn(`${mod.id}: rejected config "${key}": ${r.error.message}`)
@@ -494,10 +580,55 @@ function loadElectronEntrypoints(mods, ctx, logger) {
        * lives under the same root as the mod asking for it.
        */
       getModsPath: () => path.dirname(mod.dir),
+
+      /**
+       * The game's app.asar. Mods join it with a subfolder and read through
+       * `fs` - Electron reads inside an asar transparently, so no unpacking is
+       * needed. Custom Map Loader uses it to read the stock map's images out of
+       * the shipped game (`getGameAsarPath() + "/img"`), and without it the mod
+       * dies on its first line with "getGameAsarPath is not a function".
+       */
+      getGameAsarPath: () => (ctx.install && ctx.install.asar) || '',
+
+      /**
+       * Every enabled mod, keyed by id, in the shape Fluxloader hands out:
+       * `{[id]: {info, path}}` where `info` is the raw modinfo.json. Mods use
+       * it to discover each other by tag - a map loader collects everything
+       * tagged "map", a skin loader everything tagged "skin" - so `info.tags`
+       * has to be present even when a manifest omitted it, or the filter throws
+       * instead of simply finding nothing.
+       */
+      getEnabledMods: () => {
+        const out = {}
+        for (const m of mods) {
+          if (m.enabled === false) continue
+          const info = (m.manifest && typeof m.manifest === 'object') ? m.manifest : {}
+          out[m.id] = {
+            info: Object.assign({}, info, {
+              modID: m.id,
+              name: m.name || m.id,
+              version: m.version,
+              tags: Array.isArray(info.tags) ? info.tags : [],
+            }),
+            path: m.dir,
+          }
+        }
+        return out
+      },
     }
 
     // Real cross-context messaging and IPC, on SandLoader's existing
     // transports. See src/compat/flux-messaging.js.
+    // Let the mod compute its own schema options now that its API exists, then
+    // rebuild the config store on the result - the store bakes defaults and
+    // validation from the schema, so a dropdown gaining options afterwards
+    // would still reject every one of them.
+    if (mod.scriptPath) {
+      const grown = runSchemaScript(mod, JSON.parse(JSON.stringify(mod.configSchema || {})), api, modLog)
+      mod.configSchema = grown
+      api.modConfig = makeConfigStore(ctx.configDir, mod, modLog)
+    }
+
     Object.assign(api, fluxMessaging.electronSurface({
       modId: mod.id,
       logger: modLog,

@@ -86,12 +86,25 @@ function hslToRgba(hsl) {
 }
 
 /**
+ * The colour shape the game's draw path expects: `{variants: [[r,g,b,a], ...]}`.
+ * Accepts either spelling so a mod that already wrapped its colours is not
+ * double-wrapped.
+ */
+function toVariants(colors) {
+  if (colors && !Array.isArray(colors) && Array.isArray(colors.variants)) return colors
+  return { variants: Array.isArray(colors) ? colors : [] }
+}
+
+/**
  * Convert one `corelib.elements.registerElement(config)` argument into the
  * definition `SMLN.register.element` expects.
  *
- * `colors` is passed through rather than consumed: Sandkit's own
- * `elements.register` installs `def.colors` into the session colour scheme, so
- * converting them here would do the work twice and disagree with the built-ins.
+ * `colors` is reshaped, not passed through. Sandkit's colour installer is a
+ * bare assignment - `scheme.element[type] = colors` - so whatever shape arrives
+ * is what the renderer later reads. Every built-in entry is
+ * `{variants: [[r,g,b,a], ...]}`, and the draw path indexes `.variants`, so a
+ * Fluxloader mod's flat array lands as `undefined` there and spawning the
+ * element throws "Cannot read properties of undefined (reading '3')".
  */
 function translateElement(config, enumTable) {
   const c = config || {}
@@ -102,7 +115,12 @@ function translateElement(config, enumTable) {
   const matter = matterTypeToNumber(c.matterType == null ? 'Solid' : c.matterType, enumTable)
   if (!matter.ok) return { ok: false, reason: `element "${c.id}": ${matter.reason}` }
 
-  const colors = Array.isArray(c.colors) ? c.colors : []
+  // Accept both spellings: a Fluxloader mod's flat array, and the wrapped
+  // {variants: [...]} the game itself stores. Testing only for an array
+  // silently dropped the wrapped form to nothing.
+  const colors = Array.isArray(c.colors)
+    ? c.colors
+    : (c.colors && Array.isArray(c.colors.variants) ? c.colors.variants : [])
   const def = {
     id: c.id,
     // Passing `name` lets the game register the English fallback itself; the
@@ -111,7 +129,9 @@ function translateElement(config, enumTable) {
     nameKey: nameKeyFor(c.id),
     density: typeof c.density === 'number' ? c.density : 100,
     matterType: matter.value,
-    colors,
+    // The shape the renderer reads: a mod already using {variants: [...]} is
+    // left alone, a flat Fluxloader array is wrapped.
+    colors: colors.length ? toVariants(colors) : colors,
   }
 
   if (colors.length) {
@@ -146,11 +166,11 @@ function translateSoil(config, enumTable) {
   if (Array.isArray(c.colorHSL)) {
     const rgba = hslToRgba(c.colorHSL)
     if (!rgba.ok) return { ok: false, reason: `soil "${c.id}": ${rgba.reason}` }
-    def.colors = [rgba.value]
+    def.colors = toVariants([rgba.value])
     const meta = rgbaToMetaColor(rgba.value)
     if (meta.ok) def.metaColor = meta.value
   } else if (Array.isArray(c.colors)) {
-    def.colors = c.colors
+    def.colors = toVariants(c.colors)
   }
 
   if (c.outputElement) def.outputElement = c.outputElement
@@ -161,6 +181,7 @@ function translateSoil(config, enumTable) {
 }
 
 module.exports = {
+  toVariants,
   matterTypeToNumber, nameKeyFor, rgbaToMetaColor, hslToRgba,
   translateElement, translateSoil,
 }

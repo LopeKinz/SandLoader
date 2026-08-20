@@ -387,8 +387,45 @@ check('a corelib element definition translates to a 0.5.5 definition', () => {
   assert(r.def.matterType === 6, 'matterType is ' + r.def.matterType + ', not the numeric 6')
   assert(r.def.nameKey === 'elements|trash|name', 'nameKey is ' + r.def.nameKey)
   assert(typeof r.def.metaColor === 'number', 'metaColor is not a number')
-  assert(Array.isArray(r.def.colors) && r.def.colors.length === 2, 'colours were dropped')
+  // Colours are stored the way the game stores them: {variants: [[r,g,b,a]]}.
+  assert(r.def.colors && r.def.colors.variants.length === 2, 'colours were dropped')
   return 'Trash -> matterType 6, ' + r.def.nameKey
+})
+
+check('element colours use the shape the renderer actually reads', () => {
+  // The game stores colours as {variants: [[r,g,b,a], ...]} and its draw path
+  // indexes .variants directly. Sandkit's installer is a bare assignment, so a
+  // flat Fluxloader array is stored as-is and spawning the element throws
+  // "Cannot read properties of undefined (reading '3')" - registered but
+  // unusable, which is worse than not registered.
+  const r = flTranslate.translateElement({
+    id: 'Trash', name: 'Trash', colors: [[88, 74, 74, 255], [108, 74, 74, 255]],
+    density: 150, matterType: 'Slushy',
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(!Array.isArray(r.def.colors), 'colours were left as a bare array')
+  assert(Array.isArray(r.def.colors.variants), 'colours have no .variants')
+  assert(r.def.colors.variants.length === 2, 'a colour variant was lost')
+  assert(r.def.metaColor === (88 << 16) + (74 << 8) + 74,
+    'metaColor no longer derives from the first colour: ' + r.def.metaColor)
+
+  // A mod that already uses the wrapped shape must not be double-wrapped.
+  const already = flTranslate.translateElement({
+    id: 'Pre', name: 'Pre', colors: { variants: [[1, 2, 3, 255]] },
+    density: 10, matterType: 'Solid',
+  }, LIVE_MATTER)
+  assert(already.ok, 'wrapped input rejected: ' + (already.ok ? '' : already.reason))
+  assert(Array.isArray(already.def.colors.variants), 'wrapped input lost its variants')
+  assert(!already.def.colors.variants[0].variants, 'colours were double-wrapped')
+
+  // Soils land in the same scheme and need the same shape.
+  const soil = flTranslate.translateSoil({
+    id: 'TrashSoil', name: 'Trashsoil', colorHSL: [306, 6, 37], outputElement: 'Trash',
+  }, LIVE_MATTER)
+  assert(soil.ok, 'soil rejected: ' + (soil.ok ? '' : soil.reason))
+  assert(soil.def.colors && Array.isArray(soil.def.colors.variants),
+    'soil colours are not in variants shape')
+  return 'colours wrapped as {variants}, no double-wrapping, soils too'
 })
 
 check('an element with a bad matter type is refused with a reason', () => {
@@ -421,11 +458,11 @@ check('a corelib soil definition translates, including its HSL colour', () => {
   }, LIVE_MATTER)
   assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
   assert(r.def.id === 'TrashSoil', 'id lost')
-  assert(Array.isArray(r.def.colors) && r.def.colors[0].length === 4,
-    'colorHSL was not converted to rgba')
+  assert(r.def.colors && Array.isArray(r.def.colors.variants) &&
+    r.def.colors.variants[0].length === 4, 'colorHSL was not converted to rgba')
   assert(r.def.hp === 3, 'hp lost')
   assert(r.def.outputElement === 'Trash', 'outputElement lost')
-  return 'TrashSoil -> rgba(' + r.def.colors[0].join(',') + ')'
+  return 'TrashSoil -> rgba(' + r.def.colors.variants[0].join(',') + ')'
 })
 
 check('fluxloader modinfo is read into an SMLN mod', () => {

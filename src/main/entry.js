@@ -1064,6 +1064,8 @@ function assemble() {
         sendToRenderer,
         rpc: rpcRegistry,
         isApproved,
+        // Mods that read files out of the shipped game need its asar path.
+        install: runtime.install,
       }, logger.child('fluxloader'))
       for (const e of flLoaded.errors) note(e, 'fluxloader', e.detail && e.detail.mod)
       runtime.flEvents = flLoaded.events
