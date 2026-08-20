@@ -1886,6 +1886,27 @@ check('reload stages match what actually changed', () => {
   return 'renderer / context / restart, strongest stage wins'
 })
 
+check('a transformed file is served with its own content type, not always JavaScript', () => {
+  // A patched index.html served as "application/javascript" makes Chromium
+  // render the markup as source text instead of parsing it - the game boots to
+  // a black screen full of HTML. Every patch target used to be a script, so the
+  // hardcoded type was invisible until a Fluxloader mod patched index.html.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'interceptor.js'), 'utf8')
+  assert(!/'application\/javascript; charset=utf-8'/.test(src),
+    'the interceptor still hardcodes a JavaScript content type for transformed files')
+
+  // And the table it must consult instead has to know about markup.
+  const mod = require('../src/main/interceptor')
+  const mimeFor = mod.mimeFor || mod.__mimeFor
+  if (typeof mimeFor === 'function') {
+    assert(mimeFor('dist/index.html') === 'text/html',
+      'index.html did not resolve to text/html: ' + mimeFor('dist/index.html'))
+    assert(/javascript/.test(mimeFor('dist/js/bundle.js')),
+      'bundle.js no longer resolves to a JavaScript type')
+  }
+  return 'transformed files keep their own MIME type'
+})
+
 check('a rebuild clears both caches before the window reloads, and never accumulates patches', () => {
   const order = []
   let build = 0

@@ -82,7 +82,17 @@ function toSmlnPatch(p, owner, tag) {
       find: re,
       replace: String(p.to),
       expect: 'any',
-      required: p.required !== false,
+      // One atomic group per mod per file. A Fluxloader mod's patches are
+      // written against whichever game build its author had, and they assume
+      // each other: corelib's colorIdFix rewrites buffer sizing in one patch
+      // and the readers of that buffer in the next. Applying the half that
+      // still matches leaves the bundle internally inconsistent - a black
+      // screen - while aborting the file outright would take SandLoader's own
+      // patches down with it. Grouping gives the third option the engine
+      // already implements: this mod's patches for this file all land, or none
+      // of them do, and everyone else's are unaffected.
+      group: `flux:${owner}`,
+      required: p.required === true,
     }
   }
 
@@ -100,7 +110,10 @@ function toSmlnPatch(p, owner, tag) {
     // here, and none wanted.
     replace: () => (to.includes(token) ? to.split(token).join(from) : to),
     expect: 'any',
-    required: p.required !== false,
+    // Same reasoning as the regex branch above: this mod's patches for this
+    // file stand or fall together, and never take another mod's with them.
+    group: `flux:${owner}`,
+    required: p.required === true,
   }
 }
 
