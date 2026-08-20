@@ -54,6 +54,9 @@ const PARTS = [
   'registration.js',
   'messaging.js',
   'sandkit-adapter.js',
+  // After sandkit-adapter.js: the bridge hands captured Fluxloader content to
+  // SMLN.register, which calls through the Sandkit surface that file builds.
+  'flux-register.js',
   // Must precede official-runtime.js: that file reads SMLN.react when it builds
   // each mod's sandkit object.
   'webpack-bridge.js',

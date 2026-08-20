@@ -4187,6 +4187,46 @@ check('only the patches the bridge takes over are suppressed', () => {
   return 'element and soil patches suppressed, others kept'
 })
 
+check('the renderer bridge registers captured content through SMLN', () => {
+  // Runs the real renderer script in a sandbox with a fake SMLN, so the wiring
+  // is tested without a browser. The shapes here match the live game: verified
+  // that SMLN.register.as(id) yields .element/.terrain and that callMain and
+  // whenReady exist.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'flux-register.js'), 'utf8')
+  const calls = { element: [], terrain: [], logs: [] }
+  const SMLN = {
+    log: (level, msg) => calls.logs.push(level + ': ' + msg),
+    whenReady: (fn) => fn(),
+    callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
+      elements: [{ id: 'Trash', def: { id: 'Trash', matterType: 6 } }],
+      soils: [{ id: 'TrashSoil', def: { id: 'TrashSoil' } }],
+      unsupported: [{ kind: 'recipe', id: 'Trash', reason: 'no recipe registry on this build' }],
+    } : null),
+    register: {
+      as: () => ({
+        element: (def) => { calls.element.push(def); return Promise.resolve({}) },
+        terrain: (def) => { calls.terrain.push(def); return Promise.resolve({}) },
+      }),
+    },
+  }
+  const sandbox = { globalThis: null, __SMLN__: SMLN, console }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(src, { filename: 'flux-register.js' }).runInContext(sandbox)
+
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try {
+      assert(calls.element.length === 1, 'no element registered: ' + calls.element.length)
+      assert(calls.element[0].id === 'Trash', 'wrong element: ' + calls.element[0].id)
+      assert(calls.terrain.length === 1, 'no soil registered: ' + calls.terrain.length)
+      assert(calls.logs.some((l) => /recipe/i.test(l)),
+        'the unsupported recipe was not reported: ' + JSON.stringify(calls.logs))
+      resolve('registered 1 element, 1 soil, reported 1 unsupported')
+    } catch (e) { reject(e) }
+  }, 20))
+})
+
 check('captured content is exposed to the renderer over IPC', () => {
   // Sandkit lives in the renderer, so the definitions captured in the main
   // process have to cross the boundary. corelib already crosses it the same
