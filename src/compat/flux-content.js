@@ -70,22 +70,45 @@ function install(sandboxGlobal, opts) {
     log && log.warn(`${kind} "${id}" was not registered: ${reason}`)
   }
 
+  // Read a config's id for an error record without risking a second throw:
+  // this is called from inside a catch block, so if `config.id` is itself a
+  // throwing getter (the thing that got us here), just fall back silently.
+  function safeId(config) {
+    try {
+      return (config && config.id) || '?'
+    } catch (_e) {
+      return '?'
+    }
+  }
+
   if (corelib.elements && typeof corelib.elements === 'object') {
     // Keep the original object so anything else corelib hung on it survives;
     // only the two registration entry points are replaced.
     corelib.elements.registerElement = function registerElement(config) {
-      const r = translate.translateElement(config, matterEnum)
-      if (!r.ok) { note('element', (config && config.id) || '?', r.reason); return false }
-      captured.elements.push({ id: r.def.id, def: r.def })
-      log && log.debug(`captured element ${r.def.id}`)
-      return true
+      // Mods call this at entrypoint top level, so nothing here may throw -
+      // not even a config whose `id` is a getter that throws when read.
+      try {
+        const r = translate.translateElement(config, matterEnum)
+        if (!r.ok) { note('element', safeId(config), r.reason); return false }
+        captured.elements.push({ id: r.def.id, def: r.def })
+        log && log.debug(`captured element ${r.def.id}`)
+        return true
+      } catch (e) {
+        note('element', safeId(config), `reading the element definition threw: ${e && e.message}`)
+        return false
+      }
     }
     corelib.elements.registerSoil = function registerSoil(config) {
-      const r = translate.translateSoil(config, matterEnum)
-      if (!r.ok) { note('soil', (config && config.id) || '?', r.reason); return false }
-      captured.soils.push({ id: r.def.id, def: r.def })
-      log && log.debug(`captured soil ${r.def.id}`)
-      return true
+      try {
+        const r = translate.translateSoil(config, matterEnum)
+        if (!r.ok) { note('soil', safeId(config), r.reason); return false }
+        captured.soils.push({ id: r.def.id, def: r.def })
+        log && log.debug(`captured soil ${r.def.id}`)
+        return true
+      } catch (e) {
+        note('soil', safeId(config), `reading the soil definition threw: ${e && e.message}`)
+        return false
+      }
     }
   } else {
     reasons.push('corelib published no elements module')
@@ -99,14 +122,27 @@ function install(sandboxGlobal, opts) {
     'registerBasicRecipe', 'registerPressRecipe', 'registerShakerRecipe',
     'registerGrowerRecipe',
   ]
+  // Same rule as safeId above: this reads config.input/config.id, either of
+  // which may be a throwing getter, so it must not be able to throw itself.
+  function safeRecipeId(config, fallback) {
+    try {
+      return String((config && (config.input || config.id)) || fallback)
+    } catch (_e) {
+      return fallback
+    }
+  }
+
   if (corelib.recipes && typeof corelib.recipes === 'object') {
     for (const fn of RECIPE_FNS) {
       if (typeof corelib.recipes[fn] !== 'function') continue
       corelib.recipes[fn] = function suppressedRecipe(config) {
-        const id = (config && (config.input || config.id)) || fn
-        note('recipe', String(id),
-          'this Sandustry build has no recipe registry, so recipes cannot be ' +
-          'registered by any means (verified against 0.5.5)')
+        try {
+          note('recipe', safeRecipeId(config, fn),
+            'this Sandustry build has no recipe registry, so recipes cannot be ' +
+            'registered by any means (verified against 0.5.5)')
+        } catch (e) {
+          note('recipe', fn, `reading the recipe definition threw: ${e && e.message}`)
+        }
         return false
       }
     }

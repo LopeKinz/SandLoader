@@ -4090,6 +4090,41 @@ check('a bad definition is recorded, and never throws into the mod', () => {
   return r.captured.unsupported[0].reason
 })
 
+check('a throwing id getter is recorded, and never throws into the mod', () => {
+  // A malformed config (missing/wrong-typed id) is handled by translate's own
+  // validation. This is the sharper case: reading `id` itself throws, which
+  // happens before translate ever gets a chance to validate anything.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  const evil = {}
+  Object.defineProperty(evil, 'id', { get() { throw new Error('boom') } })
+  let threw = false
+  try {
+    g.corelib.elements.registerElement(evil)
+  } catch (_e) { threw = true }
+  assert(!threw, 'a throwing id getter escaped the shim')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(r.captured.unsupported[0].kind === 'element', 'wrong kind: ' + r.captured.unsupported[0].kind)
+  return r.captured.unsupported[0].reason
+})
+
+check('a throwing config getter in a recipe call never throws into the mod', () => {
+  // Same exposure in the recipe shim: it reads config.input / config.id
+  // directly before note() ever runs.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  const evil = {}
+  Object.defineProperty(evil, 'input', { get() { throw new Error('boom') } })
+  let threw = false
+  try {
+    g.corelib.recipes.registerPressRecipe(evil)
+  } catch (_e) { threw = true }
+  assert(!threw, 'a throwing config getter escaped the recipe shim')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(r.captured.unsupported[0].kind === 'recipe', 'wrong kind: ' + r.captured.unsupported[0].kind)
+  return r.captured.unsupported[0].reason
+})
+
 check('only the patches the bridge takes over are suppressed', () => {
   // corelib has ~50 subsystems. Dropping more than the bridge replaces would
   // break the ones whose anchors still match this build.
