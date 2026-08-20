@@ -1116,7 +1116,7 @@ i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pr
           <dl>
             <dt>Steam branch</dt><dd><code>public</code> — the default, what you get unless you opted in</dd>
             <dt>Modding API</dt><dd>Legacy Sandkit — state-first calls such as <code>api.elements.createAt(state, …)</code></dd>
-            <dt>Status here</dt><dd>Built against it, verified against it, 123/123 self-tests green on 0.5.5</dd>
+            <dt>Status here</dt><dd>Built against it, verified against it, 130/130 self-tests green on 0.5.5</dd>
           </dl>
         </div>
         <div class="branch no">
@@ -1973,7 +1973,7 @@ docs/         mod authoring guide</code></pre></div>
       <div class="tablewrap"><table><tbody>
         <tr><td><strong>Version</strong></td><td>SandLoader 0.3.4</td></tr>
         <tr><td><strong>Verified against</strong></td><td>Sandustry 0.5.5</td></tr>
-        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">123 / 123 passing</span></td></tr>
+        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">130 / 130 passing</span></td></tr>
         <tr><td><strong>Dependencies</strong></td><td>None</td></tr>
         <tr><td><strong>License</strong></td><td>MIT</td></tr>
       </tbody></table></div>
@@ -2037,7 +2037,10 @@ docs/         mod authoring guide</code></pre></div>
         <div class="a"><p>Yes, unmodified. SandLoader reads their <code>modinfo.json</code>, runs
         all three entrypoints, provides the <code>fluxloaderAPI</code> global, translates their
         patches onto its own patch engine, and persists their config. It shares no code with that
-        project — it answers the same interface.</p></div></details>
+        project — it answers the same interface.</p>
+        <p>Library mods work too: <code>corelib</code> and the mods that build on it load in
+        dependency order and share one global scope, so a mod can call
+        <code>corelib.elements.registerElement(…)</code> exactly as it does under Fluxloader.</p></div></details>
       <details><summary>Why does it need Node.js?</summary>
         <div class="a"><p>Only to run the installer, which locates your game and writes the
         attach point. The loader itself runs inside the game's own Electron process and needs
@@ -2071,7 +2074,7 @@ docs/         mod authoring guide</code></pre></div>
     </div>
   </div>
   <div class="legal">
-    <span>SandLoader 0.3.4 · verified against Sandustry 0.5.5 · self-test 123/123</span>
+    <span>SandLoader 0.3.4 · verified against Sandustry 0.5.5 · self-test 130/130</span>
     <span>Not affiliated with the authors of Sandustry.</span>
   </div>
 </footer>
