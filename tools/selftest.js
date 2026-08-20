@@ -4198,10 +4198,17 @@ check('the renderer bridge registers captured content through SMLN', () => {
   const SMLN = {
     log: (level, msg) => calls.logs.push(level + ': ' + msg),
     whenReady: (fn) => fn(),
+    // The real callMain wraps a handler's return value in an {ok, value}
+    // envelope - verified against the live game. A fake that returns the bare
+    // payload lets a renderer that forgets to unwrap pass here and register
+    // nothing in production, which is exactly what happened.
     callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
-      elements: [{ id: 'Trash', def: { id: 'Trash', matterType: 6 } }],
-      soils: [{ id: 'TrashSoil', def: { id: 'TrashSoil' } }],
-      unsupported: [{ kind: 'recipe', id: 'Trash', reason: 'no recipe registry on this build' }],
+      ok: true,
+      value: {
+        elements: [{ id: 'Trash', def: { id: 'Trash', matterType: 6 } }],
+        soils: [{ id: 'TrashSoil', def: { id: 'TrashSoil' } }],
+        unsupported: [{ kind: 'recipe', id: 'Trash', reason: 'no recipe registry on this build' }],
+      },
     } : null),
     register: {
       as: () => ({

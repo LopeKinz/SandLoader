@@ -21,8 +21,20 @@
 
   SMLN.whenReady(function () {
     if (typeof SMLN.callMain !== 'function') return
-    SMLN.callMain('smln:flux-content').then(function (payload) {
-      if (!payload) return
+    SMLN.callMain('smln:flux-content').then(function (reply) {
+      // callMain wraps a handler's return value in an {ok, value} envelope, as
+      // every other caller here unwraps (see hotreload.js). Reading the payload
+      // straight off the reply finds undefined everywhere and registers
+      // nothing, silently - which is exactly what it did before this line.
+      if (!reply) return
+      var payload = reply && reply.ok !== undefined ? reply.value : reply
+      if (!payload) {
+        if (reply && reply.ok === false) {
+          SMLN.log('error', 'fluxloader content bridge: ' +
+            (reply.error || 'the main process refused the request'))
+        }
+        return
+      }
       var api = SMLN.register.as('corelib')
       var elements = payload.elements || []
       var soils = payload.soils || []
