@@ -300,6 +300,35 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   const errors = []
   const listeners = Object.create(null)
 
+  // Everything mods publish with `globalThis.x = ...` lands here, and every
+  // mod's context inherits from it. That is how a library mod exports its API:
+  // corelib ends on `globalThis.corelib = new CoreLib()` and its dependents
+  // call `corelib.elements.registerElement(...)` as a bare global.
+  const universe = {
+    console,
+    require,
+    process,
+    Buffer,
+    setTimeout,
+    setInterval,
+    clearTimeout,
+    clearInterval,
+    URL,
+    TextEncoder,
+    TextDecoder,
+    // Fluxloader's electron entrypoints run with these node builtins already
+    // in scope; mods use `path.join(...)` at top level without requiring it.
+    path,
+    fs,
+  }
+  universe.globalThis = universe
+
+  // Events a mod declared via registerEvent. Fluxloader distinguishes a
+  // declared event from a typo'd one: `trigger` on an unknown name is a
+  // programming error and throws, while `tryTrigger` is the tolerant variant
+  // used on hot paths where the listener may legitimately not exist yet.
+  const registered = new Set()
+
   const bus = {
     on(name, fn) { (listeners[name] || (listeners[name] = [])).push(fn) },
     off(name, fn) {
@@ -310,6 +339,31 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       for (const fn of listeners[name] || []) {
         try { fn(...args) } catch (e) { logger.error(`fl event ${name} handler failed: ${e.message}`) }
       }
+    },
+    /** Declare an extension point. Idempotent: re-registering is not an error. */
+    registerEvent(name) {
+      if (typeof name !== 'string' || !name) return false
+      registered.add(name)
+      if (!listeners[name]) listeners[name] = []
+      return true
+    },
+    isEventRegistered(name) { return registered.has(name) },
+    /**
+     * Fire a declared event. Throws on an undeclared name so a mistyped event
+     * surfaces at the call site instead of silently never firing.
+     */
+    trigger(name, ...args) {
+      if (!registered.has(name)) {
+        throw new Error(`event "${name}" was triggered before it was registered`)
+      }
+      bus.emit(name, ...args)
+      return true
+    },
+    /** Fire only if declared. Returns whether anything was dispatched. */
+    tryTrigger(name, ...args) {
+      if (!registered.has(name)) return false
+      bus.emit(name, ...args)
+      return true
     },
   }
 
@@ -327,21 +381,52 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       modLog.debug(`patch ${key} queued for ${target}`)
     }
 
+    function setTo(file, tag, patch) {
+      const target = normaliseTarget(file)
+      const list = patches[target] || (patches[target] = [])
+      const id = `${mod.id}:${tag}`
+      const i = list.findIndex((p) => p.id === id)
+      const built = toSmlnPatch(patch, mod.id, tag)
+      if (i >= 0) list[i] = built; else list.push(built)
+      tags.set(tag, target)
+    }
+
+    /**
+     * Apply one patch per file in a bundle map. The game ships the same logic
+     * across several bundles under different minified names, so mods pass
+     * `{ "js/bundle.js": ["Vh","d"], "js/336.bundle.js": ["n","l.ev"] }` and one
+     * mapper that receives that file's names as arguments. An array form (no
+     * per-file names) passes the filename instead. A throwing mapper is logged
+     * and skipped rather than aborting the other files: a bundle that this
+     * version of the game no longer ships should cost one patch, not all of them.
+     */
+    function mapPatch(fileMap, tag, mapFn, label) {
+      if (typeof mapFn !== 'function') {
+        modLog.error(`${label} ignored: mapper is not a function`)
+        return
+      }
+      const isArray = Array.isArray(fileMap)
+      const files = isArray ? fileMap : Object.keys(fileMap || {})
+      for (const f of files) {
+        try {
+          const names = isArray ? [f] : fileMap[f]
+          const built = Array.isArray(names) ? mapFn(...names) : mapFn(names)
+          if (!built) continue
+          if (tag) setTo(f, tag, built)
+          else addTo(f, built, isArray ? undefined : undefined)
+        } catch (e) {
+          modLog.error(`${label} failed for ${f}: ${e.message}`)
+        }
+      }
+    }
+
     const api = {
       version: '2.0.0-smln',
       modID: mod.id,
       modConfig: makeConfigStore(ctx.configDir, mod, modLog),
       events: bus,
       addPatch: (file, patch) => addTo(file, patch),
-      setPatch: (file, tag, patch) => {
-        const target = normaliseTarget(file)
-        const list = patches[target] || (patches[target] = [])
-        const id = `${mod.id}:${tag}`
-        const i = list.findIndex((p) => p.id === id)
-        const built = toSmlnPatch(patch, mod.id, tag)
-        if (i >= 0) list[i] = built; else list.push(built)
-        tags.set(tag, target)
-      },
+      setPatch: (file, tag, patch) => setTo(file, tag, patch),
       removePatch: (file, tag) => {
         const target = normaliseTarget(file)
         const list = patches[target] || []
@@ -349,19 +434,22 @@ function loadElectronEntrypoints(mods, ctx, logger) {
         const i = list.findIndex((p) => p.id === id)
         if (i >= 0) list.splice(i, 1)
       },
-      addMappedPatch: (fileMap, mapFn) => {
-        // fileMap: { file: tag } or [file]; mapFn produces the patch per file.
-        const files = Array.isArray(fileMap) ? fileMap : Object.keys(fileMap || {})
-        for (const f of files) {
-          try {
-            const built = mapFn(f)
-            if (built) addTo(f, built, Array.isArray(fileMap) ? undefined : fileMap[f])
-          } catch (e) {
-            modLog.error(`addMappedPatch failed for ${f}: ${e.message}`)
-          }
-        }
-      },
+      addMappedPatch: (fileMap, mapFn) => mapPatch(fileMap, undefined, mapFn, 'addMappedPatch'),
+      /**
+       * Same mapping as addMappedPatch but replaces any previous patch carrying
+       * the same tag, so a mod that re-runs its setup does not stack duplicates.
+       */
+      setMappedPatch: (fileMap, tag, mapFn) => mapPatch(fileMap, tag, mapFn, 'setMappedPatch'),
       log: (...a) => modLog.info(a.map(String).join(' ')),
+      /**
+       * The mods ROOT, not this mod's own folder: mods join it with a mod id
+       * (`path.join(getModsPath(), sourceMod, "img.png")`) to reach another
+       * mod's assets, so returning the mod folder would double the id segment.
+       * Derived per-mod rather than from a single configured root because mods
+       * load from several roots (local, userData, Workshop) and a sibling mod
+       * lives under the same root as the mod asking for it.
+       */
+      getModsPath: () => path.dirname(mod.dir),
     }
 
     // Real cross-context messaging and IPC, on SandLoader's existing
@@ -379,29 +467,70 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
     try {
       const source = fs.readFileSync(entry, 'utf8')
-      const sandbox = {
-        fluxloaderAPI: api,
-        console,
-        require,
-        module: { exports: {} },
-        exports: {},
-        __dirname: path.dirname(entry),
-        __filename: entry,
-        process,
-        Buffer,
-        setTimeout,
-        setInterval,
-        clearTimeout,
-        clearInterval,
-        URL,
-        TextEncoder,
-        TextDecoder,
-      }
-      sandbox.globalThis = sandbox
+      const modRoot = path.resolve(mod.dir)
+
+      // Each mod gets its OWN context whose global object inherits from the
+      // shared `universe`. Reads fall through to whatever other mods published
+      // there (`corelib`, `DataRegistry`, ...), while `fluxloaderAPI` and the
+      // other per-mod slots sit on the mod's own object and shadow it - so two
+      // mods cannot overwrite each other's id, config or channels, and a
+      // callback that fires later (corelib applies its patches from
+      // `fl:pre-scene-loaded`) still sees the API of the mod that registered
+      // it rather than whichever mod happened to load last.
+      const sandbox = Object.create(universe)
+      // `globalThis` points at the shared object, so a mod's own
+      // `globalThis.corelib = ...` publishes to every other mod, exactly as it
+      // does when Fluxloader runs these files in one scope.
+      sandbox.globalThis = universe
+      sandbox.fluxloaderAPI = api
+      const moduleObj = { exports: {} }
       vm.createContext(sandbox)
+
+      sandbox.module = moduleObj
+      sandbox.exports = moduleObj.exports
+      sandbox.__dirname = path.dirname(entry)
+      sandbox.__filename = entry
+
+      // Library mods split themselves across modules/*.js and pull them in at
+      // entrypoint scope, so every included file must share ONE scope: a class
+      // declared in modules/blocks.js has to be visible to the entrypoint and
+      // to the files included after it. Running each in the same context with
+      // `var`-style top-level bindings gives exactly that, which `require`
+      // (module-per-file, isolated scope) would not.
+      sandbox.includeVMScript = function includeVMScript(relative) {
+        if (typeof relative !== 'string' || !relative) {
+          throw new TypeError('includeVMScript expects a file path relative to the mod folder')
+        }
+        // Confine reads to the mod's own folder: an entrypoint must not be able
+        // to read the player's disk by way of "../../.." in an include path.
+        const target = path.resolve(modRoot, relative)
+        if (target !== modRoot && !target.startsWith(modRoot + path.sep)) {
+          throw new Error(`includeVMScript("${relative}") escapes the mod folder`)
+        }
+        if (!fs.existsSync(target)) {
+          throw new Error(`includeVMScript("${relative}") not found in ${mod.id}`)
+        }
+        const included = fs.readFileSync(target, 'utf8')
+        // Same context as the entrypoint, so a class declared here is visible
+        // to the entrypoint and to the files included after it, and this mod's
+        // own fluxloaderAPI is the one in scope.
+        new vm.Script(included, { filename: target }).runInContext(sandbox)
+        modLog.debug(`included ${relative}`)
+        return true
+      }
+
+      // Fluxloader mods call a bare log(level, tag, ...message). Route it at
+      // the matching level so a mod's own debug output stays debug-level here.
+      sandbox.log = function log(level, ...rest) {
+        const levels = ['debug', 'info', 'warn', 'error']
+        const lvl = levels.includes(level) ? level : 'info'
+        const parts = (levels.includes(level) ? rest : [level, ...rest])
+        modLog[lvl](parts.map((x) => (typeof x === 'string' ? x : String(x))).join(' '))
+      }
+
       new vm.Script(source, { filename: entry }).runInContext(sandbox)
 
-      const exported = sandbox.module.exports
+      const exported = moduleObj.exports
       if (exported && typeof exported.onLoad === 'function') exported.onLoad()
       modLog.info(`electron entrypoint loaded (${Object.keys(patches).length} patched file(s) so far)`)
     } catch (e) {
@@ -435,11 +564,19 @@ var api={};
 var __store=Object.assign(${JSON.stringify(defaults)},
   (g.__SMLN_FLUX_CONFIG__&&g.__SMLN_FLUX_CONFIG__[${id}])||{});
 function __bus(){
-  var L=Object.create(null);
-  return {on:function(n,f){(L[n]||(L[n]=[])).push(f);return function(){var a=L[n]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1)}},
+  var L=Object.create(null);var R=Object.create(null);
+  var B={on:function(n,f){(L[n]||(L[n]=[])).push(f);return function(){var a=L[n]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1)}},
           off:function(n,f){var a=L[n]||[],i=a.indexOf(f);if(i>=0)a.splice(i,1)},
           emit:function(n){var a=L[n]||[],r=[].slice.call(arguments,1);
             for(var i=0;i<a.length;i++){try{a[i].apply(null,r)}catch(e){console.error("[SMLN] fl event",n,e)}}}};
+  // Mirrors the electron-side bus: declared events can be triggered, an
+  // undeclared name throws from trigger and is a no-op for tryTrigger.
+  B.registerEvent=function(n){if(!n)return false;R[n]=true;if(!L[n])L[n]=[];return true};
+  B.isEventRegistered=function(n){return !!R[n]};
+  B.trigger=function(n){if(!R[n])throw new Error('event "'+n+'" was triggered before it was registered');
+    B.emit.apply(null,arguments);return true};
+  B.tryTrigger=function(n){if(!R[n])return false;B.emit.apply(null,arguments);return true};
+  return B;
 }
 api.version=${JSON.stringify(FLUXLOADER_COMPAT_VERSION + '-smln')};
 api.modID=${id};
@@ -466,6 +603,16 @@ if(S){
   api.game=function(){return S.game};
   api.state=function(){return S.getState()};
 }
+// The live simulation state. Mods read this every frame and treat it as a
+// plain property, so it is a getter over the host's current state rather than
+// a value captured once at load - a snapshot would go stale on the first
+// scene change and silently hand mods a dead object. Defined whether or not
+// the host bridge exists yet so that reading it early yields undefined
+// instead of throwing on a missing global.
+function __state(){try{return S&&typeof S.getState==="function"?S.getState():undefined}catch(e){return undefined}}
+Object.defineProperty(api,"gameInstanceState",{enumerable:true,get:__state});
+api.gameInstance={};
+Object.defineProperty(api.gameInstance,"state",{enumerable:true,get:__state});
 // Kept for mods that reach for the global rather than the local binding. The
 // local one below is authoritative; this is a best-effort convenience and the
 // last mod to load wins it, which is exactly why the local exists.
@@ -490,8 +637,13 @@ var fluxloaderAPI=api;
  * @returns {string}
  */
 function wrapEntrypoint(mod, environment, source) {
+  // The IIFE is async because mod entrypoints legitimately use top-level
+  // `await` (corelib ends on `await corelib.init()`); a plain function wrapper
+  // turns that into a SyntaxError that kills the whole bundle, not just the mod.
+  // `.catch` mirrors the try/catch for rejections that escape after the first
+  // await, which a bare try/catch around an async body would not see.
   return `/* --- fluxloader mod (${environment}): ${mod.id}@${mod.version} --- */
-;(function(){
+;(async function(){
 'use strict';
 try{
 ${environmentShim(mod, environment)}
@@ -499,7 +651,9 @@ ${source}
 }catch(e){
   console.error("[SMLN] fluxloader mod ${JSON.stringify(mod.id).slice(1, -1)} (${environment}) failed:", e);
 }
-})();`
+})().catch(function(e){
+  console.error("[SMLN] fluxloader mod ${JSON.stringify(mod.id).slice(1, -1)} (${environment}) failed:", e);
+});`
 }
 
 module.exports = {

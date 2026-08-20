@@ -68,6 +68,14 @@ function check(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg) }
 
+/** A logger that satisfies the compat layer's interface without printing. */
+function testLogger() {
+  const noop = () => {}
+  const l = { debug: noop, info: noop, warn: noop, error: noop }
+  l.child = () => l
+  return l
+}
+
 console.log('\nSandLoader self-test\n')
 
 // ---------------------------------------------------------------- discovery
@@ -325,6 +333,199 @@ check('fluxloaderAPI shim is valid JS and self-installs', () => {
   assert(typeof sandbox.fluxloaderAPI.events.on === 'function', 'no event bus')
   assert(sandbox.fluxloaderAPI.modConfig.getSync('a') === 1, 'config default missing')
   return 'events + modConfig present'
+})
+
+check('a library mod can include its own module files', () => {
+  // corelib and the mods built on it split their code across modules/*.js and
+  // pull them in with includeVMScript at entrypoint scope. Without it the very
+  // first line of such a mod throws ReferenceError and the game never starts.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-inc-'))
+  fs.mkdirSync(path.join(dir, 'modules'))
+  fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
+    modID: 'libmod', version: '1.0.0', electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(dir, 'modules', 'thing.js'),
+    'class ThingModule { hello() { return "from-module" } }')
+  fs.writeFileSync(path.join(dir, 'entry.electron.js'),
+    'includeVMScript("modules/thing.js");\n' +
+    'log("debug", "libmod", "loaded");\n' +
+    'globalThis.result = new ThingModule().hello();\n' +
+    'module.exports = { probe: () => globalThis.result }')
+  const r = flCompat.readMod(dir)
+  assert(r.ok, 'read failed')
+  const out = flCompat.loadElectronEntrypoints([r.mod], { configDir: dir }, testLogger())
+  assert(out.errors.length === 0, 'entrypoint threw: ' + (out.errors[0] && out.errors[0].message))
+  fs.rmSync(dir, { recursive: true, force: true })
+  return 'includeVMScript + log available at entrypoint scope'
+})
+
+check('mods can declare and fire their own events', () => {
+  // registerEvent/trigger/tryTrigger are how library mods expose extension
+  // points to the mods that depend on them. trigger on an unregistered name is
+  // a programming error and must say so; tryTrigger is the tolerant variant.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-evt-'))
+  fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
+    modID: 'evtmod', version: '1.0.0', electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(dir, 'entry.electron.js'),
+    'fluxloaderAPI.events.registerEvent("cl:ready");\n' +
+    'globalThis.seen = [];\n' +
+    'fluxloaderAPI.events.on("cl:ready", (v) => globalThis.seen.push(v));\n' +
+    'fluxloaderAPI.events.trigger("cl:ready", 1);\n' +
+    'fluxloaderAPI.events.tryTrigger("cl:never-registered", 2);\n' +
+    'globalThis.threw = false;\n' +
+    'try { fluxloaderAPI.events.trigger("cl:never-registered", 3) }\n' +
+    'catch (e) { globalThis.threw = true }')
+  const r = flCompat.readMod(dir)
+  const out = flCompat.loadElectronEntrypoints([r.mod], { configDir: dir }, testLogger())
+  assert(out.errors.length === 0, 'entrypoint threw: ' + (out.errors[0] && out.errors[0].message))
+  fs.rmSync(dir, { recursive: true, force: true })
+  return 'registerEvent, trigger, tryTrigger'
+})
+
+check('the shim exposes events and game state to game and worker code', () => {
+  // Worker code reaches for gameInstanceState; game code for gameInstance.state.
+  // Both must exist before the mod's first frame or corelib's helpers throw.
+  for (const env of ['game', 'worker']) {
+    const src = flCompat.environmentShim({ id: 'demo', configSchema: {} }, env)
+    const sandbox = { console: { log() {}, error() {} }, self: {} }
+    sandbox.globalThis = sandbox
+    vm.createContext(sandbox)
+    new vm.Script(src, { filename: 'shim-' + env + '.js' }).runInContext(sandbox)
+    const api = sandbox.fluxloaderAPI
+    assert(typeof api.events.registerEvent === 'function', env + ': no registerEvent')
+    assert(typeof api.events.trigger === 'function', env + ': no trigger')
+    assert(typeof api.events.tryTrigger === 'function', env + ': no tryTrigger')
+    assert('gameInstanceState' in api, env + ': no gameInstanceState')
+    assert(api.gameInstance && 'state' in api.gameInstance, env + ': no gameInstance.state')
+  }
+  return 'events + gameInstance.state in both environments'
+})
+
+check('a library mod publishes globals its dependents can see', () => {
+  // Fluxloader runs every electron entrypoint in ONE shared global scope, which
+  // is how a library mod exports an API: corelib sets globalThis.corelib and
+  // the mods that depend on it call corelib.elements.registerElement(...) at
+  // top level. Giving each mod a private globalThis silently breaks every
+  // library-and-dependent pair - the dependent throws "corelib is not defined".
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-shared-'))
+  const libDir = path.join(root, 'lib')
+  const useDir = path.join(root, 'user')
+  fs.mkdirSync(libDir); fs.mkdirSync(useDir)
+  fs.writeFileSync(path.join(libDir, 'modinfo.json'), JSON.stringify({
+    modID: 'lib', version: '1.0.0', electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(libDir, 'entry.electron.js'),
+    'globalThis.lib = { hits: [], add(x) { this.hits.push(x) } };')
+  fs.writeFileSync(path.join(useDir, 'modinfo.json'), JSON.stringify({
+    modID: 'user', version: '1.0.0', dependencies: { lib: '^1.0.0' },
+    electronEntrypoint: 'entry.electron.js',
+  }))
+  // Bare global, exactly how trashelement calls corelib.
+  fs.writeFileSync(path.join(useDir, 'entry.electron.js'), 'lib.add("registered");')
+  const lib = flCompat.readMod(libDir)
+  const user = flCompat.readMod(useDir)
+  assert(lib.ok && user.ok, 'manifests rejected')
+  const out = flCompat.loadElectronEntrypoints(
+    [lib.mod, user.mod], { configDir: root }, testLogger())
+  assert(out.errors.length === 0, 'dependent failed: ' + (out.errors[0] && out.errors[0].message))
+  fs.rmSync(root, { recursive: true, force: true })
+  return 'dependent reached the library global'
+})
+
+check('fluxloader mods load dependencies before dependents', () => {
+  // Discovery walks directories, so without an explicit sort the load order is
+  // whatever readdir returned. A dependent that sorts before its library then
+  // runs first and cannot see it - a bug that hides whenever the names happen
+  // to be alphabetically favourable, as "corelib" < "trashelement" is.
+  const mods = [
+    { id: 'aaa', version: '1.0.0', enabled: true, priority: 100,
+      dependencies: [{ id: 'zzz', range: '^1.0.0', optional: false }], dependencyIds: ['zzz'] },
+    { id: 'zzz', version: '1.0.0', enabled: true, priority: 100,
+      dependencies: [], dependencyIds: [] },
+  ]
+  const r = modLoader.resolveOrder(mods)
+  const ids = r.order.map((m) => m.id)
+  assert(ids.indexOf('zzz') < ids.indexOf('aaa'),
+    'dependency did not sort before dependent: ' + ids.join(', '))
+  return ids.join(' -> ')
+})
+
+check('a mod that depends on corelib gets its content into the game', () => {
+  // The failure this guards against: trashelement calls the bare global
+  // `corelib.elements.registerElement(...)`, so it needs corelib's global to
+  // survive into its scope, corelib's own patches to stay attributed to
+  // corelib, and its elements to end up in the text patched into the bundle.
+  const coreDir = path.join(__dirname, '..', 'mods', 'corelib')
+  const modDir = path.join(__dirname, '..', 'mods', 'trashelement')
+  if (!fs.existsSync(coreDir) || !fs.existsSync(modDir)) return 'skipped - mods not installed'
+  const core = flCompat.readMod(coreDir)
+  const dep = flCompat.readMod(modDir)
+  assert(core.ok && dep.ok, 'manifests rejected')
+  const handlers = {}
+  const out = flCompat.loadElectronEntrypoints([core.mod, dep.mod], {
+    configDir: coreDir, rpc: { register: (ch, fn) => { handlers[ch] = fn } },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+  out.events.emit('fl:pre-scene-loaded')
+
+  // corelib's patches must stay corelib's. They are queued from a deferred
+  // callback, so a shared-but-mutable fluxloaderAPI filed them all under
+  // whichever mod loaded last.
+  for (const file of Object.keys(out.patches)) {
+    for (const p of out.patches[file]) {
+      assert(p.owner === 'corelib', `patch ${p.id} attributed to ${p.owner}, not corelib`)
+    }
+  }
+
+  // The registered element has to reach the text that gets patched in. The
+  // replacement is a function for token-style patches, so ask it, rather than
+  // string-searching the patch object, which would silently pass.
+  let found = false
+  for (const p of out.patches['js/bundle.js'] || []) {
+    if (!String(p.id).includes('elements:elementRegistry')) continue
+    const text = typeof p.replace === 'function' ? p.replace(p.find) : String(p.replace || '')
+    if (text.includes('Trash')) found = true
+  }
+  assert(found, 'the dependent element never reached the element registry patch')
+  return 'globals shared, patches attributed to corelib, element injected'
+})
+
+check('corelib loads and registers its patches end to end', () => {
+  // corelib is the dependency most Fluxloader mods build on, and it exercises
+  // nearly all of the compat surface at once: includeVMScript, the bare log(),
+  // registerEvent/trigger, setPatch/setMappedPatch and getModsPath. If this
+  // regresses, every mod that depends on corelib stops loading with it.
+  const dir = path.join(__dirname, '..', 'mods', 'corelib')
+  if (!fs.existsSync(dir)) return 'skipped - corelib not installed'
+  const r = flCompat.readMod(dir)
+  assert(r.ok, 'corelib manifest rejected')
+  const out = flCompat.loadElectronEntrypoints(
+    [r.mod], { configDir: dir }, testLogger())
+  assert(out.errors.length === 0, 'corelib failed to load: ' + (out.errors[0] && out.errors[0].message))
+  // Patches are queued from the scene hook, not at load, so fire it.
+  out.events.emit('fl:pre-scene-loaded')
+  const files = Object.keys(out.patches)
+  let total = 0
+  for (const f of files) total += out.patches[f].length
+  assert(files.length > 0 && total > 0, 'corelib registered no patches')
+  // corelib declares this and triggers it at the end of applyPatches; if the
+  // module chain died halfway the event would never have been registered.
+  assert(out.events.isEventRegistered('cl:patches-applied'), 'corelib did not finish applying patches')
+  return `${total} patches across ${files.length} bundle(s)`
+})
+
+check('a mod entrypoint may use top-level await', () => {
+  // corelib ends on `await corelib.init()`. Wrapped in a non-async function
+  // that is a SyntaxError, which takes down the whole concatenated bundle -
+  // every other mod in it included, not just the one that used await.
+  for (const env of ['game', 'worker']) {
+    const src = flCompat.wrapEntrypoint(
+      { id: 'demo', version: '1.0.0', configSchema: {} }, env,
+      'await Promise.resolve(1);')
+    new vm.Script(src, { filename: 'await-' + env + '.js' })
+  }
+  return 'top-level await parses in game and worker wrappers'
 })
 
 check('worker bundles exist and are patchable targets', () => {

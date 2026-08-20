@@ -278,7 +278,7 @@ Platform
 SandLoader
   path      C:\GOG Games\Sandustry\resources\app
   status    INSTALLED
-  version   0.3.0
+  version   0.3.4
   steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 ```
 
@@ -825,9 +825,50 @@ An honest list:
 
 ## Changelog
 
-### Unreleased
+### 0.3.4
 
-Self-test: 123 checks (+19).
+Verified against Sandustry 0.5.5. Self-test: 130 checks (+26).
+
+This run makes **corelib** work, and with it the Fluxloader mods that depend on
+it — a chain of bugs sat between a corelib mod and a running game, each one only
+reachable once the one in front of it was gone. It also adds installing mods
+straight from the Steam Workshop.
+
+**Fixed — corelib loads, and mods that depend on it register their content**
+
+- The compat layer never implemented `includeVMScript`, so corelib threw
+  `ReferenceError` on line 12 of its electron entrypoint, before any mod
+  initialised, and the game did not start. Included files now run in their
+  mod's own context, so a class declared in `modules/blocks.js` is visible to
+  the entrypoint and to the files included after it. Reads are confined to the
+  mod's own folder.
+- Also missing, and each its own failure once the one before it was fixed: the
+  bare `log()` global (corelib calls it 56 times), `events.registerEvent` /
+  `trigger` / `tryTrigger`, `gameInstance.state` and `gameInstanceState`,
+  `setMappedPatch`, and `getModsPath`. `addMappedPatch` ignored the per-bundle
+  variable-name arrays mods pass it. `path` and `fs` are in scope for electron
+  entrypoints, as they are under Fluxloader.
+- Mod entrypoints may use top-level `await`. corelib's game entrypoint ends on
+  `await corelib.init()`, which was a `SyntaxError` inside the old non-async
+  wrapper — and that took down every mod in the concatenated bundle, not just
+  the one that used it.
+- A mod that depends on a library mod could not see it. Each mod ran in its own
+  context, so corelib's `globalThis.corelib = new CoreLib()` never reached its
+  dependents and they died on `corelib is not defined`. Each mod now gets its
+  own context whose global **inherits** from one shared object: reads fall
+  through to what other mods published, while `fluxloaderAPI` stays per-mod and
+  shadows it. The isolation added in 0.2.0 — two mods cannot overwrite each
+  other's id, config or channels — is unchanged.
+- Every patch corelib registered was attributed to whichever mod loaded last.
+  corelib queues its patches from a deferred `fl:pre-scene-loaded` callback,
+  and a shared-but-mutable `fluxloaderAPI` resolves when the callback *fires*,
+  not when it was created. All 92 of corelib's patches were filed under the
+  wrong mod, breaking attribution, `removePatch` and conflict reporting.
+- Fluxloader mods are now ordered by dependency before loading. Discovery
+  returns directory order, which was correct only while the names happened to
+  sort favourably (`corelib` < `trashelement`); a dependent named earlier in the
+  alphabet loaded first and failed. Uses the existing resolver, so version
+  ranges and dependency cycles are reported the same way as for SMLN mods.
 
 **Added — Install from Workshop**
 
@@ -1097,7 +1138,7 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.3.0**, verified against **Sandustry 0.5.5**. Self-test: **123/123**.
+SandLoader **0.3.4**, verified against **Sandustry 0.5.5**. Self-test: **130/130**.
 
 ## License
 

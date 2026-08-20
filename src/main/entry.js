@@ -1049,7 +1049,15 @@ function assemble() {
       }
     }
 
-    const flActive = runtime.flMods.filter((m) => m.enabled !== false)
+    // Order by dependency before loading. Fluxloader library mods publish an
+    // API on the shared global (corelib sets globalThis.corelib) and their
+    // dependents read it at entrypoint top level, so a dependent that runs
+    // first dies on "corelib is not defined". Discovery returns directory
+    // order, which only happens to be right when the names sort favourably.
+    const flEnabled = runtime.flMods.filter((m) => m.enabled !== false)
+    const flResolved = modLoader.resolveOrder(flEnabled)
+    for (const e of flResolved.errors) note(e, 'fluxloader', e.detail && e.detail.mod, 'warn')
+    const flActive = flResolved.order.length ? flResolved.order : flEnabled
     if (flActive.length) {
       const flLoaded = flCompat.loadElectronEntrypoints(flActive, {
         configDir: runtime.configDir,
