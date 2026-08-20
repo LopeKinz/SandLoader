@@ -1,0 +1,94 @@
+name: Deploy website
+
+# GitHub Pages' branch deployment can only serve the repository root or /docs,
+# and the site lives in /website - so it is uploaded as an artifact instead.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; never cancel one that is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+
+      # index.html is generated from the four sources beside it. If someone
+      # edited it by hand, or edited a source without rebuilding, the committed
+      # file is stale - fail here rather than publish it.
+      - name: Verify index.html matches its sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          node website/build.js --check
+
+      # jsdom is deliberately not a project dependency: SandLoader itself ships
+      # with none. It is installed here only, and only for the test run.
+      - name: Install test-only dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund jsdom
+
+      - name: Run website tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node website/layouttest.js
+          node website/sitetest.js
+
+      # index.html is self-contained - it references no sibling file - so only
+      # it is published. The sources and tests stay in the repo, off the site.
+      - name: Stage the published files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp website/index.html _site/index.html
+          touch _site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

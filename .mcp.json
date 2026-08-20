@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sandustry": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:\\Users\\Marc\\Documents\\Sandloader\\mods\\sandustry-mcp\\mcp-server.js"
+      ]
+    }
+  }
+}

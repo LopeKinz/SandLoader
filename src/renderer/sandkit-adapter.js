@@ -1,0 +1,311 @@
+/* eslint-env browser */
+'use strict'
+/**
+ * One API surface across two Sandkit generations.
+ *
+ * Sandustry's official API exists in two shapes right now:
+ *
+ *   legacy (0.5.4, default branch) - state-first, older names
+ *     api.elements.createAt(state, x, y, type, opts)
+ *     api.elements.getElementTypeFromId(state, "copper")
+ *     api.structures.isTypeAt(state, x, y, "goldBattery")
+ *
+ *   v1 (mods branch) - state bound, "...AtCell" naming
+ *     api.elements.createAtCellWhenIdle(x, y, type, opts)
+ *     api.elements.getTypeFromId("copper")
+ *     api.structures.isTypeAtCell(x, y, "goldBattery")
+ *
+ * `SMLN.api` presents the **v1 names** on both, so a mod is written once. On a
+ * legacy build the adapter binds the live state as the first argument and
+ * translates the handful of names that were renamed.
+ *
+ * Two deliberate properties:
+ *
+ *  - Unknown methods still work. Anything not in the alias table is passed
+ *    through under its own name, state-bound on legacy builds, so the adapter
+ *    never becomes the reason a call is unavailable.
+ *  - `SMLN.api.generation` says which shape was detected, and `SMLN.sandkit`
+ *    remains the raw, unadapted object for anyone who needs it.
+ */
+;(function installSandkitAdapter(global) {
+  var SMLN = global.__SMLN__
+  if (!SMLN) return
+
+  /**
+   * v1 name -> legacy name, for the calls whose names actually changed.
+   * Verified against 0.5.4's bundle; anything absent here passes through.
+   */
+  var ALIASES = {
+    authorization: {
+      canBuildAtCell: 'canBuild',
+      canGrabAtCell: 'canGrab',
+      canUseToolAtCell: 'canUseToolAt',
+      getZoneIdAtCell: 'getZoneIdAt',
+    },
+    collector: {
+      getValueByType: 'getValueFromElementType',
+      isCellIdCollectable: 'isCellCollectable',
+      isCellIdCollectableForSprite: 'isCellCollectableForSprite',
+      notifyPickupAtCell: 'notifyPickup',
+    },
+    discoveries: {
+      addElementByType: 'addElement',
+      addTerrainByType: 'addTerrain',
+    },
+    fire: {
+      burnElementAtCell: 'burnElementAt',
+      burnElementAtCellWhenIdle: 'burnElementAt',
+      canBurnElementAtCell: 'canBurnElementAt',
+    },
+    grid: {
+      forEachCellInRect: 'iterateRect',
+      forEachCellInCircle: 'iterateCircle',
+    },
+    patterns: {
+      excavateAtCell: 'excavate',
+    },
+    raycast: {
+      castFromWorld: 'cast',
+    },
+    upgrades: {
+      getLevelById: 'getLevel',
+      getAvailableLevelById: 'getAvailableLevel',
+    },
+    sprites: {
+      loadFromMod: 'load',
+      getById: 'get',
+    },
+    items: {
+      createFromId: 'create',
+      isActiveById: 'isActive',
+    },
+    effects: {
+      createDistortionWaveAtWorld: 'createDistortionWave',
+      createLaserAtWorld: 'createLaser',
+      createLightAtWorld: 'createLight',
+      createParticlesAtWorld: 'createParticles',
+      createEffectAtWorld: 'createEffect',
+    },
+    tech: {
+      getDefinitionById: 'getDefinition',
+      isLockedById: 'isLocked',
+      setLockedById: 'setLocked',
+    },
+    elements: {
+      setVelocityAtCellWhenIdle: 'setVelocity',
+      convertToParticleAtCellWhenIdle: 'convertToParticle',
+      convertFromParticleAtCellWhenIdle: 'convertFromParticle',
+      setDurationAtCellWhenIdle: 'setDuration',
+      findFreeCellInStructure: 'findFreePositionInStructure',
+      isTypeAtCell: 'isTypeAt',
+      isFreeFallingAtCell: 'isFreeFalling',
+      getVelocityAtCell: 'getVelocity',
+      getDataFieldAtCell: 'getDataField',
+      createAtCellWhenIdle: 'createAt',
+      replaceAtCellWhenIdle: 'replaceAt',
+      removeAtCellWhenIdle: 'removeAt',
+      teleportBetweenCellsWhenIdle: 'teleport',
+      addParticleVelocityAtCellWhenIdle: 'addParticleVelocity',
+      refreshColorAtCellWhenIdle: 'refreshColorAt',
+      setPhysicsAtCellWhenIdle: 'setPhysics',
+      setDataFieldAtCellWhenIdle: 'setDataField',
+      getTypeFromId: 'getElementTypeFromId',
+      getTypeAtCell: 'getElementTypeAtPos',
+      getResolvedTypeAtCell: 'getResolvedTypeAtPos',
+      getResolvedTypeFromCellId: 'getResolvedTypeFromCellId',
+      getMatterTypeAtCell: 'getMatterTypeAtPos',
+      getInfoAtCell: 'getInfoAtPos',
+      getNameByType: 'getName',
+      addInteractionInfo: 'addInteraction',
+    },
+    terrains: {
+      getTypeAtCell: 'getGroundCellTypeAtPos',
+      damageAtCell: 'damageTerrain',
+      isCellIdTerrain: 'isTerrain',
+      createAtCellWhenIdle: 'createAt',
+      replaceAtCellWhenIdle: 'replaceAt',
+      removeAtCellWhenIdle: 'removeAt',
+      getTypeFromId: 'world.getCellTypeByName',
+      isAtCell: 'isPosTerrain',
+      isTypeAtCell: 'isPosTerrainId',
+      getDataAtCell: 'getTerrainData',
+      setHpAtCellWhenIdle: 'setTerrainHP',
+    },
+    structures: {
+      setSpritesheetIndexAtCell: 'setSpritesheetIndexAt',
+      setSpritesheetIndexByValueAtCell: 'setSpritesheetIndexByValueAt',
+      removeAtCellsWhenIdle: 'removeAtPositions',
+      isUnlockedByType: 'isUnlocked',
+      isTypeAtCell: 'isTypeAt',
+      getAtCell: 'getAtCell',
+      hasBuiltAtCell: 'hasBuiltAtCell',
+      buildAtCellWhenIdle: 'build',
+      removeAtCellWhenIdle: 'removeAt',
+      removeBetweenCellsWhenIdle: 'removeBetween',
+      getTypeFromId: 'resolveTypeName',
+      isBlockedByPlayerAtCell: 'isBlockedByPlayer',
+      isLauncherAtCell: 'isLauncherAt',
+    },
+    world: {
+      getCellIdAtCell: 'getCellId',
+      isCellEmptyAtCell: 'isCellEmpty',
+      isTerrainAtCell: 'isTerrainAt',
+      excavateAtCell: 'excavate',
+      reportActivityAtCell: 'reportActivityToChunk',
+      redrawAroundCellWhenIdle: 'redrawSurroundingCells',
+    },
+    player: {
+      isCollidingWithCell: 'isCollidingWithCell',
+      getWorldPosition: 'getPosition',
+      setWorldPosition: 'setPosition',
+      isWithinRadiusOfCell: 'isWithinRadius',
+      isWorldPositionClear: 'isPositionClear',
+    },
+  }
+
+  /**
+   * Namespaces and methods that do NOT take the live state as their first
+   * argument, even on a legacy build where almost everything does.
+   *
+   * `true` means the whole namespace takes no state; an object names the
+   * individual methods that do not.
+   *
+   * Determined from the game's own call sites, which is the only reliable
+   * source - the FH definition looks identical either way:
+   *
+   *   FH.i18n.t("ui|common|thousandsShort")   <- literal, so no state
+   *   FH.storage.get(e, ...)                  <- state
+   *
+   * i18n being wrong here is what produced "[MISSING: tech|uolkxChemistry|name]"
+   * in the tech tree: `register("en", table)` became `register(state, "en")`
+   * and the table was dropped, so every mod-supplied string was lost.
+   */
+  var NO_STATE_ARG = {
+    i18n: true,
+    utils: true,
+    random: true,
+    tech: { getDefinition: true, addDefinition: true, updateDefinition: true },
+  }
+
+  /** A method only the newer generation has. */
+  function detect(raw) {
+    if (!raw || !raw.elements) return 'unknown'
+    if (typeof raw.elements.createAtCellWhenIdle === 'function') return 'v1'
+    if (typeof raw.elements.createAt === 'function') return 'legacy'
+    return 'unknown'
+  }
+
+  /**
+   * Bind a method that lives on a different namespace than the alias exposing
+   * it. `this` must stay its own namespace, not the aliasing one.
+   */
+  function bindCross(owner, fn, bindState) {
+    if (!bindState) return fn.bind(owner)
+    return function () {
+      var args = new Array(arguments.length + 1)
+      args[0] = SMLN.getState()
+      for (var i = 0; i < arguments.length; i++) args[i + 1] = arguments[i]
+      return fn.apply(owner, args)
+    }
+  }
+
+  /**
+   * Wrap one namespace. On legacy builds every call gets the live state
+   * injected ahead of its own arguments.
+   */
+  function adaptNamespace(raw, nsName, bindState, root) {
+    var aliases = ALIASES[nsName] || {}
+    var out = {}
+
+    var exceptions = NO_STATE_ARG[nsName] || {}
+    var wholeNamespace = exceptions === true
+
+    function wrap(fn, methodName) {
+      // Some methods take no state even on a legacy build; binding it would
+      // shift every argument by one. See NO_STATE_ARG.
+      if (!bindState || wholeNamespace || exceptions[methodName]) return fn.bind(raw)
+      return function () {
+        var args = new Array(arguments.length + 1)
+        args[0] = SMLN.getState()
+        for (var i = 0; i < arguments.length; i++) args[i + 1] = arguments[i]
+        return fn.apply(raw, args)
+      }
+    }
+
+    // Pass everything through under its own name first.
+    for (var key in raw) {
+      try {
+        var value = raw[key]
+        if (typeof value === 'function') out[key] = wrap(value, key)
+        else out[key] = value
+      } catch (_) { /* exotic getter; skip it rather than fail the whole namespace */ }
+    }
+
+    // Then add the v1 spellings on top, where the target exists.
+    //
+    // A target may name another namespace ('world.getCellTypeByName'). 0.5.5
+    // has no terrains-level id lookup at all - `getTerrainTypeFromId` appears
+    // nowhere in the bundle - so the only honest mapping for
+    // `terrains.getTypeFromId` crosses namespaces. Resolve against the root
+    // sandkit object, and bind state from the owning namespace so the call
+    // still receives it.
+    for (var v1 in aliases) {
+      var legacyName = aliases[v1]
+      if (typeof out[v1] === 'function') continue
+
+      var dot = legacyName.indexOf('.')
+      if (dot === -1) {
+        if (raw && typeof raw[legacyName] === 'function') out[v1] = wrap(raw[legacyName], legacyName)
+        continue
+      }
+
+      var ownerName = legacyName.slice(0, dot)
+      var methodName = legacyName.slice(dot + 1)
+      var owner = root && root[ownerName]
+      if (!owner || typeof owner[methodName] !== 'function') continue
+
+      var ownerExceptions = NO_STATE_ARG[ownerName] || {}
+      var ownerSkipsState = ownerExceptions === true || ownerExceptions[methodName] === true
+      out[v1] = bindCross(owner, owner[methodName], bindState && !ownerSkipsState)
+    }
+
+    return out
+  }
+
+  function build(raw) {
+    var generation = detect(raw)
+    if (generation === 'unknown') return null
+    var bindState = generation === 'legacy'
+
+    var api = { generation: generation, raw: raw }
+    for (var ns in raw) {
+      try {
+        var value = raw[ns]
+        api[ns] = value && typeof value === 'object'
+          ? adaptNamespace(value, ns, bindState, raw)
+          : value
+      } catch (_) { /* keep going; one bad namespace must not lose the rest */ }
+    }
+    return api
+  }
+
+  SMLN.on('ready', function () {
+    try {
+      var raw = SMLN.sandkit
+      if (!raw) { SMLN.api = null; return }
+      SMLN.api = build(raw)
+      if (SMLN.api) {
+        SMLN.log('info', 'sandkit adapter ready (' + SMLN.api.generation + ' API, ' +
+          Object.keys(raw).length + ' namespaces)')
+      } else {
+        SMLN.log('warn', 'sandkit present but its shape was not recognised; use SMLN.sandkit directly')
+      }
+    } catch (e) {
+      SMLN.api = null
+      SMLN.log('error', 'sandkit adapter failed: ' + (e && e.message))
+    }
+  })
+
+  /** Exposed for the self-test. */
+  SMLN.__adapter = { build: build, detect: detect, ALIASES: ALIASES }
+})(typeof globalThis !== 'undefined' ? globalThis : window)

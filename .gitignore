@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local mods that are not part of the project
+mods/*
+!mods/example-hello/
+
+# Fetched by install.js, not part of the source tree.
+vendor/
