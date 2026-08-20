@@ -20,9 +20,9 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 ## Contents
 
 - [Requirements](#requirements) · [Which stores work](#which-stores-work)
-- [Install](#install) · [Update](#update) · [Uninstall](#uninstall)
+- [Install](#install) · [SteamCMD](#steamcmd) · [Update](#update) · [Uninstall](#uninstall)
 - [Using the console](#using-the-console)
-- [Managing mods](#managing-mods)
+- [Managing mods](#managing-mods) · [Install from Workshop](#install-from-workshop)
 - [Achievements](#achievements-read-this-once)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
@@ -40,7 +40,7 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 | | |
 |---|---|
-| **Game** | Sandustry **0.5.4** |
+| **Game** | Sandustry **0.5.5** |
 | **Stores** | Steam, GOG, manual/standalone |
 | **OS** | Windows, Linux or macOS |
 | **Node.js** | **18 or newer**, only to run the installer — [nodejs.org](https://nodejs.org) |
@@ -99,11 +99,16 @@ The installer detects your build and picks the right attach point on its own.
 On **Steam** you should see:
 
 ```
-  game      sandustry 0.5.4
+  game      sandustry 0.5.5
   at        C:\Program Files (x86)\Steam\steamapps\common\Sandustry
   platform  steam (certain)  -  resources/steam_appid.txt
   slot      C:\Program Files (x86)\Steam\steamapps\workshop\content\2764460\smln
   loader    C:\...\sandloader\src\main\entry.js
+
+  Fetching SteamCMD - needed for "Install from Workshop".
+  fetching  https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip
+  got       757 KiB
+  steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 
   Installed. Start Sandustry and press ^ (or F1) to open the console.
   Nothing in the game directory was modified.
@@ -112,7 +117,7 @@ On **Steam** you should see:
 On **GOG** or a standalone copy:
 
 ```
-  game      sandustry 0.5.4
+  game      sandustry 0.5.5
   at        C:\GOG Games\Sandustry
   platform  gog (certain)  -  goggame-1234567890.info beside the executable
   attach    resources-app-bootstrap
@@ -125,6 +130,9 @@ On **GOG** or a standalone copy:
     C:\GOG Games\Sandustry\resources\app\.smln-bootstrap.json
 
   Uninstall with: node install.js --uninstall
+
+  Fetching SteamCMD - needed for "Install from Workshop".
+  steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 ```
 
 **3. Start Sandustry.** A "SandLoader" splash appears while the game loads.
@@ -190,6 +198,32 @@ Sandustry Workshop item once so Steam creates it, or create the folder by hand,
 then run the installer again.
 </details>
 
+### SteamCMD
+
+The installer also fetches [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD)
+into `vendor/steamcmd`. It is Valve's headless downloader, used by
+[Install from Workshop](#install-from-workshop), and it is the only thing
+SandLoader downloads.
+
+```bash
+node install.js --no-steamcmd        # install the loader, skip the download
+node install.js --steamcmd           # fetch SteamCMD on its own, later
+node install.js --steamcmd --force   # re-fetch it
+```
+
+- The download URL is printed before it is fetched, and only Valve's own hosts
+  are used.
+- A SteamCMD already on your `PATH` (or named by `SMLN_STEAMCMD`) is used as-is
+  — nothing is downloaded and nothing of yours is touched.
+- A failed download is a warning, not a failed install. Everything except
+  Workshop downloading still works.
+- `node install.js --uninstall` removes it again, but only the copy the
+  installer fetched.
+
+Anonymous SteamCMD downloads do **not** work for Sandustry's Workshop, because
+it is a paid game — see [Install from Workshop](#install-from-workshop) for the
+two routes that do, both of them driven from the mod manager.
+
 ### Update
 
 Pull the new version. **No reinstall needed** — the installed slot is a
@@ -207,10 +241,11 @@ node tools/selftest.js     # confirm it still matches your game version
 node install.js --uninstall
 ```
 
-That deletes one folder — the Workshop slot on Steam, or the added
-`resources/app` directory on GOG and standalone builds. The bootstrap is only
-removed if it carries SandLoader's receipt file, so a directory we did not
-create is never touched.
+That deletes the attach point — the Workshop slot on Steam, or the added
+`resources/app` directory on GOG and standalone builds — plus `vendor/steamcmd`
+if the installer fetched it. The bootstrap is only removed if it carries
+SandLoader's receipt file, so a directory we did not create is never touched,
+and a SteamCMD you installed yourself is left alone.
 
 Your game was never modified; saves and mods stay where they are.
 
@@ -235,6 +270,12 @@ Platform
                  C:\GOG Games\Sandustry\resources\app\smln-bootstrap.js
                  C:\GOG Games\Sandustry\resources\app\.smln-bootstrap.json
   Writable     : yes
+
+SandLoader
+  path      C:\GOG Games\Sandustry\resources\app
+  status    INSTALLED
+  version   0.3.0
+  steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 ```
 
 ---
@@ -294,12 +335,89 @@ Main menu → **SandLoader Mods**.
 | | |
 |---|---|
 | **Install from ZIP** | Pick a `.zip`; it is validated and unpacked into the right folder. |
+| **Install from Workshop** | Paste a Workshop link or id; it is imported as a local mod. |
+| **Browse Workshop** | Opens the Sandustry Workshop hub. |
 | **Open folder** | Opens your mods directory in the file manager. |
 | **Enabled / Disabled** | Per-mod toggle, remembered between launches. |
 | **Delete** | Removes the mod from disk. Asks once before it does. |
 
 Mods load once when the game starts, so **every change takes effect on the next
 launch**. The UI says so rather than pretending otherwise.
+
+### Install from Workshop
+
+Paste a Workshop link or a bare id — all of these name the same item:
+
+```
+3141592653
+https://steamcommunity.com/sharedfiles/filedetails/?id=3141592653
+https://steamcommunity.com/workshop/filedetails/?id=3141592653
+steam://url/CommunityFilePage/3141592653
+```
+
+**The mod is imported, not linked.** Wherever the files come from, they are
+copied into your normal mods directory, which means:
+
+- it is an ordinary local mod — you can delete it from the manager like any other
+- Steam will not re-download or update it behind your back
+- unsubscribing in Steam afterwards does not remove it
+
+Its origin is recorded in a small `.smln-workshop.json` beside it, so the manager
+can still show where it came from and link back to its Workshop page.
+
+Everything else is the ZIP path exactly: the manifest is validated before
+anything is written, the same permission review is shown before anything is
+installed, and declining leaves nothing behind. An item with no `smln.mod.json`
+or `modinfo.json` is refused as "not a mod SandLoader can load" rather than
+half-installed.
+
+#### Where the files come from
+
+SandLoader tries two sources, in this order.
+
+**1. A copy Steam has already downloaded.** If you are subscribed to the item,
+Steam has put it in `steamapps/workshop/content/2764460/<id>/` and SandLoader
+imports straight from there. No download, no login, nothing to install. Steam's
+copy is never modified or deleted — only read.
+
+**2. SteamCMD, anonymously.** If you are not subscribed, SandLoader asks
+SteamCMD to fetch the item.
+
+> [!IMPORTANT]
+> **Anonymous downloads do not work for Sandustry.** Steam only serves them for
+> apps that permit it, which generally means free ones. Sandustry is a paid game,
+> so Steam refuses the anonymous account and SteamCMD reports a bare `Failure`.
+
+That is not a dead end — the manager offers both ways through, and both finish
+without leaving the game:
+
+**Subscribe in Steam.** Choose **Open in Steam** and the item's page opens. Click
+Subscribe; SandLoader waits for Steam to finish downloading and then installs it
+by itself. No second trip through the link box.
+
+**Or sign in to Steam.** Choose **Sign in to Steam** and enter the account name
+and password of an account that owns Sandustry, plus a Steam Guard code if Steam
+asks for one. The download then proceeds without subscribing to anything.
+
+> [!NOTE]
+> **What happens to your password.** It is passed to SteamCMD — Valve's own tool
+> — on its standard input, and nothing else is done with it. It is never written
+> to disk, never logged, and never put on a command line (which any other program
+> running as you could read, including a mod holding the `node` permission).
+> SandLoader stores only the **account name**; SteamCMD caches its own session,
+> so later downloads need nothing more.
+
+#### When something goes wrong
+
+| The manager says | What it means |
+|---|---|
+| *Steam would not hand over that item…* | Anonymous download refused. Subscribe in Steam, or sign in — both are offered. |
+| *SteamCMD is set to use a Steam account but has not signed in to it yet* | An account name is saved but SteamCMD has no session for it. Sign in once. |
+| *Steam rejected that account name or password* | Wrong credentials, or the account does not exist. |
+| *Steam is rate-limiting sign-in attempts* | Too many tries. Wait a few minutes. |
+| *Steam does not have a Workshop item with that id* | The id is wrong, or the item was removed. |
+| *SteamCMD was not found* | Run `node install.js --steamcmd`. |
+| *…is not a mod SandLoader can load* | The item has no mod manifest — it may target a different loader. |
 
 ### Where mods live
 
@@ -553,7 +671,7 @@ src/
   patch/      anchor-based patch engine, conflict preflight, core patches
   mods/       manifests, semver, dependency ordering, permissions, approvals,
               config, restricted storage, network capability, sandbox, watcher,
-              ZIP install/remove
+              ZIP install/remove, Workshop import and its SteamCMD driver
   compat/     Fluxloader mod compatibility and its messaging bridge
   main/       host-ABI entry point, file interceptor, RPC
   renderer/   injected runtime, capability facades, registration API, messaging,
@@ -666,6 +784,14 @@ An honest list:
   `SMLN.register.recipe()` feature-detects it and reports that it is
   unavailable on this build rather than pretending to have registered
   something.
+- **Worker entrypoints do not get a Sandkit API yet.** A mod with a
+  `workerEntry` is injected into the simulation workers, but there is no
+  worker-side `sandkit` for it to call, so it logs
+  `worker mod failed: ReferenceError: sandkit is not defined` and stops. That is
+  deliberate: the worker Sandkit surface is not the main one, and handing a mod
+  the main adapter inside a simulation worker would corrupt simulation state.
+  Failing loudly is the honest option until the native worker-entry bridge is
+  wired up. Everything a mod does in the game context is unaffected.
 - **Map mods.** Custom-map blueprints are discovered and reported, but loading
   them needs game-side support that is not exposed.
 - **Renderer hot reload is partial by nature.** SandLoader reclaims what it
@@ -686,6 +812,67 @@ An honest list:
 ---
 
 ## Changelog
+
+### Unreleased
+
+Self-test: 123 checks (+19).
+
+**Added — Install from Workshop**
+
+- The mod manager takes a Workshop URL or a bare id and installs the item as an
+  ordinary local mod. All four link spellings Steam uses are accepted; anything
+  else is refused by name rather than coerced into an id.
+- Items already subscribed in Steam are imported directly from
+  `steamapps/workshop/content/`, with no download and no login. Steam's copy is
+  read, never modified or deleted.
+- Otherwise the item is fetched with **SteamCMD**, which `install.js` now
+  downloads into `vendor/steamcmd` (skip with `--no-steamcmd`). Reuses the
+  existing ZIP reader to unpack it on Windows, so no dependency was added.
+- Sandustry is a paid game, so Steam refuses anonymous Workshop downloads for it
+  and SteamCMD reports a bare `Failure`. That case is now detected specifically
+  and answered with the two routes that do work rather than the raw wording.
+- Imported mods stay fully removable and are tagged with their origin; the
+  Steam-managed rule still applies only to content Steam itself owns.
+- Install goes through the existing permission review unchanged: the ZIP and
+  Workshop paths now share one implementation of it rather than two.
+- Refused downloads are recoverable from the manager: **Open in Steam** waits for
+  Steam to finish downloading a newly subscribed item and then installs it, and
+  **Sign in to Steam** signs SteamCMD in to an account that owns the game,
+  including the Steam Guard round trip. The password goes to SteamCMD on stdin
+  and is never stored, logged, or placed on a command line; only the account
+  name is kept.
+
+**Fixed**
+
+- Official (`manifestVersion: 1`) mods could not be installed at all. The
+  installer's reviewer treated every `modinfo.json` as Fluxloader's and demanded
+  a `modID`, so an official manifest was refused with `the manifest has no
+  "modID"` — a valid mod, read by the wrong reader. It now discriminates on
+  `manifestVersion` the way `manage.js` and `official.js` already did. This
+  affected ZIP installs too, not only Workshop ones.
+- **The API scan was blind to calls two levels deep.** `api.player.buildings.unlockByType`
+  was read as `player.buildings` — a container that exists — so the scan reported
+  the mod supported and the mod then died at runtime on the method, which is
+  exactly what the scan is there to predict. It now captures the third segment
+  and checks each call at the depth it lives at. Eight such calls across the
+  bundled mods had never been checked at all; a self-test now holds every one of
+  them to an accounted-for source.
+- `api.structures.processing.isEnabledAt()` is now shimmed. It was missing from
+  the `processing` object entirely, and a mod calling it inside a per-structure
+  tick lost the whole tick. This build has no per-machine on/off state, so it
+  reports every structure as enabled — unless the mod set `data.enabled = false`
+  itself — and says so once. Labelled as an approximation at its definition.
+- `api.player.buildings.unlockByType()` is now shimmed. This build spells it
+  `buildings.add`, so a mod calling the v1 name died on that line and lost
+  everything after it - including, for one Workshop mod, the structure it had
+  just registered. Implemented against the build list directly rather than
+  delegating, because `player.buildings` is a nested object and the adapter only
+  state-binds top-level functions.
+- The Workshop download cleanup matched any path shaped
+  `workshop/content/<appid>/<id>`, which is also the shape of Steam's own
+  subscribed-content folder. Importing a subscribed item would therefore have
+  deleted Steam's copy, which Steam then silently re-downloads. Cleanup is now
+  refused for anything inside a Steam library.
 
 ### 0.3.0
 
@@ -868,7 +1055,7 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.3.0**, verified against **Sandustry 0.5.5**. Self-test: **104/104**.
+SandLoader **0.3.0**, verified against **Sandustry 0.5.5**. Self-test: **123/123**.
 
 ## License
 

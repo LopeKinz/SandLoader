@@ -641,6 +641,50 @@
       add(provide(api.player, 'getMovementMode', function () { return hoverMode || 'normal' }))
     }
 
+    // --- player.buildings.unlockByType: add a structure to the build list.
+    /*
+     * Equivalent, not an approximation. The build has no `unlockByType`, but
+     * `state.store.player.buildings` is a plain array of structure type ids and
+     * the game's own Sandkit adds to it with exactly:
+     *
+     *   buildings: { add: (state, type) => {
+     *     state.store.player.buildings.includes(type) ||
+     *       state.store.player.buildings.push(type)
+     *   } }
+     *
+     * This does the same thing to the same array.
+     *
+     * It is written against the state rather than delegating to that `add`
+     * on purpose. `player.buildings` is a nested object, and
+     * sandkit-adapter.js only injects state into functions at the *top* level
+     * of a namespace - so `api.player.buildings.add` arrives unbound, taking
+     * state as its first argument on a legacy build and not on a v1 one.
+     * Calling it from here would mean guessing which. Touching the array
+     * directly has no such ambiguity.
+     *
+     * Mods reach for this because a structure registered as `alwaysUnlocked`
+     * is not always picked up by a world that already exists, so the type has
+     * to be added to the player's list as well.
+     */
+    var buildings = api.player && api.player.buildings
+    if (buildings && typeof buildings === 'object') {
+      add(provide(buildings, 'unlockByType', function (type) {
+        if (typeof type !== 'string' && typeof type !== 'number') return false
+        var st = state()
+        // Both spellings appear in the bundle: `state.store.player` is the live
+        // store, `state.player` turns up in save handling.
+        var player = (st && st.store && st.store.player) || (st && st.player)
+        var list = player && player.buildings
+        if (!Array.isArray(list)) {
+          warnOnce('unlockByType', 'player.buildings.unlockByType found no build list on this build; ' +
+            'a structure registered as alwaysUnlocked may not appear in an existing world')
+          return false
+        }
+        if (list.indexOf(type) === -1) list.push(type)
+        return true
+      }))
+    }
+
     // --- hooks.intercept: a cancellable subscription.
     /*
      * The build has no `intercept`, but its hooks already carry everything one
@@ -783,8 +827,38 @@
             processors = processors.filter(function (p) { return p.id !== String(id) })
             return true
           },
+
+          /*
+           * An approximation, and labelled as one.
+           *
+           * v1 asks whether the machine at a cell is currently switched on.
+           * This build has no such state: structures carry a free-form `data`
+           * object and nothing in the vanilla UI toggles a machine, so there is
+           * no honest way to answer "is it off".
+           *
+           * It answers "on" - and warns once - because the mods calling it use
+           * it to skip disabled machines inside a per-structure tick. Answering
+           * "off" would silently stop every machine the mod owns, which is far
+           * worse than treating them all as running. Before this existed the
+           * call threw, taking the whole tick with it.
+           *
+           * A mod that keeps its own flag in `data` is read correctly: an
+           * explicit `enabled === false` there is honoured.
+           */
+          isEnabledAt: function (x, y) {
+            try {
+              if (typeof api.structures.getAtCell === 'function') {
+                var found = api.structures.getAtCell(x, y)
+                if (found && found.data && found.data.enabled === false) return false
+              }
+            } catch (_) { /* unreadable cell is not a reason to stop the tick */ }
+            warnOnce('isEnabledAt',
+              'structures.processing.isEnabledAt has no per-machine on/off state on this build: ' +
+              'every structure is reported as enabled unless the mod set data.enabled = false itself')
+            return true
+          },
         }
-        installed.push('structures.processing')
+        installed.push('structures.processing', 'structures.processing.isEnabledAt')
         added++
       } catch (_) { /* frozen namespace */ }
     }

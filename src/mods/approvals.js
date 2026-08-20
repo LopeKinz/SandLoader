@@ -297,15 +297,33 @@ function reviewFor(info, previous) {
 
 // ------------------------------------------------------------- the archive
 
+/**
+ * Which format a `modinfo.json` is.
+ *
+ * The filename is shared by two unrelated formats: official Sandkit declares
+ * `manifestVersion` and identifies mods by `id`, Fluxloader has no
+ * `manifestVersion` and uses `modID`. Assuming Fluxloader made every official
+ * mod fail to install with `the manifest has no "modID"` - a real manifest,
+ * read by the wrong reader.
+ *
+ * src/mods/manage.js discriminates on exactly this field, and so does
+ * src/mods/official.js `isOfficial`. This is the same test, kept in one place
+ * here so the ZIP and directory paths cannot drift apart.
+ */
+function flavourOfModinfo(json) {
+  return json && json.manifestVersion != null ? 'official' : 'fluxloader'
+}
+
 /** Pull one manifest out of a ZIP without unpacking or running anything. */
 function manifestFromZip(zipPath) {
-  for (const [name, flavour] of [[SMLN_MANIFEST, 'smln'], [FLUX_MANIFEST, 'fluxloader']]) {
+  for (const name of [SMLN_MANIFEST, FLUX_MANIFEST]) {
     let buf
     try { buf = zip.readFile(zipPath, name) } catch (e) { return { error: toSmlnError(e, 'read archive') } }
     if (!buf) continue
     try {
       // JSON.parse only. Nothing in the archive is required, evaluated or run.
-      return { flavour, json: JSON.parse(buf.toString('utf8')) }
+      const json = JSON.parse(buf.toString('utf8'))
+      return { flavour: name === SMLN_MANIFEST ? 'smln' : flavourOfModinfo(json), json }
     } catch (e) {
       return { error: new SmlnError('E_MANIFEST_INVALID', `${name} in the archive is not valid JSON: ${e.message}`) }
     }
@@ -315,11 +333,12 @@ function manifestFromZip(zipPath) {
 
 /** Read a manifest from an unpacked directory; same rules, no execution. */
 function manifestFromDir(dir) {
-  for (const [name, flavour] of [[SMLN_MANIFEST, 'smln'], [FLUX_MANIFEST, 'fluxloader']]) {
+  for (const name of [SMLN_MANIFEST, FLUX_MANIFEST]) {
     const p = path.join(dir, name)
     if (!fs.existsSync(p)) continue
     try {
-      return { flavour, json: JSON.parse(fs.readFileSync(p, 'utf8')) }
+      const json = JSON.parse(fs.readFileSync(p, 'utf8'))
+      return { flavour: name === SMLN_MANIFEST ? 'smln' : flavourOfModinfo(json), json }
     } catch (e) {
       return { error: new SmlnError('E_MANIFEST_INVALID', `${name} is not valid JSON: ${e.message}`) }
     }
@@ -327,8 +346,26 @@ function manifestFromDir(dir) {
   return { error: new SmlnError('E_MANIFEST_INVALID', `no ${SMLN_MANIFEST} or ${FLUX_MANIFEST} found`) }
 }
 
-/** Turn a raw manifest into reviewFor's input, for either flavour. */
+/** Turn a raw manifest into reviewFor's input, for any of the three flavours. */
 function infoFromManifest(json, flavour) {
+  if (flavour === 'official') {
+    // Official mods run inside the renderer and the workers, through
+    // SMLN.official.execute - see src/mods/official.js. They are handed no
+    // `require`, so `native` is false and the review must not imply otherwise.
+    // `entry` is the game-context entrypoint; `workerEntry` the worker one.
+    return {
+      id: json.id,
+      name: json.name || json.id,
+      version: String(json.version || '0.0.0'),
+      flavour: 'official',
+      rawPermissions: json.permissions,
+      entrypoints: {
+        native: false,
+        game: !!json.entry,
+        worker: !!json.workerEntry,
+      },
+    }
+  }
   if (flavour === 'fluxloader') {
     return {
       id: json.modID,

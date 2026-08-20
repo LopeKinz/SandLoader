@@ -33,8 +33,20 @@
  *
  * Both reduce to `<root>.<namespace>.<method>`, so one pattern covers them once
  * the root alias is known.
+ *
+ * The third segment is optional because several namespaces are two levels deep:
+ *
+ *   api.player.buildings.unlockByType(...)
+ *   api.storage.local.set(...)
+ *   api.structures.processing.isEnabledAt(...)
+ *   api.shared.buffers.create(...)
+ *
+ * Capturing only two levels made those look satisfied whenever the *container*
+ * existed - `player.buildings` is present, so `unlockByType` was never checked,
+ * and the mod died at runtime on a call this scan is supposed to predict. The
+ * third segment is what closes that hole.
  */
-const CALL_RE = /\b(?:api|sandkit\.api)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)/g
+const CALL_RE = /\b(?:api|sandkit\.api)\.([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?/g
 
 /** Direct `sandkit.<field>` reads: react, enums, engine, state, settings. */
 const FIELD_RE = /\bsandkit\.([A-Za-z_$][\w$]*)/g
@@ -103,14 +115,22 @@ function stripNonCode(src) {
 function scan(source) {
   const code = stripNonCode(String(source || ''))
   const namespaces = {}
+  const nested = {}
   const fields = new Set()
 
   let m
   CALL_RE.lastIndex = 0
   while ((m = CALL_RE.exec(code))) {
-    const [, ns, method] = m
+    const [, ns, method, deep] = m
     if (NON_NAMESPACE.has(ns)) continue
     ;(namespaces[ns] || (namespaces[ns] = new Set())).add(method)
+    // `api.player.buildings.unlockByType` records both the container
+    // (player.buildings) and the call on it, so compare() can check each at the
+    // depth it actually lives at.
+    if (deep) {
+      const key = ns + '.' + method
+      ;(nested[key] || (nested[key] = new Set())).add(deep)
+    }
   }
 
   FIELD_RE.lastIndex = 0
@@ -118,7 +138,9 @@ function scan(source) {
 
   const out = {}
   for (const [ns, set] of Object.entries(namespaces)) out[ns] = [...set].sort()
-  return { namespaces: out, fields: [...fields].sort() }
+  const deepOut = {}
+  for (const [key, set] of Object.entries(nested)) deepOut[key] = [...set].sort()
+  return { namespaces: out, nested: deepOut, fields: [...fields].sort() }
 }
 
 /**
@@ -152,8 +174,32 @@ function compare(scanned, available) {
       missingNamespaces.push(ns)
       continue
     }
-    const gone = methods.filter((name) => typeof live[name] !== 'function')
+    // A name used as a container (`api.storage.local.set`) is an object, not a
+    // function, so it is only missing when it is absent altogether.
+    const containers = new Set()
+    for (const key of Object.keys(scanned.nested || {})) {
+      const [owner, sub] = key.split('.')
+      if (owner === ns) containers.add(sub)
+    }
+    const gone = methods.filter((name) => (containers.has(name)
+      ? live[name] == null
+      : typeof live[name] !== 'function'))
     if (gone.length) missingMethods.push({ ns, methods: gone })
+  }
+
+  // Then the calls one level deeper, which are the ones a two-level scan used
+  // to miss entirely.
+  for (const [key, names] of Object.entries(scanned.nested || {})) {
+    const [ns, sub] = key.split('.')
+    const owner = available[ns]
+    if (!owner || typeof owner !== 'object') continue // already reported above
+    const container = owner[sub]
+    if (!container || typeof container !== 'object') {
+      if (!missingNamespaces.includes(key)) missingNamespaces.push(key)
+      continue
+    }
+    const gone = names.filter((name) => typeof container[name] !== 'function')
+    if (gone.length) missingMethods.push({ ns: key, methods: gone })
   }
 
   return {

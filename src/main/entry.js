@@ -42,6 +42,7 @@ const modLoader = require('../mods/loader')
 const flCompat = require('../compat/fluxloader')
 const modManage = require('../mods/manage')
 const workshop = require('../mods/workshop')
+const steamcmd = require('../mods/steamcmd')
 const official = require('../mods/official')
 const apiScan = require('../mods/api-scan')
 const permissions = require('../mods/permissions')
@@ -642,7 +643,7 @@ async function handleRpc(msg) {
       )
 
       const token = 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-      runtime.installs.set(token, { zipPath, review, cleanup: inspected.cleanup })
+      runtime.installs.set(token, { kind: 'zip', zipPath, review, cleanup: inspected.cleanup })
       // Nothing has been written yet. The archive is still just a file the
       // user picked; only installModCommit moves it into the mods folder.
       return { ok: true, token, review }
@@ -653,12 +654,17 @@ async function handleRpc(msg) {
       if (!pending) return { ok: false, error: 'that install is no longer pending' }
       runtime.installs.delete(p.token)
       try {
-        const result = modManage.installFromZip(pending.zipPath, {
+        const ctx = {
           smlnRoot: modRoots(runtime.host && runtime.host.paths)[0],
           fluxRoot: fluxloaderRoots(runtime.host && runtime.host.paths)[0] ||
             modRoots(runtime.host && runtime.host.paths)[0],
           logger,
-        })
+        }
+        // Both kinds of install end in the same place; only the source differs,
+        // so the review and approval either side of this are shared verbatim.
+        const result = pending.kind === 'dir'
+          ? modManage.installFromDir(pending.srcDir, { ...ctx, origin: pending.origin })
+          : modManage.installFromZip(pending.zipPath, ctx)
         if (result.ok && runtime.approvals) {
           runtime.approvals.approve(
             { id: pending.review.mod.id, version: pending.review.mod.version },
@@ -677,6 +683,196 @@ async function handleRpc(msg) {
       try { pending && pending.cleanup && pending.cleanup() } catch (_) { /* best effort */ }
       return { ok: true }
     }
+
+    // ------------------------------------------------- install from Workshop
+    /** Lets the manager say "SteamCMD is missing" before asking for a URL. */
+    case 'steamcmdStatus': {
+      const s = steamcmd.status()
+      return { ok: true, available: s.available, path: s.path, hint: s.hint }
+    }
+
+    /**
+     * Phase one of a Workshop install: resolve the reference, download the item
+     * with SteamCMD, and read its manifest. Nothing is installed yet - the
+     * download lives in SteamCMD's own tree until installWorkshopCommit copies
+     * it out, and installWorkshopAbort throws it away.
+     */
+    case 'installWorkshopReview': {
+      const ref = workshop.parseRef(p.ref)
+      if (!ref.ok) return { ok: false, error: ref.error.message, code: ref.error.code }
+
+      // Already subscribed? Then the files are on disk and there is nothing to
+      // download. This is the path that actually works for a paid game like
+      // Sandustry, where an anonymous SteamCMD login is refused outright.
+      let srcDir = workshop.findLocalItem(ref.id)
+      let fromSteam = !!srcDir
+      if (srcDir) {
+        logger.info(`workshop item ${ref.id} is already subscribed at ${srcDir} - importing it`)
+      } else {
+        const downloaded = await steamcmd.downloadItem(ref.id, {
+          logger,
+          // Set from the manager; falls back to SMLN_STEAM_USER, then anonymous.
+          user: runtime.settings.steamUser || undefined,
+        })
+        if (!downloaded.ok) {
+          const err = downloaded.error
+          return {
+            ok: false,
+            error: err.message,
+            code: err.code,
+            hint: err.detail && err.detail.hint,
+            // The ownership wall has a way out the player can actually take, so
+            // tell the manager to offer it rather than only printing the reason.
+            canSubscribe: err.code === 'E_WORKSHOP_OWNERSHIP',
+            // A named account SteamCMD has never signed in as. Nothing is wrong
+            // with the item or the request - the sign-in just has not happened.
+            canSignIn: err.code === 'E_STEAM_LOGIN',
+            publishedFileId: ref.id,
+          }
+        }
+        srcDir = downloaded.dir
+      }
+      const previous = runtime.approvals ? runtime.approvals.approvalFor(null) : null
+      // Same reviewer the ZIP path uses; it reads a directory's manifest
+      // without requiring, evaluating or running anything inside it.
+      const inspected = approvals.inspectArchive(srcDir, { directory: true, previous })
+      if (!inspected.ok) {
+        if (!fromSteam) workshop.discardDownload(srcDir, ref.id, logger)
+        return {
+          ok: false,
+          code: inspected.error.code,
+          error: `that Workshop item is not a mod SandLoader can install: ${inspected.error.message}`,
+        }
+      }
+
+      const prior = runtime.approvals ? runtime.approvals.approvalFor(inspected.review.mod.id) : null
+      const review = approvals.reviewFor(
+        {
+          id: inspected.review.mod.id,
+          name: inspected.review.mod.name,
+          version: inspected.review.mod.version,
+          flavour: inspected.flavour,
+          permissions: inspected.review.capability.permissions.filter((x) => x !== 'node' ||
+            inspected.review.capability.contexts.native === false),
+          entrypoints: inspected.review.capability.contexts,
+        },
+        prior
+      )
+
+      const meta = workshop.readMeta(srcDir)
+      const token = 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+      runtime.installs.set(token, {
+        kind: 'dir',
+        srcDir,
+        review,
+        origin: { publishedFileId: ref.id, title: (meta && meta.title) || null },
+        // Steam's copy stays exactly where it is; only a SteamCMD download is
+        // ours to throw away.
+        cleanup() { if (!fromSteam) workshop.discardDownload(srcDir, ref.id, logger) },
+      })
+      return {
+        ok: true, token, review,
+        publishedFileId: ref.id,
+        workshopTitle: (meta && meta.title) || null,
+        source: fromSteam ? 'subscribed' : 'steamcmd',
+      }
+    }
+
+    /**
+     * Phase two. Shares installModCommit outright rather than repeating it:
+     * the approval bookkeeping and the reload hints must not drift between the
+     * two ways a mod can arrive.
+     */
+    case 'installWorkshopCommit':
+      return handleRpc({ action: 'installModCommit', payload: { token: p.token } })
+
+    case 'installWorkshopAbort':
+      return handleRpc({ action: 'installModAbort', payload: { token: p.token } })
+
+    /**
+     * Has Steam finished downloading a subscribed item yet?
+     *
+     * One stat call, polled by the manager while it waits. Cheap on purpose:
+     * the alternative is watching the folder from here and pushing an event,
+     * which is more machinery than a dialog with a Cancel button needs.
+     */
+    case 'workshopProbe': {
+      const ref = workshop.parseRef(p.ref || p.id)
+      if (!ref.ok) return { ok: false, error: ref.error.message, code: ref.error.code }
+      const dir = workshop.findLocalItem(ref.id)
+      return { ok: true, present: !!dir, dir: dir || null, publishedFileId: ref.id }
+    }
+
+    /**
+     * The Steam account SteamCMD should log in as.
+     *
+     * Kept in the loader's own settings so it can be set from the manager -
+     * an environment variable is not something a player can change from inside
+     * the game, which is the whole point of having this. Only the account name
+     * is stored: the password stays between the player and SteamCMD, which
+     * caches its own credentials.
+     */
+    case 'setSteamUser': {
+      const raw = typeof p.user === 'string' ? p.user.trim() : ''
+      // Steam account names are conservative, and this string becomes a command
+      // line argument - so it is validated rather than trusted.
+      if (raw && !/^[A-Za-z0-9_.-]{2,64}$/.test(raw)) {
+        return { ok: false, error: 'that does not look like a Steam account name' }
+      }
+      if (raw) runtime.settings.steamUser = raw
+      else delete runtime.settings.steamUser
+      writeJsonFile(settingsPath(), runtime.settings)
+      logger.info(raw ? `steamcmd will log in as "${raw}"` : 'steamcmd will log in anonymously')
+      return { ok: true, user: raw || null }
+    }
+
+    /**
+     * Sign SteamCMD in to a Steam account.
+     *
+     * The password is used for exactly this call and then dropped: it is handed
+     * to SteamCMD over stdin, never stored in settings, never written to the
+     * log, and never included in a reply. Only the account name is remembered,
+     * because SteamCMD caches its own session and later downloads need nothing
+     * more than the name.
+     */
+    case 'steamLogin': {
+      const user = typeof p.user === 'string' ? p.user.trim() : ''
+      const result = await steamcmd.login({
+        user,
+        password: typeof p.password === 'string' ? p.password : '',
+        guardCode: typeof p.guardCode === 'string' ? p.guardCode.trim() : '',
+        logger,
+      })
+
+      if (result.ok) {
+        runtime.settings.steamUser = user
+        writeJsonFile(settingsPath(), runtime.settings)
+        return { ok: true, user }
+      }
+      return {
+        ok: false,
+        error: result.error.message,
+        code: result.error.code,
+        // Tells the manager to ask for the code and call back, rather than
+        // treating a second factor as a dead end.
+        needsGuard: !!result.needsGuard,
+      }
+    }
+
+    /** Forget the account. SteamCMD keeps its own cache; this is only our name for it. */
+    case 'steamLogout': {
+      delete runtime.settings.steamUser
+      writeJsonFile(settingsPath(), runtime.settings)
+      logger.info('steamcmd will log in anonymously again')
+      return { ok: true }
+    }
+
+    case 'getSteamUser':
+      return {
+        ok: true,
+        user: runtime.settings.steamUser || process.env.SMLN_STEAM_USER || null,
+        fromEnv: !runtime.settings.steamUser && !!process.env.SMLN_STEAM_USER,
+      }
 
     // Kept so an older renderer, or a mod calling it directly, still works.
     case 'installMod': {

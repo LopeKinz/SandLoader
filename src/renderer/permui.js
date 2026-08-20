@@ -80,6 +80,12 @@
     'max-height:9em;overflow:auto}',
     '.smln-modal .prob .rep{color:#64748b;font-size:11px}',
     '.smln-modal .empty{padding:34px 22px;text-align:center;color:#64748b}',
+    '.smln-modal .body>p{padding:14px 22px 6px;margin:0;color:#cbd5e1}',
+    '.smln-modal .body>p.hint{color:#64748b;font-size:12px;padding-top:8px}',
+    '.smln-modal .smln-input{display:block;width:calc(100% - 44px);margin:4px 22px 10px;',
+    'font:inherit;font-size:13px;padding:9px 11px;color:#f1f5f9;border-radius:0 4px 0 4px;',
+    'background:rgba(15,23,42,.72);border:1px solid rgba(100,116,139,.68)}',
+    '.smln-modal .smln-input:focus{outline:none;border-color:rgba(255,231,0,.55)}',
   ].join('')
 
   var styled = false
@@ -517,10 +523,338 @@
     return m
   }
 
+  // ------------------------------------------------------------- 4. prompt
+  /**
+   * Ask for one line of text.
+   *
+   * Lives here rather than in modsui.js because this file already owns every
+   * modal the loader shows, and the game's own window has no usable
+   * `window.prompt` - Electron disables it, so a bare prompt() would silently
+   * return null and the action would look like it did nothing.
+   *
+   * Resolves the trimmed string, or null if the player cancelled.
+   *
+   * @param {{title:string, label?:string, hint?:string, placeholder?:string,
+   *          confirm?:string, cancel?:string, value?:string}} opts
+   * @returns {Promise<string|null>}
+   */
+  function prompt(opts) {
+    return new Promise(function (resolve) {
+      var answered = false
+      var m = modal({
+        title: opts.title,
+        onClose: function () { if (!answered) { answered = true; resolve(null) } },
+      })
+
+      if (opts.label) {
+        var label = global.document.createElement('p')
+        label.textContent = opts.label
+        m.body.appendChild(label)
+      }
+
+      var input = global.document.createElement('input')
+      input.className = 'smln-input'
+      if (input.setAttribute) {
+        input.setAttribute('type', 'text')
+        input.setAttribute('spellcheck', 'false')
+        if (opts.placeholder) input.setAttribute('placeholder', opts.placeholder)
+      }
+      if (opts.value) input.value = opts.value
+      m.body.appendChild(input)
+
+      if (opts.hint) {
+        var hint = global.document.createElement('p')
+        hint.className = 'hint'
+        hint.textContent = opts.hint
+        m.body.appendChild(hint)
+      }
+
+      function done(value) {
+        if (answered) return
+        answered = true
+        m.close()
+        resolve(value)
+      }
+
+      var cancel = button(opts.cancel || t('common.cancel'))
+      cancel.addEventListener('click', function () { done(null) })
+
+      var go = button(opts.confirm || t('common.ok'), 'go')
+      go.addEventListener('click', function () {
+        var v = (input.value || '').trim()
+        // An empty box is not an answer; keep the dialog open rather than
+        // resolving null, which the caller would read as "cancelled".
+        if (!v) { try { input.focus() } catch (_e) {} return }
+        done(v)
+      })
+
+      // Enter submits: this dialog holds a single field, so anything else
+      // would just be a keystroke that does nothing.
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); go.dispatch ? go.dispatch('click', {}) : go.click() }
+      })
+
+      m.footer.appendChild(cancel)
+      m.footer.appendChild(go)
+      global.setTimeout(function () { try { input.focus() } catch (_e) {} }, 0)
+      return m
+    })
+  }
+
+  /**
+   * Ask a yes/no question.
+   *
+   * Same reason `prompt` lives here: Electron gives the game window no usable
+   * `window.confirm`, so a bare call would silently answer false and the action
+   * would look like it did nothing.
+   *
+   * @param {{title:string, body?:string, hint?:string, confirm?:string, cancel?:string}} opts
+   * @returns {Promise<boolean>}
+   */
+  function confirm(opts) {
+    return new Promise(function (resolve) {
+      var answered = false
+      var m = modal({
+        title: opts.title,
+        onClose: function () { if (!answered) { answered = true; resolve(false) } },
+      })
+
+      if (opts.body) {
+        var body = global.document.createElement('p')
+        body.textContent = opts.body
+        m.body.appendChild(body)
+      }
+      if (opts.hint) {
+        var hint = global.document.createElement('p')
+        hint.className = 'hint'
+        hint.textContent = opts.hint
+        m.body.appendChild(hint)
+      }
+
+      function done(value) {
+        if (answered) return
+        answered = true
+        m.close()
+        resolve(value)
+      }
+
+      var cancel = button(opts.cancel || t('common.cancel'))
+      cancel.addEventListener('click', function () { done(false) })
+
+      var go = button(opts.confirm || t('common.ok'), 'go')
+      go.addEventListener('click', function () { done(true) })
+
+      m.footer.appendChild(cancel)
+      m.footer.appendChild(go)
+      global.setTimeout(function () { try { go.focus() } catch (_e) {} }, 0)
+      return m
+    })
+  }
+
+  // ------------------------------------------------- 5. choose / progress
+  /**
+   * Ask a question with more than two answers.
+   *
+   * `confirm` covers yes/no; this covers "here are the ways out of this
+   * problem", which is what a failure with more than one remedy needs. Resolves
+   * the chosen option's `key`, or null if the player backed out.
+   *
+   * @param {{title:string, body?:string, hint?:string,
+   *          options:Array<{key:string, label:string, kind?:string}>,
+   *          cancel?:string}} opts
+   * @returns {Promise<string|null>}
+   */
+  function choose(opts) {
+    return new Promise(function (resolve) {
+      var answered = false
+      var m = modal({
+        title: opts.title,
+        onClose: function () { if (!answered) { answered = true; resolve(null) } },
+      })
+
+      if (opts.body) {
+        var body = global.document.createElement('p')
+        body.textContent = opts.body
+        m.body.appendChild(body)
+      }
+      if (opts.hint) {
+        var hint = global.document.createElement('p')
+        hint.className = 'hint'
+        hint.textContent = opts.hint
+        m.body.appendChild(hint)
+      }
+
+      function done(value) {
+        if (answered) return
+        answered = true
+        m.close()
+        resolve(value)
+      }
+
+      var cancel = button(opts.cancel || t('common.cancel'))
+      cancel.addEventListener('click', function () { done(null) })
+      m.footer.appendChild(cancel)
+
+      // Rendered in order, so the last one sits nearest the corner - which is
+      // where the recommended action belongs.
+      for (var i = 0; i < opts.options.length; i++) {
+        ;(function (option) {
+          var b = button(option.label, option.kind || '')
+          b.addEventListener('click', function () { done(option.key) })
+          m.footer.appendChild(b)
+        })(opts.options[i])
+      }
+      return m
+    })
+  }
+
+  /**
+   * A dialog that reports on something still happening.
+   *
+   * Returned handle: `update(text)` rewrites the line, `close()` dismisses it,
+   * and `cancelled()` answers whether the player gave up - the caller polls
+   * that rather than being called back, because the work it is waiting on is a
+   * loop it already owns.
+   *
+   * @param {{title:string, body?:string, hint?:string, cancel?:string}} opts
+   */
+  function progress(opts) {
+    var gaveUp = false
+    var m = modal({
+      title: opts.title,
+      backdropCloses: false,
+      onClose: function () { gaveUp = true },
+    })
+
+    var line = global.document.createElement('p')
+    line.textContent = opts.body || ''
+    m.body.appendChild(line)
+
+    if (opts.hint) {
+      var hint = global.document.createElement('p')
+      hint.className = 'hint'
+      hint.textContent = opts.hint
+      m.body.appendChild(hint)
+    }
+
+    var cancel = button(opts.cancel || t('common.cancel'))
+    cancel.addEventListener('click', function () { gaveUp = true; m.close() })
+    m.footer.appendChild(cancel)
+
+    return {
+      update: function (text) { line.textContent = text },
+      close: function () { m.close() },
+      cancelled: function () { return gaveUp },
+    }
+  }
+
+  // ------------------------------------------------------------- 6. form
+  /**
+   * A small multi-field dialog, used for signing in to Steam.
+   *
+   * `type: 'password'` masks the field. Nothing here keeps the value: it is
+   * read once on submit, handed to the caller, and the inputs go with the
+   * dialog when it closes. Resolves a `{key: value}` map, or null if cancelled.
+   *
+   * @param {{title:string, body?:string, hint?:string, confirm?:string,
+   *          fields:Array<{key:string, label:string, type?:string,
+   *                        placeholder?:string, value?:string, optional?:boolean}>}} opts
+   * @returns {Promise<Record<string,string>|null>}
+   */
+  function form(opts) {
+    return new Promise(function (resolve) {
+      var answered = false
+      var m = modal({
+        title: opts.title,
+        backdropCloses: false,
+        onClose: function () { if (!answered) { answered = true; resolve(null) } },
+      })
+
+      if (opts.body) {
+        var body = global.document.createElement('p')
+        body.textContent = opts.body
+        m.body.appendChild(body)
+      }
+
+      var inputs = []
+      for (var i = 0; i < opts.fields.length; i++) {
+        ;(function (spec) {
+          var label = global.document.createElement('p')
+          label.textContent = spec.label
+          m.body.appendChild(label)
+
+          var input = global.document.createElement('input')
+          input.className = 'smln-input'
+          if (input.setAttribute) {
+            input.setAttribute('type', spec.type === 'password' ? 'password' : 'text')
+            input.setAttribute('spellcheck', 'false')
+            input.setAttribute('autocomplete', 'off')
+            if (spec.placeholder) input.setAttribute('placeholder', spec.placeholder)
+          }
+          if (spec.value) input.value = spec.value
+          m.body.appendChild(input)
+          inputs.push({ spec: spec, input: input })
+        })(opts.fields[i])
+      }
+
+      if (opts.hint) {
+        var hint = global.document.createElement('p')
+        hint.className = 'hint'
+        hint.textContent = opts.hint
+        m.body.appendChild(hint)
+      }
+
+      function done(value) {
+        if (answered) return
+        answered = true
+        m.close()
+        resolve(value)
+      }
+
+      var cancel = button(opts.cancel || t('common.cancel'))
+      cancel.addEventListener('click', function () { done(null) })
+
+      var go = button(opts.confirm || t('common.ok'), 'go')
+      go.addEventListener('click', function () {
+        var out = {}
+        for (var j = 0; j < inputs.length; j++) {
+          var entry = inputs[j]
+          // A password is taken exactly as typed; everything else is trimmed,
+          // because a stray space in a password is a character and a stray
+          // space in an account name is a typo.
+          var raw = entry.input.value || ''
+          var value = entry.spec.type === 'password' ? raw : raw.trim()
+          if (!value && !entry.spec.optional) {
+            try { entry.input.focus() } catch (_e) {}
+            return
+          }
+          out[entry.spec.key] = value
+        }
+        done(out)
+      })
+
+      for (var k = 0; k < inputs.length; k++) {
+        inputs[k].input.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Enter') { ev.preventDefault(); go.dispatch ? go.dispatch('click', {}) : go.click() }
+        })
+      }
+
+      m.footer.appendChild(cancel)
+      m.footer.appendChild(go)
+      if (inputs.length) global.setTimeout(function () { try { inputs[0].input.focus() } catch (_e) {} }, 0)
+      return m
+    })
+  }
+
   SMLN.permUI = {
     review: review,
     details: details,
     problems: problems,
+    prompt: prompt,
+    confirm: confirm,
+    choose: choose,
+    form: form,
+    progress: progress,
     entriesFromCapability: entriesFromCapability,
     /** Exposed for the self-test. */
     _modal: modal,

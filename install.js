@@ -23,10 +23,19 @@
  * signature; there is no additive file we may place and no non-destructive way
  * in. The installer says so rather than pretending.
  *
+ * The installer also fetches **SteamCMD** once, into `vendor/steamcmd`. That is
+ * what makes the manager's "Install from Workshop" button work without a Steam
+ * client, and it is the only thing SandLoader downloads: the URL is printed
+ * before the fetch, `--no-steamcmd` skips it, a SteamCMD the player already has
+ * is used instead of fetching another, and a failed download is a warning
+ * rather than a failed install.
+ *
  * Usage:
- *   node install.js              install / update
- *   node install.js --status     report what is currently installed
- *   node install.js --uninstall  remove whatever was installed
+ *   node install.js               install / update
+ *   node install.js --no-steamcmd install without fetching SteamCMD
+ *   node install.js --steamcmd    fetch SteamCMD only
+ *   node install.js --status      report what is currently installed
+ *   node install.js --uninstall   remove whatever was installed
  */
 
 const fs = require('fs')
@@ -34,6 +43,8 @@ const path = require('path')
 
 const locate = require('./src/asar/locate')
 const platform = require('./src/asar/platform')
+const steamcmd = require('./src/mods/steamcmd')
+const steamcmdSetup = require('./src/mods/steamcmd-setup')
 
 const SLOT = 'smln'
 const BUNDLE = 'fluxloader.bundle.js'
@@ -45,6 +56,41 @@ function fail(msg, hint) {
   console.error('\n  ERROR  ' + msg)
   if (hint) console.error('         ' + String(hint).split('\n').join('\n         '))
   process.exitCode = 1
+}
+
+// --------------------------------------------------------------- SteamCMD
+
+/**
+ * Fetch SteamCMD unless it is already available or the player opted out.
+ *
+ * Never fails the install. The loader works fully without it; the only thing
+ * missing is the Workshop button, and the message says exactly that so nobody
+ * is left guessing why it does nothing.
+ */
+async function setupSteamcmd(opts = {}) {
+  if (opts.skip) {
+    say('  steamcmd  skipped (--no-steamcmd)')
+    return
+  }
+
+  const already = steamcmd.find()
+  if (already && !opts.force) {
+    say('  steamcmd  ' + already + '  (already installed)')
+    return
+  }
+
+  say('\n  Fetching SteamCMD - needed for "Install from Workshop".')
+  const result = await steamcmdSetup.ensure({ force: opts.force, log: say })
+
+  if (result.ok) {
+    say('  steamcmd  ' + result.path)
+    return
+  }
+
+  // A warning, not an error: everything except the Workshop button still works.
+  say('\n  NOTE  SteamCMD could not be fetched: ' + result.error)
+  say('        Installing from the Workshop will be unavailable until it is.')
+  say('        ' + steamcmd.installHint().split('\n').join('\n        '))
 }
 
 // ------------------------------------------------------------- Steam slot
@@ -192,7 +238,18 @@ function uninstallBootstrap(plat) {
 
 // ------------------------------------------------------------------ status
 
+/**
+ * Wraps the attach-point report so the SteamCMD line is printed whichever of
+ * its several early returns fired.
+ */
 function status() {
+  attachStatus()
+  const exe = steamcmd.find()
+  say('  steamcmd  ' + (exe || 'not installed  -  run: node install.js --steamcmd'))
+  say('')
+}
+
+function attachStatus() {
   const found = locate.tryLocate()
   say('\nSandustry')
   if (found.ok) {
@@ -257,7 +314,7 @@ function status() {
 
 // ----------------------------------------------------------------- install
 
-function install() {
+async function install(opts = {}) {
   const found = locate.tryLocate()
   if (!found.ok) {
     fail('could not find Sandustry.', 'Set SANDUSTRY_DIR to the folder containing Sandustry.exe and retry.')
@@ -280,6 +337,7 @@ function install() {
   if (strat.id === platform.STRATEGIES.APP_BOOTSTRAP) {
     say('  attach    ' + strat.id)
     installBootstrap(found.install, plat, pkg.version)
+    await setupSteamcmd(opts)
     return
   }
 
@@ -312,6 +370,9 @@ function install() {
 
   say('  slot      ' + slot)
   say('  loader    ' + entry)
+
+  await setupSteamcmd(opts)
+
   say('\n  Installed. Start Sandustry and press ^ (or F1) to open the console.')
   say('  Nothing in the game directory was modified.\n')
 }
@@ -336,10 +397,26 @@ function uninstall() {
     if (uninstallBootstrap(plat)) removed = true
   }
 
+  // Only the copy the installer fetched. A SteamCMD the player installed
+  // themselves is theirs and is left exactly where it is.
+  if (steamcmdSetup.remove()) {
+    say('  Removed ' + steamcmdSetup.vendorDir())
+    removed = true
+  }
+
   if (!removed) say('\n  Nothing to remove.\n')
 }
 
-const arg = process.argv[2]
-if (arg === '--status' || arg === '-s') status()
-else if (arg === '--uninstall' || arg === '-u') uninstall()
-else install()
+const argv = process.argv.slice(2)
+const has = (...names) => names.some((n) => argv.includes(n))
+
+if (has('--status', '-s')) status()
+else if (has('--uninstall', '-u')) uninstall()
+else if (has('--steamcmd')) {
+  // Re-run just the fetch, for a player who declined it first time or whose
+  // download failed. --force replaces a copy we fetched before.
+  setupSteamcmd({ force: has('--force') }).catch((e) => fail('SteamCMD setup failed: ' + e.message))
+} else {
+  install({ skip: has('--no-steamcmd'), force: has('--force') })
+    .catch((e) => fail('install failed: ' + e.message))
+}

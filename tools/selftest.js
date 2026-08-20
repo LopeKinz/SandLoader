@@ -2331,6 +2331,214 @@ check('a mod can register a tech node into the tree', () => {
   return 'node placed beside its prerequisite, connections preserved, idempotent'
 })
 
+check('the API scan sees calls two levels deep, not just one', () => {
+  const apiScan = require('../src/mods/api-scan')
+
+  // The hole this closes: `api.player.buildings.unlockByType` used to be read
+  // as `player.buildings`. That container exists, so the scan said "supported"
+  // and the mod died at runtime on the method - which is precisely the failure
+  // this module exists to predict.
+  const src = `
+    api.player.buildings.unlockByType(TYPE)
+    api.storage.local.set('k', 1)
+    api.storage.local.get('k')
+    api.shared.buffers.create(NAME, {})
+    api.structures.processing.isEnabledAt(x, y)
+    api.elements.createAt(1, 2)
+  `
+  const scanned = apiScan.scan(src)
+
+  assert(scanned.nested['player.buildings'].includes('unlockByType'),
+    'the third level was not captured: ' + JSON.stringify(scanned.nested))
+  assert(scanned.nested['storage.local'].join(',') === 'get,set',
+    'nested calls were not collected per container: ' + JSON.stringify(scanned.nested['storage.local']))
+  assert(scanned.namespaces.elements.includes('createAt'),
+    'an ordinary two-level call stopped being recorded')
+
+  // A live API where the containers exist but one method does not.
+  const live = {
+    player: { buildings: { add() {} } },
+    storage: { local: { get() {}, set() {} } },
+    shared: { buffers: { create() {} } },
+    structures: { processing: { register() {} } },
+    elements: { createAt() {} },
+  }
+  const r = apiScan.compare(scanned, live)
+  assert(!r.ok, 'a missing nested method was reported as fine')
+
+  const flat = r.missingMethods.map((g) => g.ns + '.' + g.methods.join('/'))
+  assert(flat.includes('player.buildings.unlockByType'),
+    'the missing nested method was not named: ' + JSON.stringify(flat))
+  assert(flat.includes('structures.processing.isEnabledAt'),
+    'a second missing nested method was not named: ' + JSON.stringify(flat))
+
+  // The containers themselves are objects, not functions. Reporting them as
+  // missing methods would be a false alarm on every single nested call.
+  for (const g of r.missingMethods) {
+    assert(!g.methods.includes('buildings') && !g.methods.includes('local'),
+      'a container object was reported as a missing method: ' + JSON.stringify(g))
+  }
+  assert(!r.missingNamespaces.length, 'nothing should be a missing namespace here: ' + JSON.stringify(r.missingNamespaces))
+
+  // And a build that has everything must still come back clean.
+  live.player.buildings.unlockByType = function () {}
+  live.structures.processing.isEnabledAt = function () {}
+  assert(apiScan.compare(scanned, live).ok, 'a fully supported build was reported as lacking something')
+
+  // A container missing outright is a namespace-level problem, not a method one.
+  const noContainer = apiScan.compare(scanned, { player: {}, storage: { local: { get() {}, set() {} } },
+    shared: { buffers: { create() {} } }, structures: { processing: { register() {}, isEnabledAt() {} } },
+    elements: { createAt() {} } })
+  assert(noContainer.missingNamespaces.includes('player.buildings'),
+    'an absent container was not reported: ' + JSON.stringify(noContainer.missingNamespaces))
+
+  return 'three-level calls captured, checked at the right depth, containers not mistaken for methods'
+})
+
+check('every bundled mod has its nested Sandkit calls accounted for', () => {
+  const apiScan = require('../src/mods/api-scan')
+  const shimSrc = fs.readFileSync(path.join(__dirname, '..', 'src/renderer/sandkit-shims.js'), 'utf8')
+
+  // Every `a.b.c` call the bundled mods make on the main thread. Worker files
+  // target a different Sandkit surface and are excluded - see the worker
+  // entrypoint limitation in the README.
+  const found = new Map()
+  const modsDir = path.join(__dirname, '..', 'mods')
+  for (const d of fs.readdirSync(modsDir, { withFileTypes: true })) {
+    if (!d.isDirectory()) continue
+    let main = ''
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) { walk(p); continue }
+        if (/\.(js|mjs|cjs)$/.test(e.name) && !/worker/i.test(e.name)) main += '\n' + fs.readFileSync(p, 'utf8')
+      }
+    }
+    walk(path.join(modsDir, d.name))
+    for (const [container, names] of Object.entries(apiScan.scan(main).nested || {})) {
+      for (const n of names) {
+        const key = container + '.' + n
+        if (!found.has(key)) found.set(key, [])
+        found.get(key).push(d.name)
+      }
+    }
+  }
+
+  // A bare checkout ships only example-hello and gas-pipes, neither of which
+  // makes a nested call. That is nothing to check, not a failure - the guard
+  // earns its keep on a machine with mods actually installed.
+  if (!found.size) return 'no mod here makes a nested call; nothing to account for'
+
+  /**
+   * Where each one is answered. `build` means the game defines it; the rest
+   * name the SandLoader layer that fills it in. Anything not listed here is a
+   * call that will throw the moment it runs.
+   */
+  const ANSWERED = {
+    'storage.local.get': 'build',
+    'storage.local.set': 'build',
+    'storage.local.remove': 'build',
+    'shared.buffers.create': 'shim',
+    'player.buildings.unlockByType': 'shim',
+    'structures.processing.register': 'shim',
+    'structures.processing.isEnabledAt': 'shim',
+    'structures.recipes.register': 'shim',
+  }
+
+  const unaccounted = [...found.keys()].filter((k) => !ANSWERED[k])
+  assert(unaccounted.length === 0,
+    'these nested calls are answered by nothing - a mod using one throws when it runs: ' +
+    unaccounted.map((k) => k + ' (' + found.get(k).join(', ') + ')').join('; '))
+
+  // The ones this repo claims to shim must actually be in the shim source, or
+  // the table above is documentation rather than a check.
+  for (const [call, via] of Object.entries(ANSWERED)) {
+    if (via !== 'shim') continue
+    if (!found.has(call)) continue
+    const method = call.split('.').pop()
+    // Match a definition, not a mention: `includes(method)` would be satisfied
+    // by a comment, or by a longer name that merely starts with it.
+    const defined = new RegExp(`(?:^|[^\\w$])${method}\\s*(?::\\s*function|\\s*=\\s*function|\\s*\\()`, 'm')
+    const provided = new RegExp(`provide\\([^)]*'${method}'`)
+    assert(defined.test(shimSrc) || provided.test(shimSrc),
+      call + ' is listed as shimmed but "' + method + '" is not defined in sandkit-shims.js')
+  }
+
+  return found.size + ' nested calls across the bundled mods, all accounted for'
+})
+
+check('a mod can unlock a structure it registered, on a build with no unlockByType', () => {
+  const { S } = bootConsole()
+
+  // What the failing Workshop mod calls: api.player.buildings.unlockByType.
+  // This build has no such function - its Sandkit spells it buildings.add -
+  // so the mod's main entry died on the call and everything after it was lost.
+  const FH = {
+    elements: { createAt() {}, getElementTypeFromId() {}, getConfig() {} },
+    config: { getLegacy() { return { cellSize: 4 } } },
+    player: {
+      getPosition() { return { x: 0, y: 0 } },
+      // Nested object, exactly as the game ships it. sandkit-adapter.js only
+      // injects state into top-level functions, so this arrives unwrapped.
+      buildings: { add(state, type) { state.store.player.buildings.push(type) } },
+    },
+  }
+  const st = {
+    store: {
+      player: { buildings: ['foundation', 'collector'] },
+      structures: [], meta: { time: 1 }, world: { size: { width: 4, height: 4 } },
+    },
+    environment: { config: { cellSize: 4 } },
+  }
+  st.sandkit = { mods: {}, getApi: () => FH }
+  S.__capture(FH, st, 'game:ready')
+
+  const buildings = S.api.player.buildings
+  assert(typeof buildings.unlockByType === 'function', 'unlockByType was not shimmed')
+
+  // The game's own add() must survive untouched beside it.
+  assert(typeof buildings.add === 'function', 'the real buildings.add was lost')
+
+  assert(buildings.unlockByType('infinitySource') === true, 'unlocking reported failure')
+  assert(st.store.player.buildings.includes('infinitySource'),
+    'the structure was not added to the build list: ' + JSON.stringify(st.store.player.buildings))
+
+  // Same contract as the game's add: adding twice must not duplicate.
+  buildings.unlockByType('infinitySource')
+  const hits = st.store.player.buildings.filter((b) => b === 'infinitySource').length
+  assert(hits === 1, 'unlocking twice duplicated the entry (' + hits + ')')
+
+  // The originals are still there.
+  assert(st.store.player.buildings[0] === 'foundation' && st.store.player.buildings[1] === 'collector',
+    'the existing build list was disturbed: ' + JSON.stringify(st.store.player.buildings))
+
+  // Junk fails soft rather than corrupting the list - a shim must never throw
+  // into the renderer.
+  assert(buildings.unlockByType(null) === false, 'a null type was accepted')
+  assert(buildings.unlockByType(undefined) === false, 'an undefined type was accepted')
+  assert(st.store.player.buildings.length === 3, 'a refused unlock still changed the list')
+
+  // And a build that already has a real unlockByType must keep its own.
+  const { S: S2 } = bootConsole()
+  const own = function () { return 'GAMES_OWN' }
+  const FH2 = {
+    elements: { createAt() {}, getElementTypeFromId() {}, getConfig() {} },
+    config: { getLegacy() { return { cellSize: 4 } } },
+    player: { buildings: { add() {}, unlockByType: own } },
+  }
+  const st2 = {
+    store: { player: { buildings: [] }, structures: [], meta: { time: 1 },
+      world: { size: { width: 4, height: 4 } } },
+    environment: { config: { cellSize: 4 } },
+  }
+  st2.sandkit = { mods: {}, getApi: () => FH2 }
+  S2.__capture(FH2, st2, 'game:ready')
+  assert(S2.api.player.buildings.unlockByType() === 'GAMES_OWN',
+    'the shim shadowed a real implementation')
+
+  return 'unlockByType filled in, idempotent, fails soft, and never shadows a real one'
+})
+
 check('shims fill v1 gaps without shadowing anything real', () => {
   const { S } = bootConsole()
 
@@ -2634,6 +2842,837 @@ check('the manager offers Steam actions for Workshop mods instead of Delete', ()
     'the Steam action did not carry the published id: ' + JSON.stringify(calls))
 
   return 'source tag, published id, Steam hand-off, Delete withheld'
+})
+
+
+check('a Workshop URL or bare id resolves to one published file id', () => {
+  const workshop = require('../src/mods/workshop')
+
+  // Every spelling Steam itself hands a player, all pointing at one item.
+  const accepted = {
+    '3141592653': '3141592653',
+    '  3141592653  ': '3141592653',
+    'https://steamcommunity.com/sharedfiles/filedetails/?id=3141592653': '3141592653',
+    'https://steamcommunity.com/workshop/filedetails/?id=3141592653&searchtext=x': '3141592653',
+    'http://steamcommunity.com/sharedfiles/filedetails/?l=german&id=3141592653': '3141592653',
+    'steam://url/CommunityFilePage/3141592653': '3141592653',
+  }
+  for (const [input, want] of Object.entries(accepted)) {
+    const got = workshop.parseRef(input)
+    assert(got.ok && got.id === want,
+      `"${input}" should resolve to ${want}, got ` + JSON.stringify(got.ok ? got.id : got.error.message))
+  }
+
+  // Refusals must be refusals, not a silently wrong id.
+  for (const bad of ['', '   ', 'not-an-id', '12.5', '0123', '1'.repeat(25),
+                     'https://steamcommunity.com/app/2764460/workshop/',
+                     'https://example.com/mods/cool-mod']) {
+    const got = workshop.parseRef(bad)
+    assert(!got.ok, `"${bad}" was accepted as a Workshop reference: ` + JSON.stringify(got))
+    assert(got.error.code === 'E_WORKSHOP_REF', 'wrong code for ' + JSON.stringify(bad) + ': ' + got.error.code)
+  }
+
+  // A pasted URL must never reach a command line as anything but digits.
+  const injected = workshop.parseRef('https://steamcommunity.com/sharedfiles/filedetails/?id=1 +quit +run')
+  assert(injected.ok && injected.id === '1', 'trailing junk was not dropped: ' + JSON.stringify(injected))
+
+  return Object.keys(accepted).length + ' accepted forms, 8 refused, no id survives non-digits'
+})
+
+check('a Workshop item is imported as a normal local mod, not left in place', () => {
+  const manage = require('../src/mods/manage')
+  const workshop = require('../src/mods/workshop')
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-import-'))
+  try {
+    const source = path.join(tmp, 'download', '3141592653')
+    fs.mkdirSync(path.join(source, 'assets'), { recursive: true })
+    fs.writeFileSync(path.join(source, 'modinfo.json'),
+      JSON.stringify({ modID: 'ws.mod', name: 'Workshop Mod', version: '2.1.0' }))
+    fs.writeFileSync(path.join(source, 'main.js'), '// mod code\n')
+    fs.writeFileSync(path.join(source, 'assets', 'thing.png'), 'png')
+    fs.writeFileSync(path.join(source, 'workshop.json'), JSON.stringify({ title: 'Fancy Mod' }))
+
+    const smlnRoot = path.join(tmp, 'mods')
+    const fluxRoot = path.join(tmp, 'flux')
+    const ctx = { smlnRoot, fluxRoot, logger: quiet, origin: { publishedFileId: '3141592653', title: 'Fancy Mod' } }
+
+    const done = manage.installFromDir(source, ctx)
+    assert(done.ok, 'the import failed: ' + JSON.stringify(done))
+    assert(done.id === 'ws.mod' && done.flavour === 'fluxloader', 'wrong manifest reading: ' + JSON.stringify(done))
+
+    // It went to the normal mods root for its flavour, not the Workshop tree.
+    assert(done.dir === path.join(fluxRoot, 'ws.mod'), 'installed to the wrong root: ' + done.dir)
+    assert(fs.existsSync(path.join(done.dir, 'main.js')), 'the mod body did not come across')
+    assert(fs.existsSync(path.join(done.dir, 'assets', 'thing.png')), 'nested files did not come across')
+
+    // Copied, not moved: the download is still whole, so the caller decides
+    // when to discard it.
+    assert(fs.existsSync(path.join(source, 'main.js')), 'installFromDir moved the source instead of copying it')
+
+    // The import is SandLoader's own file now: annotation must not call it
+    // Steam-managed, and it must stay deletable.
+    const mod = { id: 'ws.mod', version: '2.1.0', dir: done.dir }
+    workshop.annotate(mod, [path.join(tmp, 'download')])
+    assert(mod.source === undefined, 'an imported mod was marked as Steam-managed: ' + JSON.stringify(mod))
+    assert(mod.removable !== false, 'an imported mod was made undeletable')
+    assert(mod.importedFrom === 'workshop' && mod.publishedFileId === '3141592653',
+      'the import lost its provenance: ' + JSON.stringify(mod))
+
+    const removed = manage.remove(done.dir, { roots: [fluxRoot], logger: quiet })
+    assert(removed.ok === true && !fs.existsSync(done.dir),
+      'an imported mod could not be deleted: ' + JSON.stringify(removed))
+
+    return 'copied out, landed in the local root, keeps provenance, stays removable'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('importing validates the manifest and refuses what is not a mod', () => {
+  const manage = require('../src/mods/manage')
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-import-bad-'))
+  try {
+    const smlnRoot = path.join(tmp, 'mods')
+    const ctx = { smlnRoot, fluxRoot: path.join(tmp, 'flux'), logger: quiet }
+
+    // Workshop content that is not a mod at all.
+    const notAMod = path.join(tmp, 'notamod')
+    fs.mkdirSync(notAMod, { recursive: true })
+    fs.writeFileSync(path.join(notAMod, 'readme.txt'), 'hello')
+    const r1 = manage.installFromDir(notAMod, ctx)
+    assert(!r1.ok && r1.code === 'E_MANIFEST_INVALID', 'a manifest-less folder was installed: ' + JSON.stringify(r1))
+    assert(/not a mod SandLoader can load/.test(r1.error), 'the refusal does not explain itself: ' + r1.error)
+
+    // A manifest that parses but declares no id is just as invalid.
+    const noId = path.join(tmp, 'noid')
+    fs.mkdirSync(noId, { recursive: true })
+    fs.writeFileSync(path.join(noId, 'smln.mod.json'), JSON.stringify({ name: 'nameless' }))
+    const r2 = manage.installFromDir(noId, ctx)
+    assert(!r2.ok, 'a manifest with no id was installed: ' + JSON.stringify(r2))
+
+    // Broken JSON must not throw out of the installer.
+    const broken = path.join(tmp, 'broken')
+    fs.mkdirSync(broken, { recursive: true })
+    fs.writeFileSync(path.join(broken, 'smln.mod.json'), '{ not json')
+    const r3 = manage.installFromDir(broken, ctx)
+    assert(!r3.ok, 'invalid JSON was installed: ' + JSON.stringify(r3))
+
+    // Nothing at all should have been written.
+    assert(!fs.existsSync(smlnRoot) || fs.readdirSync(smlnRoot).length === 0,
+      'a refused import still left something in the mods folder')
+
+    const missing = manage.installFromDir(path.join(tmp, 'nope'), ctx)
+    assert(!missing.ok && /not found/.test(missing.error), 'a missing folder gave a poor error: ' + JSON.stringify(missing))
+
+    // A single wrapper folder is unwrapped, the way zip.js strips one.
+    const wrapped = path.join(tmp, 'wrapped')
+    fs.mkdirSync(path.join(wrapped, 'MyMod'), { recursive: true })
+    fs.writeFileSync(path.join(wrapped, 'MyMod', 'smln.mod.json'),
+      JSON.stringify({ id: 'wrapped.mod', version: '1.0.0' }))
+    const r4 = manage.installFromDir(wrapped, ctx)
+    assert(r4.ok && r4.id === 'wrapped.mod', 'a wrapped mod was not unwrapped: ' + JSON.stringify(r4))
+    assert(fs.existsSync(path.join(smlnRoot, 'wrapped.mod', 'smln.mod.json')), 'the unwrapped manifest is missing')
+
+    return 'no manifest, no id, bad JSON and a missing folder all refused; one wrapper folder stripped'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('a copied mod tree cannot smuggle a link out of its own folder', () => {
+  const manage = require('../src/mods/manage')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-copy-'))
+  try {
+    const src = path.join(tmp, 'src')
+    fs.mkdirSync(src, { recursive: true })
+    fs.writeFileSync(path.join(src, 'keep.txt'), 'kept')
+    const secret = path.join(tmp, 'secret.txt')
+    fs.writeFileSync(secret, 'do not copy me')
+
+    // Symlink creation needs privileges on Windows; skip rather than fail when
+    // the machine will not make one.
+    let linked = false
+    try {
+      fs.symlinkSync(secret, path.join(src, 'escape.txt'))
+      linked = true
+    } catch (_) { /* unprivileged Windows, or no symlink support */ }
+
+    const dest = path.join(tmp, 'dest')
+    const stats = manage.copyTree(src, dest)
+
+    assert(fs.existsSync(path.join(dest, 'keep.txt')), 'a regular file was not copied')
+    if (linked) {
+      assert(!fs.existsSync(path.join(dest, 'escape.txt')), 'a symlink was followed into the install')
+      assert(stats.skipped.includes('escape.txt'), 'the skipped link was not reported: ' + JSON.stringify(stats.skipped))
+    }
+    assert(stats.files === 1, 'expected exactly one copied file, got ' + stats.files)
+
+    return linked ? 'regular files copied, symlink skipped and reported' : 'regular files copied (no symlink support here)'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('SteamCMD is driven safely, and every failure explains itself', () => {
+  const steamcmd = require('../src/mods/steamcmd')
+
+  // The argument vector: anonymous, non-interactive, and the id passed as its
+  // own argument rather than interpolated into a string.
+  const args = steamcmd.argsFor(2764460, '3141592653')
+  assert(args.includes('anonymous'), 'the login is not anonymous: ' + JSON.stringify(args))
+  assert(args.includes('+workshop_download_item'), 'the download command is missing')
+  const at = args.indexOf('+workshop_download_item')
+  assert(args[at + 1] === '2764460' && args[at + 2] === '3141592653',
+    'app id and item id are in the wrong order: ' + JSON.stringify(args))
+  assert(args[args.length - 1] === '+quit', 'SteamCMD would not exit: ' + JSON.stringify(args))
+  assert(args.includes('+@NoPromptForPassword'), 'SteamCMD could stop for a password prompt')
+  assert(steamcmd.argsFor(1, '2', { user: 'someone' }).includes('someone'), 'an explicit user was ignored')
+
+  // A machine without SteamCMD gets a named error and an actionable hint, not
+  // a crash and not a silent failure.
+  return steamcmd.downloadItem('3141592653', {
+    // Stub the lookup rather than trusting this machine to lack SteamCMD - the
+    // installer may well have just put one there.
+    findFn: () => null,
+    spawnFn: () => { throw new Error('should not spawn') },
+  })
+    .then((r) => {
+      assert(!r.ok, 'a download was attempted with no SteamCMD present')
+      assert(r.error.code === 'E_STEAMCMD_MISSING', 'wrong code: ' + r.error.code)
+      assert(/SteamCMD/i.test(r.error.message) && /PATH|SMLN_STEAMCMD/.test(r.error.message),
+        'the error does not say how to fix it: ' + r.error.message)
+
+      // Steam's own failure lines are turned into something a player can act on.
+      assert(/Check the URL or id/.test(steamcmd.diagnose('ERROR! Download item failed (File Not Found).', 1)),
+        'a missing item was not diagnosed')
+      assert(/private|anonymous/i.test(steamcmd.diagnose('ERROR! Download item failed (Access Denied).', 1)),
+        'an access failure was not diagnosed')
+      assert(/timed out/i.test(steamcmd.diagnose('Timeout downloading item 1', 1)), 'a timeout was not diagnosed')
+      assert(/exited with code 7/.test(steamcmd.diagnose('', 7)), 'an unknown failure lost its exit code')
+
+      // The success line is what locates the download.
+      const m = 'Success. Downloaded item to : "C:\\steamcmd\\steamapps\\workshop\\content\\2764460\\3141592653"'
+        .match(steamcmd.SUCCESS_RE)
+      assert(m && /3141592653$/.test(m[1]), 'the success line was not parsed: ' + JSON.stringify(m))
+
+      return 'anonymous non-interactive args, id passed separately, missing binary and 4 Steam failures all named'
+    })
+})
+
+check('a faked SteamCMD run lands a real directory the installer accepts', () => {
+  const steamcmd = require('../src/mods/steamcmd')
+  const { EventEmitter } = require('events')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-cmd-'))
+  const item = path.join(tmp, 'steamapps', 'workshop', 'content', '2764460', '3141592653')
+  fs.mkdirSync(item, { recursive: true })
+  fs.writeFileSync(path.join(item, 'smln.mod.json'), JSON.stringify({ id: 'downloaded.mod', version: '1.0.0' }))
+  const exe = path.join(tmp, 'steamcmd.exe')
+  fs.writeFileSync(exe, '')
+
+  /** Stand in for the process, so nothing is actually spawned. */
+  function fakeRun(output, code) {
+    return () => {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.kill = () => {}
+      setTimeout(() => { child.stdout.emit('data', output); child.emit('close', code) }, 0)
+      return child
+    }
+  }
+
+  const success = `Success. Downloaded item to : "${item}"\n`
+  return steamcmd.downloadItem('3141592653', { exe, spawnFn: fakeRun(success, 0) })
+    .then((r) => {
+      assert(r.ok, 'a successful run was reported as a failure: ' + JSON.stringify(r.ok ? '' : r.error.message))
+      assert(path.resolve(r.dir) === path.resolve(item), 'the wrong directory came back: ' + r.dir)
+
+      // ...and what came back is genuinely installable by the shared path.
+      const manage = require('../src/mods/manage')
+      const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+      const done = manage.installFromDir(r.dir, {
+        smlnRoot: path.join(tmp, 'mods'), fluxRoot: path.join(tmp, 'flux'), logger: quiet,
+        origin: { publishedFileId: '3141592653' },
+      })
+      assert(done.ok && done.id === 'downloaded.mod', 'the download did not install: ' + JSON.stringify(done))
+
+      // A run that says nothing useful and leaves nothing behind is a failure,
+      // even on exit code 0 - otherwise a silent no-op looks like a success.
+      return steamcmd.downloadItem('999000111', { exe, spawnFn: fakeRun('Logging in...\n', 0) })
+    })
+    .then((r2) => {
+      assert(!r2.ok, 'an empty run was reported as a success')
+      assert(r2.error.code === 'E_WORKSHOP_DOWNLOAD', 'wrong code: ' + r2.error.code)
+      fs.rmSync(tmp, { recursive: true, force: true })
+      return 'success line parsed, download installed, an empty exit-0 run still fails'
+    })
+})
+
+check('the download cleanup deletes the download folder and nothing else', () => {
+  const workshop = require('../src/mods/workshop')
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-discard-'))
+  try {
+    const content = path.join(tmp, 'steamapps', 'workshop', 'content', '2764460')
+    const item = path.join(content, '3141592653')
+    fs.mkdirSync(path.join(item, 'assets'), { recursive: true })
+    fs.writeFileSync(path.join(item, 'assets', 'a.png'), 'x')
+
+    // Everything the guard must refuse. Each of these is a real path that a
+    // wrong prefix test or an off-by-one would happily delete.
+    const sibling = path.join(content, '999888777')
+    fs.mkdirSync(sibling, { recursive: true })
+
+    const refuse = [
+      [content, '3141592653', 'the content root'],
+      [path.dirname(content), '3141592653', 'the whole workshop tree'],
+      [path.join(item, 'assets'), '3141592653', 'a folder inside the item'],
+      [sibling, '3141592653', 'a different item'],
+      [item, '999888777', 'the right folder with the wrong id'],
+      [path.join(tmp, 'mods', '3141592653'), '3141592653', 'a mods folder that merely shares the name'],
+      [item, '../../etc', 'a non-numeric id'],
+      ['', '3141592653', 'an empty path'],
+      [item, '', 'an empty id'],
+    ]
+    for (const [dir, id, what] of refuse) {
+      assert(!workshop.isDownloadDir(dir, id), `${what} was accepted as a download folder: ${dir}`)
+      assert(workshop.discardDownload(dir, id, quiet) === false, `${what} was deleted: ${dir}`)
+    }
+    assert(fs.existsSync(sibling), 'a refused delete removed a sibling item anyway')
+    assert(fs.existsSync(item), 'a refused delete removed the item anyway')
+
+    // ...and the one path it must accept.
+    assert(workshop.isDownloadDir(item, '3141592653'), 'the real download folder was not recognised')
+    assert(workshop.discardDownload(item, '3141592653', quiet) === true, 'the download was not removed')
+    assert(!fs.existsSync(item), 'the download folder is still there')
+    // Only the item goes; its parent and its siblings stay.
+    assert(fs.existsSync(content), 'the cleanup took the content root with it')
+    assert(fs.existsSync(sibling), 'the cleanup took a sibling item with it')
+
+    return refuse.length + ' wrong paths refused, the download folder alone removed'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('the installer fetches SteamCMD from Valve, and only when it has to', () => {
+  const setup = require('../src/mods/steamcmd-setup')
+  const steamcmd = require('../src/mods/steamcmd')
+
+  // Only Valve's own hosts, and only over https - this is the one thing
+  // SandLoader downloads, so the source is not a detail.
+  const seen = []
+  for (const [plat, urls] of Object.entries(setup.SOURCES)) {
+    assert(urls.length >= 2, `${plat} has no mirror to fall back on`)
+    for (const u of urls) {
+      seen.push(u)
+      assert(/^https:\/\//.test(u), `${plat} would download over plain http: ${u}`)
+      const host = new URL(u).host
+      assert(host === 'steamcdn-a.akamaihd.net' || host === 'media.steampowered.com',
+        `${plat} downloads from an unexpected host: ${host}`)
+    }
+  }
+  assert(setup.urlsForPlatform().length >= 2, 'this platform has no download URL')
+
+  // The vendored copy is inside SandLoader, so it needs no admin rights and
+  // uninstalling can take it away again.
+  const vendor = setup.vendorDir()
+  assert(vendor === steamcmd.vendorDir(), 'the finder and the installer disagree about where it goes')
+  assert(path.resolve(vendor).startsWith(path.resolve(__dirname, '..')),
+    'SteamCMD would be installed outside the SandLoader folder: ' + vendor)
+  assert(/steamcmd(\.exe|\.sh)$/.test(setup.vendorExe()), 'the vendored binary has an odd name: ' + setup.vendorExe())
+
+  // An existing SteamCMD is never replaced: ensure() must report it and fetch
+  // nothing. Pointed at this very file, which is certainly not SteamCMD but is
+  // certainly a file - `find` checks existence, and that is the branch here.
+  const before = process.env.SMLN_STEAMCMD
+  process.env.SMLN_STEAMCMD = __filename
+  try {
+    assert(steamcmd.find() === path.resolve(__filename), 'an explicit SMLN_STEAMCMD was not honoured')
+    return setup.ensure({ log() {} }).then((r) => {
+      assert(r.ok && r.status === 'present', 'ensure() re-downloaded over an existing SteamCMD: ' + JSON.stringify(r))
+      assert(r.path === path.resolve(__filename), 'ensure() reported the wrong path: ' + r.path)
+      return seen.length + ' https URLs on Valve hosts, vendored in-tree, an existing install left alone'
+    }).then((out) => {
+      if (before === undefined) delete process.env.SMLN_STEAMCMD
+      else process.env.SMLN_STEAMCMD = before
+      return out
+    })
+  } catch (e) {
+    if (before === undefined) delete process.env.SMLN_STEAMCMD
+    else process.env.SMLN_STEAMCMD = before
+    throw e
+  }
+})
+
+check('cleanup never touches content Steam owns, only a SteamCMD download', () => {
+  const workshop = require('../src/mods/workshop')
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} }
+
+  // Steam's own subscribed folder and SteamCMD's download folder have the
+  // identical shape - workshop/content/<appid>/<id> - so shape alone must not
+  // be what decides. Deleting Steam's copy is the exact thing this module
+  // exists to prevent: Steam just re-downloads it and the player cannot tell
+  // why the mod came back.
+  const real = workshop.roots()
+  if (real.length) {
+    const steamOwned = path.join(real[0], '3141592653')
+    assert(!workshop.isDownloadDir(steamOwned, '3141592653'),
+      'a subscribed Steam Workshop folder was mistaken for our own download: ' + steamOwned)
+    assert(workshop.discardDownload(steamOwned, '3141592653', quiet) === false,
+      'cleanup would have deleted content Steam owns')
+  }
+
+  // A SteamCMD download has the same shape but sits outside every Steam
+  // library, and that one is ours to remove.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-own-'))
+  try {
+    const ours = path.join(tmp, 'steamcmd', 'steamapps', 'workshop', 'content', '2764460', '3141592653')
+    fs.mkdirSync(ours, { recursive: true })
+    fs.writeFileSync(path.join(ours, 'x.txt'), 'x')
+    assert(workshop.isDownloadDir(ours, '3141592653'), 'our own download was not recognised: ' + ours)
+    assert(workshop.discardDownload(ours, '3141592653', quiet) === true, 'our own download was not removed')
+    assert(!fs.existsSync(ours), 'the download folder is still there')
+
+    return real.length
+      ? 'Steam-owned content refused, our own download removed'
+      : 'our own download removed (no Steam library on this machine to contrast)'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('an already-subscribed item is found locally instead of downloaded', () => {
+  const workshop = require('../src/mods/workshop')
+
+  // Nothing is subscribed under a bogus id, so the lookup must say so rather
+  // than returning a path that does not exist.
+  assert(workshop.findLocalItem('999888777000') === null, 'a missing item was reported as present')
+  assert(workshop.findLocalItem('not-an-id') === null, 'a non-numeric id was looked up')
+  assert(workshop.findLocalItem('') === null, 'an empty id was looked up')
+
+  // An empty directory is not a usable item either - Steam leaves those behind.
+  const real = workshop.roots()
+  if (!real.length) return 'no Steam library on this machine; refusals verified'
+
+  const probe = path.join(real[0], '3141592653')
+  let made = false
+  try {
+    fs.mkdirSync(probe, { recursive: true })
+    made = true
+    assert(workshop.findLocalItem('3141592653') === null, 'an empty folder was treated as a subscribed item')
+    fs.writeFileSync(path.join(probe, 'modinfo.json'), JSON.stringify({ modID: 'x', version: '1' }))
+    assert(workshop.findLocalItem('3141592653') === probe,
+      'a subscribed item was not found: ' + workshop.findLocalItem('3141592653'))
+    return 'missing, malformed and empty all refused; a real subscribed item found'
+  } catch (e) {
+    if (e && (e.code === 'EACCES' || e.code === 'EPERM')) return 'refusals verified (Steam folder not writable here)'
+    throw e
+  } finally {
+    if (made) { try { fs.rmSync(probe, { recursive: true, force: true }) } catch (_) { /* best effort */ } }
+  }
+})
+
+check('Steam refusing an item is reported as something the player can act on', () => {
+  const steamcmd = require('../src/mods/steamcmd')
+
+  // The real line SteamCMD prints for a paid game under an anonymous login.
+  // "Failure" is also the word it uses for everything else, which is exactly
+  // why this case has to be picked out by hand.
+  const refused = 'ERROR! Download item 3783406459 failed (Failure).'
+  assert(steamcmd.diagnoseCode(refused) === 'E_WORKSHOP_OWNERSHIP',
+    'the ownership refusal was not classified: ' + steamcmd.diagnoseCode(refused))
+
+  const msg = steamcmd.diagnose(refused, 1)
+  assert(/paid game|anonymous/i.test(msg), 'the message does not explain why: ' + msg)
+  assert(/[Ss]ubscribe/.test(msg), 'the message does not give a way out: ' + msg)
+  assert(!/^Steam reported: Failure/.test(msg), 'the message is still the bare Steam wording: ' + msg)
+
+  // A missing item is a different problem with a different answer, and must
+  // not be folded into the same message.
+  const missing = 'ERROR! Download item 1 failed (File Not Found).'
+  assert(steamcmd.diagnoseCode(missing) === 'E_WORKSHOP_NOT_FOUND', 'a missing item was misclassified')
+  assert(!/subscribe/i.test(steamcmd.diagnose(missing, 1)), 'a missing item was told to subscribe')
+
+  // Anything genuinely unrecognised still falls through to the generic code.
+  assert(steamcmd.diagnoseCode('ERROR! Download item 5 failed (Disk Full).') === 'E_WORKSHOP_DOWNLOAD',
+    'an unknown reason was force-fitted into a named code')
+
+  return 'ownership, missing item and unknown reasons each classified separately'
+})
+
+check('a refused Workshop download is recoverable without leaving the game', () => {
+  const { S, dom } = bootConsole({ mods: [] })
+  const calls = []
+  let probes = 0
+
+  S.callMain = (action, payload) => {
+    calls.push({ action, payload })
+    if (action === 'steamcmdStatus') return Promise.resolve({ ok: true, available: true, path: 'C:/s/steamcmd.exe' })
+    if (action === 'installWorkshopReview') {
+      // Refused the first time, exactly as Steam does for a paid game; then
+      // succeeds once the item has been subscribed and has landed on disk.
+      if (probes === 0) {
+        return Promise.resolve({
+          ok: false,
+          code: 'E_WORKSHOP_OWNERSHIP',
+          error: 'Steam would not hand over that item.',
+          canSubscribe: true,
+          publishedFileId: '3141592653',
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        token: 'w1',
+        review: { mod: { id: 'ws.mod', name: 'WS', version: '1.0.0' }, capability: {}, entries: [] },
+      })
+    }
+    if (action === 'workshopProbe') {
+      // Not there, not there, then there - the shape of a real subscription.
+      probes++
+      return Promise.resolve({ ok: true, present: probes >= 3 })
+    }
+    if (action === 'openWorkshop') return Promise.resolve({ ok: true, url: 'steam://x' })
+    return Promise.resolve({ ok: true, id: 'ws.mod', version: '1.0.0', dir: 'C:/mods/ws.mod' })
+  }
+  S.modsUI._timing.pollMs = 1
+  S.modsUI.toggle(true)
+
+  let button = null
+  ;(function walk(n) {
+    if (n.tagName === 'BUTTON' && /Install from Workshop/.test(String(n.textContent || ''))) button = n
+    for (const c of n.childNodes || []) walk(c)
+  })(dom.document.getElementById('smln-mods'))
+  assert(button, 'the manager has no "Install from Workshop" button')
+
+  // Drive the recovery: paste a link, get refused, choose "Open in Steam",
+  // and let the poll find the item.
+  let offered = null
+  S.permUI = S.permUI || {}
+  S.permUI.prompt = () => Promise.resolve('3141592653')
+  S.permUI.choose = (opts) => { offered = opts; return Promise.resolve('steam') }
+  S.permUI.review = () => Promise.resolve(true)
+  S.permUI.progress = () => ({ update() {}, close() {}, cancelled: () => false })
+
+  button.dispatch('click', {})
+
+  // Let the promise chain and the 2s poll interval run to completion.
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+  return settle().then(settle).then(settle).then(settle).then(settle).then(settle)
+    .then(() => new Promise((r) => setTimeout(r, 30)))
+    .then(settle).then(settle).then(settle)
+    .then(() => {
+      const actions = calls.map((c) => c.action)
+
+      assert(offered, 'the refusal did not offer a way out')
+      const keys = offered.options.map((o) => o.key)
+      assert(keys.includes('steam') && keys.includes('account'),
+        'both remedies should be offered in-game, got: ' + JSON.stringify(keys))
+
+      assert(actions.includes('openWorkshop'), 'Steam was never opened: ' + JSON.stringify(actions))
+      assert(actions.filter((a) => a === 'workshopProbe').length >= 2,
+        'it did not wait for Steam to finish: ' + JSON.stringify(actions))
+      assert(actions.filter((a) => a === 'installWorkshopReview').length === 2,
+        'it did not retry the install once the item arrived: ' + JSON.stringify(actions))
+      assert(actions.includes('installWorkshopCommit'),
+        'the recovered install never committed: ' + JSON.stringify(actions))
+
+      // The point of the whole exercise: no second trip through the prompt.
+      assert(calls.filter((c) => c.action === 'installWorkshopReview')
+        .every((c) => c.payload.ref === '3141592653'),
+        'the retry lost the id and would have re-asked for it')
+
+      return 'refusal offers both remedies, waits for Steam, retries and commits - no re-paste'
+    })
+})
+
+check('an official mod is reviewed as official, not as a broken Fluxloader mod', () => {
+  const approvals = require('../src/mods/approvals')
+  const manage = require('../src/mods/manage')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-flavour-'))
+  try {
+    // `modinfo.json` is shared by two unrelated formats. Official Sandkit
+    // declares manifestVersion and identifies mods by `id`; Fluxloader has no
+    // manifestVersion and uses `modID`. Reading an official manifest with the
+    // Fluxloader reader fails with `the manifest has no "modID"` - a real mod,
+    // refused because it was read by the wrong reader.
+    const official = path.join(tmp, 'official')
+    fs.mkdirSync(official, { recursive: true })
+    fs.writeFileSync(path.join(official, 'modinfo.json'), JSON.stringify({
+      manifestVersion: 1, id: 'uolkx.debug-toggle', name: 'Debug Toggle',
+      version: '0.2.0', apiVersion: 1, entry: 'main.js',
+    }))
+
+    const r = approvals.inspectArchive(official, { directory: true })
+    assert(r.ok, 'an official mod was refused: ' + (r.ok ? '' : r.error.message))
+    assert(r.flavour === 'official', 'wrong flavour: ' + r.flavour)
+    assert(r.review.mod.id === 'uolkx.debug-toggle', 'the id was not read: ' + r.review.mod.id)
+
+    // It runs in the renderer through SMLN.official.execute and is handed no
+    // `require`, so the review must not imply native access.
+    const ctx = r.review.capability.contexts
+    assert(ctx.native === false, 'an official mod was reviewed as native')
+    assert(ctx.game === true, 'the official entrypoint was not seen as a game entrypoint')
+    assert(r.review.capability.tier === 'sandboxed',
+      'an official mod was not classified as sandboxed: ' + r.review.capability.tier)
+
+    // manage.js already discriminated correctly; the two must now agree, or an
+    // install passes review and then lands in the wrong root.
+    const viaManage = manage.readManifest(official)
+    assert(viaManage.flavour === 'official' && viaManage.id === r.review.mod.id,
+      'the reviewer and the installer disagree: ' + JSON.stringify(viaManage))
+
+    // A real Fluxloader manifest must still read as Fluxloader.
+    const flux = path.join(tmp, 'flux')
+    fs.mkdirSync(flux, { recursive: true })
+    fs.writeFileSync(path.join(flux, 'modinfo.json'),
+      JSON.stringify({ modID: 'someone.fluxmod', name: 'Flux', version: '1.0.0', gameEntrypoint: 'game.js' }))
+    const f = approvals.inspectArchive(flux, { directory: true })
+    assert(f.ok && f.flavour === 'fluxloader', 'a Fluxloader mod stopped reading as one: ' + JSON.stringify(f.ok ? f.flavour : f.error.message))
+    assert(f.review.mod.id === 'someone.fluxmod', 'the modID was not read: ' + f.review.mod.id)
+
+    // ...and a manifest that is neither is still refused, by the right name.
+    const broken = path.join(tmp, 'broken')
+    fs.mkdirSync(broken, { recursive: true })
+    fs.writeFileSync(path.join(broken, 'modinfo.json'), JSON.stringify({ name: 'nameless' }))
+    const b = approvals.inspectArchive(broken, { directory: true })
+    assert(!b.ok, 'a manifest with no id at all was accepted')
+    assert(/modID/.test(b.error.message), 'a Fluxloader manifest should be named by its own field: ' + b.error.message)
+
+    return 'official read as official and sandboxed, Fluxloader unchanged, reviewer agrees with installer'
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
+check('the Steam password goes to stdin, never to a command line', () => {
+  const steamcmd = require('../src/mods/steamcmd')
+  const { EventEmitter } = require('events')
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-login-'))
+  const exe = path.join(tmp, 'steamcmd.exe')
+  fs.writeFileSync(exe, '')
+
+  const SECRET = 'correct-horse-battery-staple'
+  const seen = []
+
+  /**
+   * Stands in for SteamCMD, reproducing the exchange the real one was observed
+   * to perform: it announces no cached credentials, prints `password:`, and
+   * reads the answer from stdin without echoing it.
+   */
+  function fakeSteamcmd(script) {
+    return (file, args) => {
+      const child = new EventEmitter()
+      const written = []
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.stdin = { write: (v) => written.push(String(v)), end() {} }
+      child.kill = () => { child.emit('close', 1) }
+      seen.push({ file, args, written })
+      setTimeout(() => script(child, written), 0)
+      return child
+    }
+  }
+
+  // 1. A successful sign-in, answering the password prompt.
+  return steamcmd.login({
+    user: 'someplayer', password: SECRET, exe,
+    spawnFn: fakeSteamcmd((child, written) => {
+      child.stdout.emit('data', 'Cached credentials not found.\n\npassword: ')
+      setTimeout(() => {
+        assert(written.join('') === SECRET + '\n', 'the password was not written to stdin')
+        child.stdout.emit('data', "\nLogging in user 'someplayer' to Steam Public...OK\nWaiting for user info...OK\n")
+        child.emit('close', 0)
+      }, 0)
+    }),
+  }).then((r) => {
+    assert(r.ok, 'a successful sign-in was reported as a failure: ' + (r.ok ? '' : r.error.message))
+
+    // The guarantee that matters: argv is readable by any other process running
+    // as this user - which here includes any mod holding the `node` permission.
+    const call = seen[0]
+    const argv = call.args.join(' ')
+    assert(!argv.includes(SECRET), 'the password was passed on the command line: ' + argv)
+    assert(argv.includes('+login') && argv.includes('someplayer'), 'the account name was not passed: ' + argv)
+    assert(!argv.includes('NoPromptForPassword'),
+      'the password prompt was suppressed, so there would be nothing to answer')
+
+    // 2. Steam Guard, with no code to hand: reported as needing one, not as a
+    //    generic failure, so the UI knows to ask.
+    return steamcmd.login({
+      user: 'someplayer', password: SECRET, exe,
+      spawnFn: fakeSteamcmd((child) => {
+        child.stdout.emit('data', 'password: ')
+        setTimeout(() => child.stdout.emit('data', '\nSteam Guard code:'), 0)
+      }),
+    })
+  }).then((r) => {
+    assert(!r.ok && r.needsGuard, 'a Steam Guard prompt was not reported as one: ' + JSON.stringify(r.ok ? r : r.error.message))
+    assert(r.error.code === 'E_STEAM_GUARD', 'wrong code: ' + r.error.code)
+
+    // 3. A wrong password is named as such rather than reported as "unknown".
+    return steamcmd.login({
+      user: 'someplayer', password: 'wrong', exe,
+      spawnFn: fakeSteamcmd((child) => {
+        child.stdout.emit('data', 'password: ')
+        setTimeout(() => {
+          child.stdout.emit('data', "\nLogging in user 'someplayer' to Steam Public...ERROR (Invalid Password)\n")
+          child.emit('close', 1)
+        }, 0)
+      }),
+    })
+  }).then((r) => {
+    assert(!r.ok && r.error.code === 'E_STEAM_LOGIN', 'a bad password was misclassified: ' + JSON.stringify(r))
+    assert(/rejected/i.test(r.error.message), 'the message does not say what happened: ' + r.error.message)
+
+    // 4. A junk account name never reaches a process at all.
+    return steamcmd.login({ user: 'bad name; rm -rf /', password: SECRET, exe,
+      spawnFn: () => { throw new Error('should not spawn') } })
+  }).then((r) => {
+    assert(!r.ok, 'a malformed account name was accepted')
+    assert(seen.length === 3, 'a malformed account name still started SteamCMD')
+
+    // Nothing anywhere in what we captured should contain the secret except the
+    // stdin buffer it was meant for.
+    for (const call of seen) {
+      assert(!JSON.stringify(call.args).includes(SECRET), 'the password reached argv')
+      assert(!String(call.file).includes(SECRET), 'the password reached the executable path')
+    }
+
+    fs.rmSync(tmp, { recursive: true, force: true })
+    return 'password only ever on stdin; guard, bad password and bad account each named'
+  })
+})
+
+check('signing in to Steam happens in-game, and the password is never kept', () => {
+  const { S, dom } = bootConsole({ mods: [] })
+  const calls = []
+  let logins = 0
+
+  S.callMain = (action, payload) => {
+    // Record a deep copy: the assertion below is about what was *sent*, and a
+    // later mutation of the same object would hide a leak rather than reveal it.
+    calls.push({ action, payload: JSON.parse(JSON.stringify(payload || {})) })
+    if (action === 'steamcmdStatus') return Promise.resolve({ ok: true, available: true })
+    if (action === 'getSteamUser') return Promise.resolve({ ok: true, user: null })
+    if (action === 'steamLogin') {
+      logins++
+      // Steam asks for a second factor first, exactly as it does in life, and
+      // accepts the sign-in once the code comes back.
+      if (logins === 1) {
+        return Promise.resolve({ ok: false, needsGuard: true, code: 'E_STEAM_GUARD', error: 'guard needed' })
+      }
+      return Promise.resolve({ ok: true, user: payload.user })
+    }
+    if (action === 'installWorkshopReview') {
+      if (logins >= 2) {
+        return Promise.resolve({
+          ok: true, token: 'w1',
+          review: { mod: { id: 'ws.mod', name: 'WS', version: '1.0.0' }, capability: {}, entries: [] },
+        })
+      }
+      return Promise.resolve({
+        ok: false, code: 'E_WORKSHOP_OWNERSHIP', error: 'refused',
+        canSubscribe: true, publishedFileId: '3141592653',
+      })
+    }
+    return Promise.resolve({ ok: true, id: 'ws.mod', version: '1.0.0', dir: 'C:/mods/ws.mod' })
+  }
+  S.modsUI.toggle(true)
+
+  let button = null
+  ;(function walk(n) {
+    if (n.tagName === 'BUTTON' && /Install from Workshop/.test(String(n.textContent || ''))) button = n
+    for (const c of n.childNodes || []) walk(c)
+  })(dom.document.getElementById('smln-mods'))
+
+  const prompts = []
+  let signInForm = null
+  S.permUI = S.permUI || {}
+  S.permUI.prompt = (opts) => {
+    prompts.push(opts)
+    // The link first, then the Steam Guard code.
+    return Promise.resolve(prompts.length === 1 ? '3141592653' : '5XK2Q')
+  }
+  S.permUI.choose = () => Promise.resolve('account')
+  S.permUI.form = (opts) => {
+    signInForm = opts
+    return Promise.resolve({ user: 'someplayer', password: 'hunter2' })
+  }
+  S.permUI.review = () => Promise.resolve(true)
+  S.permUI.progress = () => ({ update() {}, close() {}, cancelled: () => false })
+
+  button.dispatch('click', {})
+
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+  let chain = Promise.resolve()
+  for (let i = 0; i < 12; i++) chain = chain.then(settle)
+  return chain.then(() => {
+    const actions = calls.map((c) => c.action)
+
+    // The form is the whole point: both fields asked for in-game, password masked.
+    assert(signInForm, 'no sign-in form was shown: ' + JSON.stringify(actions))
+    const keys = signInForm.fields.map((f) => f.key)
+    assert(keys.join(',') === 'user,password', 'unexpected sign-in fields: ' + JSON.stringify(keys))
+    const pw = signInForm.fields.find((f) => f.key === 'password')
+    assert(pw.type === 'password', 'the password field is not masked')
+
+    const sent = calls.filter((c) => c.action === 'steamLogin')
+    assert(sent.length === 2, 'expected a sign-in and a Steam Guard retry, got ' + sent.length)
+    assert(sent[0].payload.user === 'someplayer' && sent[0].payload.password === 'hunter2',
+      'the credentials did not reach the main process')
+    assert(!sent[0].payload.guardCode, 'a guard code was sent before Steam asked for one')
+    assert(sent[1].payload.guardCode === '5XK2Q', 'the Steam Guard code was not sent: ' + JSON.stringify(sent[1].payload))
+    assert(sent[1].payload.password === 'hunter2',
+      'the retry dropped the password - a Steam Guard retry is a fresh SteamCMD process and needs it again')
+
+    // The password must go to steamLogin and nowhere else. Any other call
+    // carrying it would mean it is on a path towards disk.
+    for (const c of calls) {
+      if (c.action === 'steamLogin') continue
+      assert(!JSON.stringify(c.payload).includes('hunter2'),
+        'the password leaked into ' + c.action + ': ' + JSON.stringify(c.payload))
+    }
+    // And it must never be handed to the settings writer.
+    assert(!actions.includes('setSteamUser'),
+      'the sign-in flow wrote settings directly instead of letting steamLogin do it')
+
+    assert(actions.includes('installWorkshopCommit'),
+      'the install did not resume after signing in: ' + JSON.stringify(actions))
+
+    return 'both fields asked in-game, Steam Guard handled, password only ever sent to steamLogin'
+  })
+})
+
+check('the manager offers Install from Workshop and asks for a link', () => {
+  const { S, dom } = bootConsole({ mods: [] })
+  const calls = []
+  S.callMain = (action, payload) => {
+    calls.push({ action, payload })
+    if (action === 'steamcmdStatus') return Promise.resolve({ ok: true, available: true, path: 'C:/steamcmd/steamcmd.exe' })
+    return Promise.resolve({ ok: true })
+  }
+  S.modsUI.toggle(true)
+
+  let button = null
+  ;(function walk(n) {
+    if (n.tagName === 'BUTTON' && /Install from Workshop/.test(String(n.textContent || ''))) button = n
+    for (const c of n.childNodes || []) walk(c)
+  })(dom.document.getElementById('smln-mods'))
+  assert(button, 'the manager has no "Install from Workshop" button')
+
+  // It must ask before it downloads: no reference, no RPC.
+  let asked = null
+  S.permUI = S.permUI || {}
+  S.permUI.prompt = (opts) => { asked = opts; return Promise.resolve(null) }
+
+  button.dispatch('click', {})
+  return Promise.resolve().then(() => new Promise((r) => setTimeout(r, 0))).then(() => {
+    assert(calls.some((c) => c.action === 'steamcmdStatus'),
+      'SteamCMD was not checked before asking: ' + JSON.stringify(calls.map((c) => c.action)))
+    assert(asked, 'the button never asked for a Workshop link')
+    assert(/Workshop/i.test(asked.title), 'the prompt is not about the Workshop: ' + asked.title)
+    assert(!calls.some((c) => c.action === 'installWorkshopReview'),
+      'a cancelled prompt still started a download: ' + JSON.stringify(calls.map((c) => c.action)))
+    return 'button present, SteamCMD checked first, cancelling downloads nothing'
+  })
 })
 
 if (archive) archive.close()
