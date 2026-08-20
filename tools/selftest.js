@@ -4187,6 +4187,57 @@ check('only the patches the bridge takes over are suppressed', () => {
   return 'element and soil patches suppressed, others kept'
 })
 
+check('captured content is exposed to the renderer over IPC', () => {
+  // Sandkit lives in the renderer, so the definitions captured in the main
+  // process have to cross the boundary. corelib already crosses it the same
+  // way for its own registry (corelib:getModuleRegistrations), so this reuses
+  // the transport rather than inventing one.
+  // Two mods, as in reality: the library publishes the API, the dependent
+  // calls it. corelib does not register its own content, so a single mod that
+  // both defines and calls registerElement in one file would register before
+  // the shim is installed - which is not how any real mod pair behaves.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-content-ipc-'))
+  const dir = path.join(root, 'corelib')
+  const useDir = path.join(root, 'user')
+  fs.mkdirSync(dir); fs.mkdirSync(useDir)
+  fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
+    modID: 'corelib', version: '3.1.3', electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(dir, 'entry.electron.js'),
+    'globalThis.corelib = { elements: {\n' +
+    '  registerElement(c) { return true },\n' +
+    '  registerSoil(c) { return true },\n' +
+    '} }\n')
+  fs.writeFileSync(path.join(useDir, 'modinfo.json'), JSON.stringify({
+    modID: 'user', version: '1.0.0', dependencies: { corelib: '^3.0.0' },
+    electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(useDir, 'entry.electron.js'),
+    'corelib.elements.registerElement({ id: "Ipc", name: "Ipc",\n' +
+    '  colors: [[1,2,3,255]], density: 5, matterType: "Solid" })\n')
+
+  const r = flCompat.readMod(dir)
+  const user = flCompat.readMod(useDir)
+  assert(r.ok && user.ok, 'manifest rejected')
+  const channels = {}
+  const out = flCompat.loadElectronEntrypoints([r.mod, user.mod], {
+    configDir: dir,
+    rpc: { register: (ch, fn) => { channels[ch] = fn } },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+
+  assert(typeof channels['smln:flux-content'] === 'function',
+    'the content channel was not registered: [' + Object.keys(channels).join(', ') + ']')
+  const payload = channels['smln:flux-content']()
+  assert(payload.elements.length === 1, 'payload carried no element')
+  assert(payload.elements[0].def.matterType === 1,
+    'the definition was not translated: ' + payload.elements[0].def.matterType)
+  assert(Array.isArray(payload.soils), 'soils missing from the payload')
+  assert(Array.isArray(payload.unsupported), 'unsupported missing from the payload')
+  fs.rmSync(root, { recursive: true, force: true })
+  return 'channel returns ' + payload.elements.length + ' element(s)'
+})
+
 check('the loader supplies a real matter table, not an empty one', () => {
   // The bug this guards: the loader passed `ctx.matterEnum` through from a
   // runtime slot nothing ever populated, so production translated every

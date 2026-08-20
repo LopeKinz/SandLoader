@@ -629,6 +629,20 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   }
   for (const reason of content.reasons) logger.debug(`content bridge: ${reason}`)
 
+  // Sandkit lives in the renderer, so what was captured here has to cross the
+  // process boundary. corelib already crosses it the same way for its own
+  // registry, so this reuses the existing RPC rather than inventing a
+  // transport. The handler reads `content.captured` when it is called, not
+  // now, so registrations that arrive later - from the deferred event below -
+  // are included.
+  if (ctx.rpc && typeof ctx.rpc.register === 'function') {
+    ctx.rpc.register('smln:flux-content', () => ({
+      elements: content.captured.elements,
+      soils: content.captured.soils,
+      unsupported: content.captured.unsupported,
+    }))
+  }
+
   bus.registerEvent('fl:pre-scene-loaded')
   bus.emit('fl:pre-scene-loaded')
 
