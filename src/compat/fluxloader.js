@@ -34,8 +34,34 @@ const permissions = require('../mods/permissions')
 const semver = require('../mods/semver')
 const configStore = require('../mods/config')
 const fluxMessaging = require('./flux-messaging')
+const flContent = require('./flux-content')
+const gameEnums = require('../game/enums')
 
 const MODINFO = 'modinfo.json'
+
+/**
+ * The matter-type table the content bridge translates against, in BOTH
+ * directions.
+ *
+ * Fluxloader mods name a matter type ("Slushy"); 0.5.5 stores a number (6).
+ * `src/game/enums.js` carries the numeric->name direction that ships with the
+ * loader, so the reverse is derived here rather than asking the renderer for
+ * it: the electron entrypoints run long before a window exists, and an empty
+ * table is not a degraded translation but a total one - every element is
+ * rejected as "matterType does not exist (valid: )" while corelib's patches
+ * are dropped anyway, which is worse than not bridging at all.
+ */
+function matterEnum() {
+  const table = {}
+  const source = (gameEnums && gameEnums.MatterType) || {}
+  for (const [key, value] of Object.entries(source)) {
+    table[key] = value
+    // Only the numeric->name entries need reversing; a table that already
+    // carries both directions (the live game's) passes through unchanged.
+    if (typeof value === 'string' && !(value in table)) table[value] = Number(key)
+  }
+  return table
+}
 
 /** What SMLN reports as its Fluxloader API level. */
 const FLUXLOADER_COMPAT_VERSION = '2.0.0'
@@ -310,6 +336,11 @@ function makeConfigStore(configDir, mod, logger) {
 function loadElectronEntrypoints(mods, ctx, logger) {
   /** @type {Record<string, any[]>} */
   const patches = Object.create(null)
+  // Set the moment corelib publishes `globalThis.corelib`, from inside the
+  // mods loop below - see the comment at the install site for why it cannot
+  // wait until the loop has finished.
+  let content = null
+  const matterTable = ctx.matterEnum || matterEnum()
   const errors = []
   const listeners = Object.create(null)
 
@@ -543,6 +574,21 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
       new vm.Script(source, { filename: entry }).runInContext(sandbox)
 
+      // Swap corelib's content modules for capturing shims the instant corelib
+      // publishes itself, before the next mod in this loop runs. A dependent
+      // mod calls `corelib.elements.registerElement(...)` at its OWN
+      // entrypoint's top level - not from the deferred event - so installing
+      // after the loop would let those calls reach corelib's original registry,
+      // where their only fate is to become the stale patches this bridge
+      // exists to replace.
+      if (!content && universe.corelib) {
+        content = flContent.install(universe, {
+          modId: 'corelib',
+          logger: logger.child('content'),
+          matterEnum: matterTable,
+        })
+      }
+
       const exported = moduleObj.exports
       if (exported && typeof exported.onLoad === 'function') exported.onLoad()
       modLog.info(`electron entrypoint loaded (${Object.keys(patches).length} patched file(s) so far)`)
@@ -572,10 +618,36 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   // Declared before firing so a mod using `trigger`/`isEventRegistered`
   // (rather than the tolerant `tryTrigger`) sees a known event, and emitted
   // via the bus directly so a mod that registered no listener is not an error.
+  // If corelib never loaded, install now so `content` is always defined; it
+  // simply reports that no corelib global was found.
+  if (!content) {
+    content = flContent.install(universe, {
+      modId: 'corelib',
+      logger: logger.child('content'),
+      matterEnum: matterTable,
+    })
+  }
+  for (const reason of content.reasons) logger.debug(`content bridge: ${reason}`)
+
   bus.registerEvent('fl:pre-scene-loaded')
   bus.emit('fl:pre-scene-loaded')
 
-  return { patches, errors, events: bus }
+  // Drop only the patches the bridge now supplies through the game's own
+  // registry. Everything else corelib queued is left exactly as it was.
+  let dropped = 0
+  for (const target of Object.keys(patches)) {
+    const before = patches[target].length
+    patches[target] = patches[target].filter((p) => !flContent.shouldSuppress(p.id))
+    dropped += before - patches[target].length
+    if (!patches[target].length) delete patches[target]
+  }
+  if (dropped) {
+    logger.info(`content bridge: ${dropped} superseded patch(es) dropped, ` +
+      `${content.captured.elements.length} element(s) and ` +
+      `${content.captured.soils.length} soil(s) captured for the game's own registry`)
+  }
+
+  return { patches, errors, events: bus, content: content.captured }
 }
 
 /**
@@ -692,6 +764,7 @@ ${source}
 }
 
 module.exports = {
+  matterEnum,
   discover,
   readMod,
   toSmlnPatch,

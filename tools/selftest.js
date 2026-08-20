@@ -627,17 +627,16 @@ check('a mod that depends on corelib gets its content into the game', () => {
     }
   }
 
-  // The registered element has to reach the text that gets patched in. The
-  // replacement is a function for token-style patches, so ask it, rather than
-  // string-searching the patch object, which would silently pass.
-  let found = false
-  for (const p of out.patches['js/bundle.js'] || []) {
-    if (!String(p.id).includes('elements:elementRegistry')) continue
-    const text = typeof p.replace === 'function' ? p.replace(p.find) : String(p.replace || '')
-    if (text.includes('Trash')) found = true
-  }
-  assert(found, 'the dependent element never reached the element registry patch')
-  return 'globals shared, patches attributed to corelib, element injected'
+  // The dependent's element must reach somewhere real. It used to be asserted
+  // against corelib's `elements:elementRegistry` patch, but that patch is one
+  // the content bridge now supersedes - it is written for a game build this
+  // one is not, so on 0.5.5 it is dropped and the element travels through the
+  // bridge to the game's own registry instead. The intent of the check is
+  // unchanged: a mod that registers content via corelib must not lose it.
+  const captured = out.content.elements.map((e) => e.id)
+  assert(captured.includes('Trash'),
+    'the dependent element never reached the registry: [' + captured.join(', ') + ']')
+  return 'globals shared, patches attributed to corelib, element captured for the game registry'
 })
 
 check('deferred patch registration is triggered by the loader, not the caller', () => {
@@ -4186,6 +4185,64 @@ check('only the patches the bridge takes over are suppressed', () => {
   assert(!flContent.shouldSuppress('corelib:corelib:blockInventory'),
     'a block patch was suppressed')
   return 'element and soil patches suppressed, others kept'
+})
+
+check('the loader supplies a real matter table, not an empty one', () => {
+  // The bug this guards: the loader passed `ctx.matterEnum` through from a
+  // runtime slot nothing ever populated, so production translated every
+  // element against {} and rejected all of them with
+  // `matterType "Slushy" does not exist (valid: )` - while still dropping
+  // corelib's patches, which is the worst of both worlds. The table has to
+  // come from somewhere real, and it has to map names to numbers.
+  const table = flCompat.matterEnum()
+  assert(table && typeof table === 'object', 'no matter table')
+  assert(table.Solid === 1, 'Solid is not 1: ' + table.Solid)
+  assert(table.Slushy === 6, 'Slushy is not 6: ' + table.Slushy)
+  assert(table.Powder === 8, 'Powder is not 8: ' + table.Powder)
+  // The numeric direction must survive too - the game's own table is keyed
+  // that way and callers may read either.
+  assert(table[6] === 'Slushy', 'the numeric direction was lost: ' + table[6])
+  return 'name->number and number->name both present'
+})
+
+check('a mod that registers content gets it captured, with a working matter table', () => {
+  // End-to-end through the loader's own default context - no matterEnum
+  // supplied by the caller, exactly as src/main/entry.js invokes it. If the
+  // loader does not source its own table, every element is rejected here.
+  const coreDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
+    'fluxloader-mods', 'corelib')
+  const modDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
+    'fluxloader-mods', 'trashelement')
+  if (!fs.existsSync(coreDir) || !fs.existsSync(modDir)) return 'skipped - mods not installed'
+
+  const core = flCompat.readMod(coreDir)
+  const dep = flCompat.readMod(modDir)
+  assert(core.ok && dep.ok, 'manifests rejected')
+
+  const out = flCompat.loadElectronEntrypoints([core.mod, dep.mod], {
+    configDir: coreDir, rpc: { register: () => {} },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+
+  const ids = out.content.elements.map((e) => e.id)
+  assert(ids.includes('Trash'),
+    'Trash was not captured (matter table empty?): [' + ids.join(', ') + '] ' +
+    JSON.stringify(out.content.unsupported.map((u) => u.reason).slice(0, 2)))
+  assert(ids.includes('CompressedTrash'), 'CompressedTrash was not captured')
+  assert(out.content.soils.some((s) => s.id === 'TrashSoil'), 'TrashSoil was not captured')
+
+  // 0.5.5 has no recipe registry, so those must be reported, not silently lost.
+  const recipes = out.content.unsupported.filter((u) => u.kind === 'recipe')
+  assert(recipes.length >= 2, 'recipe calls were not reported: ' + recipes.length)
+
+  // And the superseded patches must not reach the patch set.
+  for (const list of Object.values(out.patches)) {
+    for (const p of list) {
+      assert(!flContent.shouldSuppress(p.id), 'a superseded patch survived: ' + p.id)
+    }
+  }
+  return `captured ${ids.length} element(s), ${out.content.soils.length} soil(s), ` +
+    `${recipes.length} recipe(s) reported unavailable`
 })
 
 if (archive) archive.close()
