@@ -30,6 +30,7 @@ const path = require('path')
 const { SmlnError } = require('../core/errors')
 const officialPatches = require('../patch/official')
 const nativeBridge = require('./official-native')
+const officialHost = require('./official-host')
 
 const MANIFEST = 'modinfo.json'
 const SUPPORTED_MANIFEST_VERSION = 1
@@ -151,12 +152,23 @@ function readMod(dir) {
       priority: Number.isFinite(json.loadOrder) ? Number(json.loadOrder) : 0,
       enabled: json.enabled !== false,
 
-      // Do NOT expose these as SandLoader renderer/worker injection fields.
-      // entry.js checks `mod.entry` / `mod.workerEntry`; leaving them undefined
-      // prevents the old too-early/raw execution path. The resolved paths are
-      // retained under explicit native names for diagnostics and tooling.
-      entry: undefined,
-      workerEntry: undefined,
+      // These drive execution. entry.js checks `mod.entry` / `mod.workerEntry`
+      // and injects them via the prelude, which wraps a main entry in
+      // SMLN.official.execute() - the deferred, sandkit-aware path, not the
+      // raw prepend this once was.
+      //
+      // They were previously forced to undefined on the theory that the native
+      // bridge (official-native.js, staging into <userData>/mods) would run
+      // these instead. It does not: Sandustry has no local-mod loader of its
+      // own. It delegates to whatever occupies the Workshop loader slot, which
+      // is SandLoader. So switching this path off meant nothing ran the mods at
+      // all - staging reported success, the manager showed "Enabled", and the
+      // entries were never executed. That is the "enabled but not loaded" bug.
+      //
+      // The staged copies are kept: they are harmless, and they are what a
+      // future build with a real native loader would consume.
+      entry: entry.value,
+      workerEntry: workerEntry.value,
       nativeEntry: entry.value,
       nativeWorkerEntry: workerEntry.value,
 
@@ -171,9 +183,15 @@ function readMod(dir) {
 /**
  * Scan directories for official mods and make enabled ones visible to
  * Sandustry's native loader before the game renderer starts.
- * @returns {{mods:any[], errors:SmlnError[]}}
+ *
+ * @param {string[]} roots
+ * @param {object} logger
+ * @param {{readGameFile?:(f:string)=>string|null, workshopPath?:string|null}} [opts]
+ *        Supplying `readGameFile` enables the host capability check; without it
+ *        discovery behaves exactly as before and `host` comes back null.
+ * @returns {{mods:any[], errors:SmlnError[], host:object|null}}
  */
-function discover(roots, logger) {
+function discover(roots, logger, opts = {}) {
   const mods = []
   const errors = []
   const seen = new Set()
@@ -213,7 +231,55 @@ function discover(roots, logger) {
   const native = nativeBridge.sync(mods, { logger })
   errors.push(...native.errors)
 
-  return { mods, errors }
+  // Staging can succeed completely and still achieve nothing: whether the game
+  // reads those copies is a property of the build, not of the copy. Check it
+  // and report, so the manager stops presenting an unrunnable mod as enabled.
+  //
+  // Reported once for the build rather than once per mod. The cause is shared,
+  // and eleven identical entries would bury the one fact that explains them.
+  // The probe reads the *shipped* bundle, so a gap SandLoader itself repairs at
+  // patch time still shows up here. Only gaps with no repair are real problems;
+  // the rest are recorded as informational so a failed patch stays diagnosable.
+  const host = inspectHost(opts)
+  if (host && !host.supported && mods.length) {
+    const detail = officialHost.explain(host)
+    const unrepaired = host.missing.filter((m) => !m.repairedBy)
+
+    if (unrepaired.length) {
+      logger && logger.warn(detail)
+      errors.push(new SmlnError(
+        'E_HOST_UNSUPPORTED',
+        `official mods will not run on this build: ${unrepaired.length} requirement(s) unmet ` +
+        'with no SandLoader repair available',
+        { detail: { host: { missing: unrepaired.map((m) => m.id), report: detail } } }
+      ))
+    } else {
+      logger && logger.info(
+        `official Sandkit gap(s) this build leaves to the host: ` +
+        `${host.missing.map((m) => m.id).join(', ')} - supplied by ` +
+        `${host.missing.map((m) => m.repairedBy).join(', ')}`
+      )
+    }
+  }
+
+  return { mods, errors, host }
+}
+
+/**
+ * Run the host capability probe, tolerating every way it can be unavailable.
+ *
+ * discover() is called during boot on a machine we do not control; a failure
+ * to *inspect* must never become a failure to *start*. Returns null when the
+ * question could not be asked at all.
+ */
+function inspectHost(opts = {}) {
+  const readFile = opts.readGameFile
+  if (typeof readFile !== 'function') return null
+  try {
+    return officialHost.inspect(readFile, { workshopPath: opts.workshopPath || null })
+  } catch (_) {
+    return null
+  }
 }
 
 /**
@@ -279,6 +345,6 @@ function buildOverrides(mods, archiveHas, logger) {
 }
 
 module.exports = {
-  discover, readMod, collectPatches, buildOverrides, isOfficial,
+  discover, readMod, collectPatches, buildOverrides, isOfficial, inspectHost,
   MANIFEST, SUPPORTED_MANIFEST_VERSION, SUPPORTED_API_VERSION,
 }

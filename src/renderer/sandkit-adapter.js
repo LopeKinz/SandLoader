@@ -91,6 +91,30 @@
     },
   }
 
+  /**
+   * Namespaces and methods that do NOT take the live state as their first
+   * argument, even on a legacy build where almost everything does.
+   *
+   * `true` means the whole namespace takes no state; an object names the
+   * individual methods that do not.
+   *
+   * Determined from the game's own call sites, which is the only reliable
+   * source - the FH definition looks identical either way:
+   *
+   *   FH.i18n.t("ui|common|thousandsShort")   <- literal, so no state
+   *   FH.storage.get(e, ...)                  <- state
+   *
+   * i18n being wrong here is what produced "[MISSING: tech|uolkxChemistry|name]"
+   * in the tech tree: `register("en", table)` became `register(state, "en")`
+   * and the table was dropped, so every mod-supplied string was lost.
+   */
+  var NO_STATE_ARG = {
+    i18n: true,
+    utils: true,
+    random: true,
+    tech: { getDefinition: true, addDefinition: true, updateDefinition: true },
+  }
+
   /** A method only the newer generation has. */
   function detect(raw) {
     if (!raw || !raw.elements) return 'unknown'
@@ -107,8 +131,13 @@
     var aliases = ALIASES[nsName] || {}
     var out = {}
 
-    function wrap(fn) {
-      if (!bindState) return fn.bind(raw)
+    var exceptions = NO_STATE_ARG[nsName] || {}
+    var wholeNamespace = exceptions === true
+
+    function wrap(fn, methodName) {
+      // Some methods take no state even on a legacy build; binding it would
+      // shift every argument by one. See NO_STATE_ARG.
+      if (!bindState || wholeNamespace || exceptions[methodName]) return fn.bind(raw)
       return function () {
         var args = new Array(arguments.length + 1)
         args[0] = SMLN.getState()
@@ -121,7 +150,7 @@
     for (var key in raw) {
       try {
         var value = raw[key]
-        if (typeof value === 'function') out[key] = wrap(value)
+        if (typeof value === 'function') out[key] = wrap(value, key)
         else out[key] = value
       } catch (_) { /* exotic getter; skip it rather than fail the whole namespace */ }
     }
@@ -130,7 +159,7 @@
     for (var v1 in aliases) {
       var legacyName = aliases[v1]
       if (typeof out[v1] === 'function') continue
-      if (raw && typeof raw[legacyName] === 'function') out[v1] = wrap(raw[legacyName])
+      if (raw && typeof raw[legacyName] === 'function') out[v1] = wrap(raw[legacyName], legacyName)
     }
 
     return out

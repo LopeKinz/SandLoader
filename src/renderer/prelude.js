@@ -16,6 +16,9 @@
  *   registration.js  } capabilities.js links these onto each facade if they
  *   messaging.js     } are present, so they must be installed before any mod
  *   sandkit-adapter  normalises the legacy/v1 game API before official mods
+ *   webpack-bridge   a handle on the game's own module registry
+ *   react-bridge     hands mods the game's own React instance from webpack
+ *   sandkit-shims    implements v1 calls this build has no equivalent for
  *   official-runtime delays official entries until that adapter is ready
  *   settingsui/permui defined before modsui.js, which opens them
  *
@@ -51,6 +54,15 @@ const PARTS = [
   'registration.js',
   'messaging.js',
   'sandkit-adapter.js',
+  // Must precede official-runtime.js: that file reads SMLN.react when it builds
+  // each mod's sandkit object.
+  'webpack-bridge.js',
+  'react-bridge.js',
+  // After sandkit-adapter.js (it fills gaps in the API that file builds) and
+  // before api-support.js, so the support report counts a shimmed call as
+  // available rather than warning about something that now works.
+  'sandkit-shims.js',
+  'api-support.js',
   'official-runtime.js',
   'splash.js',
   'console.js',
@@ -221,16 +233,60 @@ function buildWorker(workerScripts) {
 function serialisableEnums() {
   const {
     ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
-    WorkerMessage, UIScreen, RESOURCES, ElementByName, CellByName,
+    Tech, WorkerMessage, UIScreen, RESOURCES, ElementByName, CellByName,
     StructureByName, ToolByName, VERIFIED, ELEMENT_KEYS, TERRAIN_KEYS,
     ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO, CONTENT_META,
   } = enums
   return {
-    ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
+    // Sandustry's own enums are TypeScript-style and therefore bidirectional:
+    // `e[e.Solid = 1] = "Solid"` means both `MatterType.Solid === 1` and
+    // `MatterType[1] === "Solid"` hold. Our vendored tables were number->name
+    // only, so a mod doing the documented `MatterType[def.matter]` - i.e.
+    // MatterType["Solid"] - got undefined.
+    //
+    // That is not a soft failure. Atomic Age aborts its whole element loop on
+    // the first bad matter type, so a missing reverse mapping registered zero
+    // elements, no error surfaced, and the mod reported itself loaded. Match
+    // the game's shape instead.
+    ElementType: bidirectional(ElementType),
+    MatterType: bidirectional(MatterType),
+    CellType: bidirectional(CellType),
+    StructureType: bidirectional(StructureType),
+    ToolType: bidirectional(ToolType),
+    // Name -> id is the direction mods use (`Tech.Smelter`); the game's own
+    // enum carries both, so mirror it.
+    Tech: bidirectional(Tech),
+    ELEMENT_PHASE,
     WorkerMessage, UIScreen, RESOURCES, ElementByName, CellByName,
     StructureByName, ToolByName, VERIFIED, ELEMENT_KEYS, TERRAIN_KEYS,
     ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO, CONTENT_META,
   }
+}
+
+/**
+ * Add name->id entries alongside the id->name ones, exactly as the game's
+ * enums carry both.
+ *
+ * Only the tables mods index by name are widened, and only here - the internal
+ * tables keep their original shape, because the console and the content checks
+ * enumerate them and would double-count.
+ */
+function bidirectional(table) {
+  if (!table || typeof table !== 'object') return table
+  const out = {}
+  // Tables come in both shapes: id->name (MatterType) and name->id (Tech).
+  // Copy every pair verbatim first, then add the mirror of each.
+  for (const [k, v] of Object.entries(table)) out[k] = v
+  for (const [k, v] of Object.entries(table)) {
+    if (typeof v === 'string') {
+      // id -> name; add name -> id.
+      if (!(v in out)) out[v] = Number(k)
+    } else if (typeof v === 'number') {
+      // name -> id; add id -> name. Never clobber a real forward entry.
+      if (!(String(v) in out)) out[v] = k
+    }
+  }
+  return out
 }
 
 function invalidate() { cache = null }

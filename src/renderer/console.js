@@ -607,6 +607,173 @@
     },
   })
 
+  /** The adapted, v1-shaped API mods actually call. */
+  function sandkitApi() { return SMLN.api || SMLN.sandkit }
+
+  /** Calls this build lacked and the shim layer supplied. */
+  function shimSet() {
+    var out = Object.create(null)
+    try {
+      if (SMLN.shims && typeof SMLN.shims.installed === 'function') {
+        SMLN.shims.installed().forEach(function (n) { out[n] = true })
+      }
+    } catch (_) { /* no shim layer on this build */ }
+    return out
+  }
+
+  define({
+    name: 'sandkit',
+    summary: 'Inspect the official API mods use (marks shimmed calls with *)',
+    usage: 'sandkit [namespace]',
+    args: [{
+      name: 'namespace',
+      optional: true,
+      values: function () { var a = sandkitApi(); return a ? Object.keys(a).sort() : [] },
+    }],
+    run: function (a) {
+      var api = sandkitApi()
+      if (!api) return ['sandkit API not available yet - load a world first']
+      var shimmed = shimSet()
+
+      if (!a[0]) {
+        var names = Object.keys(api).filter(function (k) {
+          return api[k] && typeof api[k] === 'object'
+        }).sort()
+        return ['sandkit namespaces (' + names.length + ', generation: ' +
+          (api.generation || 'unknown') + '):'].concat(wrap(names))
+      }
+
+      var ns = api[a[0]]
+      if (!ns || typeof ns !== 'object') return ['no such namespace: ' + a[0]]
+      var keys = Object.keys(ns).filter(function (k) {
+        try { return typeof ns[k] === 'function' } catch (_) { return false }
+      }).sort().map(function (k) {
+        // A leading * is the one thing worth knowing per method: whether the
+        // game implements it or SandLoader does.
+        return (shimmed[a[0] + '.' + k] ? '*' : '') + k
+      })
+      return ['sandkit.' + a[0] + ' (' + keys.length + ' methods, * = supplied by SandLoader):']
+        .concat(wrap(keys))
+    },
+  })
+
+  define({
+    name: 'shims',
+    summary: 'What SandLoader added because this game build lacks it',
+    usage: 'shims',
+    args: [],
+    run: function () {
+      var list = []
+      try {
+        if (SMLN.shims && typeof SMLN.shims.installed === 'function') list = SMLN.shims.installed()
+      } catch (_) { /* fall through */ }
+      if (!list.length) return ['no shims installed (either the build needs none, or the API is not captured yet)']
+      return ['SandLoader supplies ' + list.length + ' call(s) this build lacks:'].concat(wrap(list))
+    },
+  })
+
+  define({
+    name: 'content',
+    summary: 'Content mods registered: elements, structures, items, tech',
+    usage: 'content [kind]',
+    args: [{
+      name: 'kind',
+      optional: true,
+      values: function () { return ['elements', 'structures', 'items', 'terrains', 'matters', 'projectiles', 'misc', 'triggers', 'tech'] },
+    }],
+    run: function (a) {
+      var s = state()
+      var reg = s && s.sandkit && s.sandkit.mods
+      if (!reg) return ['no mod registry on the live state - is a world loaded?']
+
+      // Tech is not in sandkit.mods; it lives in the tech registry.
+      if (a[0] === 'tech') {
+        var api = sandkitApi()
+        if (!api || !api.tech || typeof api.tech.getDefinition !== 'function') {
+          return ['tech API unavailable']
+        }
+        var ids = []
+        try {
+          var nodes = SMLN.shims && SMLN.webpack && SMLN.webpack.find(function (m) {
+            return m && typeof m.getTechNodes === 'function'
+          })
+          if (nodes) ids = nodes.getTechNodes().map(function (n) { return n.id })
+        } catch (_) { /* fall through */ }
+        if (!ids.length) return ['could not read the tech node list on this build']
+        return ['tech nodes (' + ids.length + '):'].concat(wrap(ids.sort()))
+      }
+
+      if (a[0]) {
+        var bucket = reg[a[0]]
+        if (!bucket || typeof bucket !== 'object') return ['no such content kind: ' + a[0]]
+        var keys = Object.keys(bucket).sort()
+        return ['registered ' + a[0] + ' (' + keys.length + '):'].concat(wrap(keys))
+      }
+
+      // Overview: the count per kind is what answers "did my mod register?".
+      var out = ['registered mod content:']
+      Object.keys(reg).sort().forEach(function (k) {
+        var v = reg[k]
+        var n = v && typeof v === 'object' ? Object.keys(v).length : 0
+        out.push('  ' + k.padEnd(14) + n)
+      })
+      out.push('', 'a kind showing 0 means nothing registered into it')
+      return out
+    },
+  })
+
+  define({
+    name: 'mods',
+    summary: 'Loaded mods, with any API calls this build cannot satisfy',
+    usage: 'mods',
+    args: [],
+    run: function () {
+      var list = (SMLN.getMods && SMLN.getMods()) || SMLN.mods || []
+      if (!list.length) return ['no mods reported']
+      var out = ['mods (' + list.length + '):']
+      list.forEach(function (m) {
+        var gap = null
+        try { gap = SMLN.apiSupport && SMLN.apiSupport.summarise(m.id) } catch (_) { /* ignore */ }
+        out.push('  ' + String(m.id).padEnd(26) +
+          (m.enabled === false ? 'disabled' : 'enabled') +
+          (gap ? '   unsupported: ' + gap : ''))
+      })
+      return out
+    },
+  })
+
+  define({
+    name: 'hooks',
+    summary: 'Hook points mods have subscribed to',
+    usage: 'hooks [name]',
+    args: [{
+      name: 'name',
+      optional: true,
+      values: function () {
+        var s = state()
+        var h = s && s.sandkit && s.sandkit.hooks
+        return h ? Object.keys(h).sort() : []
+      },
+    }],
+    run: function (a) {
+      var s = state()
+      var h = s && s.sandkit && s.sandkit.hooks
+      if (!h) return ['no hook registry on the live state']
+      var names = Object.keys(h).sort()
+      if (!names.length) return ['no hooks registered']
+      if (a[0]) {
+        var arr = h[a[0]]
+        if (!arr) return ['no such hook: ' + a[0]]
+        return ['hook "' + a[0] + '" has ' + arr.length + ' handler(s):'].concat(
+          arr.map(function (e, i) {
+            return '  ' + i + '  priority ' + (e.priority || 0) + '  ' + (e.modId || '(unattributed)')
+          }))
+      }
+      return ['hooks (' + names.length + '):'].concat(
+        names.map(function (n) { return '  ' + n.padEnd(30) + (h[n] ? h[n].length : 0) + ' handler(s)' }))
+    },
+  })
+
   define({
     name: 'clear',
     summary: 'Clear the console output',

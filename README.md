@@ -687,6 +687,90 @@ An honest list:
 
 ## Changelog
 
+### Unreleased
+
+Verified against Sandustry 0.5.5. Self-test: 104 checks.
+
+This run fixes the reason official (`manifestVersion: 1`) mods appeared in the
+manager as **Enabled** while doing nothing in game
+([#1](https://github.com/LopeKinz/SandLoader/issues/1)). It was not one bug but
+a chain of five, each hidden by the one in front of it.
+
+**Fixed — official mods now actually run**
+
+- Official mods were never executed at all. `readMod()` forced `entry` and
+  `workerEntry` to `undefined` on the theory that the native bridge (staging
+  into `<userData>/mods`) would run them instead. Sandustry has no local-mod
+  loader — it delegates to whatever holds the Workshop loader slot, which is
+  SandLoader — so nothing ran them. Staging reported success, the manager showed
+  Enabled, and no error was raised anywhere.
+- `state.sandkit.getApi()` is called 44 times by the renderer and defined
+  nowhere; only the simulation worker defines one. Supplying it is the host's
+  job. New `smln:sandkit-get-api` patch attaches it to the game's own sandkit
+  object, which is why `SMLN.sandkit` was permanently `null` before.
+- Mod content never reached the simulation workers. The game flushes
+  `sandkit.mods` to them once during world init, *before* `game:ready` — and
+  official entries run at `game:ready`. Content landed on the main thread only:
+  registered, no error, invisible. The runtime now repeats the flush once the
+  entries settle, using the game's own messages and registries.
+
+**Fixed — vendored game data**
+
+Both of these failed silently, because mods read enums inside their own
+`try`/`catch`:
+
+- `MatterType` was id→name only. Sandustry's enums are bidirectional, so the
+  documented `MatterType[def.matter]` returned `undefined`. Atomic Age breaks
+  out of its element loop on the first bad matter type, so it registered **zero**
+  elements while still reporting itself loaded.
+- The `Tech` enum was missing entirely, so `sandkit.enums.Tech.Smelter` threw,
+  the parent id came back `undefined`, and every mod research node was skipped.
+  Extracted from the bundle: 104 members.
+- The enum tables handed to mods are now bidirectional, matching the game.
+
+**Fixed — adapter argument order**
+
+- The adapter assumed every legacy method is state-first. `i18n`, `utils` and
+  `random` take no state at all, and `tech` is mixed (`isLocked` takes state,
+  `getDefinition`/`addDefinition`/`updateDefinition` do not). Binding state
+  shifted every argument by one — `i18n.register("en", table)` arrived as
+  `register(state, "en")` and the table was dropped, which is why mod strings
+  rendered as `[MISSING: tech|…|name]`.
+
+**Added — compatibility shim layer**
+
+- `src/renderer/sandkit-shims.js` implements v1 Sandkit calls this build has no
+  equivalent for, on top of what it does have. Nothing is shadowed: a shim
+  installs only where the live API lacks that name. Includes
+  `structures.processing` (a real per-structure scheduler), `hooks.intercept`
+  (genuine cancellation through the engine's control object),
+  `world.revealFogAtCell` (the game's own `StartFogReveal` worker message),
+  `tech.registerNode`, `ui.inject`, `i18n.register` and ~20 more.
+- Approximations are labelled as such and warn once at runtime:
+  `player.setMovementMode` cancels falling rather than granting lift;
+  `structures.recipes` is a registry only (this build has no recipe system);
+  `structures.registerPlacementConfig` applies field defaults, with no hotbar UI.
+
+**Added — React and webpack bridges**
+
+- `src/renderer/webpack-bridge.js` reaches the game's own module registry,
+  finding modules by *shape* rather than by minified id.
+- `src/renderer/react-bridge.js` hands mods the game's **live** React instance
+  (a second copy would break hooks). `sandkit.react` was always `null` before,
+  so six of the eleven bundled mods died on their first line.
+
+**Added — knowing what a mod can't do**
+
+- Mod sources are scanned for the Sandkit namespaces they call, resolved
+  against the live API, and anything this build cannot satisfy is named on the
+  mod's row in the manager instead of failing later as a dead button.
+- New console commands: `sandkit` (the v1 API, marking calls SandLoader
+  supplies), `shims`, `content` (what mods actually registered), `mods`, and
+  `hooks`.
+- The self-test now verifies the vendored enum tables against the installed
+  bundle — 159 entries across `MatterType`, `Tech`, `ToolType` and `CellType`.
+  Both enum bugs above would have been caught before launch.
+
 ### 0.2.0
 
 Verified against Sandustry 0.5.5.
@@ -784,7 +868,7 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.2.0**, verified against **Sandustry 0.5.5**. Self-test: **91/91**.
+SandLoader **0.2.0**, verified against **Sandustry 0.5.5**. Self-test: **104/104**.
 
 ## License
 

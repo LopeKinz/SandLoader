@@ -493,6 +493,21 @@
           : tx('mods.pending', '(reload to load)'))
       nm.appendChild(state)
     }
+    // A mod can load cleanly and still be unable to do its job, because this
+    // build lacks Sandkit namespaces it calls. That failure surfaces later, as
+    // a dead button or a missing tooltip, which reads exactly like a mod that
+    // does nothing. Name it here instead.
+    var gap = SMLN.apiSupport && SMLN.apiSupport.summarise(m.id)
+    if (gap) {
+      var warn = document.createElement('span')
+      warn.className = 'state warn'
+      warn.textContent = '   ' + tx('mods.apiMissing', 'unsupported: ' + gap, { list: gap })
+      warn.title = tx('mods.apiMissingHint',
+        'This game build does not provide these Sandkit namespaces. ' +
+        'The mod loads, but features relying on them will not work.')
+      nm.appendChild(warn)
+    }
+
     var id = document.createElement('div')
     id.className = 'id'
     id.textContent = m.id +

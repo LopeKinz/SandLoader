@@ -196,6 +196,62 @@ const corePatches = [
       },
     ],
   },
+  {
+    id: 'smln:sandkit-get-api',
+    owner: 'smln',
+    description: 'Define state.sandkit.getApi(), which the renderer calls but never defines',
+    anchorLiteral: 'sandkit=',
+    /*
+     * The renderer builds its Sandkit object as registries only:
+     *
+     *   g.sandkit={mods:{items:{},projectiles:{},misc:{},elements:{},
+     *              matters:{},structures:{},triggers:{},terrains:{}},
+     *              graphics:{},events:{},hooks:{},keyBindings:{}}
+     *
+     * then calls `state.sandkit.getApi()` in 44 places without ever defining
+     * it. Only the simulation worker defines one, as `getApi:()=>FH`. The
+     * method is a field the mod host is expected to attach, and Sandustry ships
+     * no host - it delegates to whatever occupies the Workshop loader slot,
+     * which is us. So we owe it.
+     *
+     * Anchored on the property-name-plus-shape of the literal rather than the
+     * minified state identifier, which is regenerated every build. The single
+     * capture is the object body; we re-emit it with getApi appended.
+     *
+     * getApi returns the same FH the worker's implementation returns, resolved
+     * lazily through the captured runtime so this stays correct no matter
+     * whether the patch or the capture runs first. Falling back to the raw
+     * global keeps the game's own 44 call sites working even if SMLN is
+     * somehow absent, because those calls are the game's, not ours - breaking
+     * them would break vanilla gameplay, which outranks loading any mod.
+     */
+    find: /sandkit=\{(mods:\{[^]{0,400}?keyBindings:\{\})\}/g,
+    replace: (...args) => {
+      const [, body] = args
+      return `sandkit={${body},getApi:function(){` +
+        `var g=globalThis.${GLOBAL};` +
+        `return (g&&g.game)||(g&&g.state&&g.state.FH)||null}}`
+    },
+    expect: 1,
+    // Not required: a build that starts defining getApi itself is a fixed
+    // build, not a broken one. official-host.js reports the outcome either way.
+    required: false,
+    variants: [
+      {
+        // Registry set changed (a new `mods:` bucket, a renamed one). Anchor
+        // only on the two ends that have been stable across 0.5.x.
+        label: 'registry object with a different field set',
+        find: /sandkit=\{(mods:\{[^]{0,800}?\})\}(?=[,;])/g,
+        replace: (...args) => {
+          const [, body] = args
+          return `sandkit={${body},getApi:function(){` +
+            `var g=globalThis.${GLOBAL};` +
+            `return (g&&g.game)||(g&&g.state&&g.state.FH)||null}}`
+        },
+        expect: 'any',
+      },
+    ],
+  },
 ]
 
 module.exports = { corePatches, GLOBAL, captureCall }

@@ -37,6 +37,40 @@ const ElementType = {
 }
 
 /** Physical phase of a material. Drives the console's `list gas|liquid|...`. */
+/**
+ * Research node ids, as the game's own `Tech` enum.
+ *
+ * Mods reach these as `sandkit.enums.Tech.<Name>` to name a parent for a new
+ * node - Atomic Age hangs its chemistry branch off `Tech.Smelter`. The table
+ * was absent entirely, so that read threw, the mod's `safe()` swallowed it, the
+ * parent came back undefined and all three of its research nodes were skipped
+ * without a word.
+ *
+ * Verified against 0.5.5: 104 members, name -> id, matching the ids
+ * `content tech` reports.
+ */
+const Tech = {
+  Shaker: 1, Conveyors: 2, Guns1: 3, Filters1: 4, KineticPress: 7, Guns2: 8, Drones1: 9,
+  Upgrading2: 10, Filters2: 11, Upgrading3: 12, Upgrading4: 13, Upgrading5: 14, Upgrading6: 15,
+  Upgrading7: 16, Upgrading8: 17, Upgrading9: 18, Upgrading10: 19, PlanterBox: 20, Thermo: 21,
+  Pipes: 23, StaticLights: 24, Drones2: 25, Smelter: 26, Tools4: 27, Guns3: 28, Pipes2: 29,
+  ConveyorsMk2: 30, Lights2: 31, Refining6: 32, Refining7: 33, Guns4: 34, Guns5: 35,
+  Tools5: 36, Tools6: 37, Filters3: 38, Filters4: 39, Pipes3: 40, Pipes4: 41, Logistics3: 42,
+  Logistics4: 43, Lights3: 44, Lights4: 45, Drones3: 46, Drones4: 47, Alien: 48,
+  Electricity: 49, AlienCore: 50, Emanators1: 51, AlienPlasmaConduits: 52,
+  AlienQuantumMatrix: 53, AlienPlasmaCore: 54, AlienVoidEngine: 55, FlareGun: 56, Sweeper: 57,
+  Utilities3: 58, Utilities6: 61, Utilities7: 62, Filters: 63, AdvancedFilters: 64,
+  Infrastructure3: 65, Decorations1: 66, Decorations2: 67, Decorations3: 68, Blocks1: 69,
+  Drill: 70, SteamTurbine: 71, Electricity3: 72, Electricity4: 73, Logic1: 74, Logic2: 75,
+  Logic3: 76, Logic4: 77, Various1: 78, Various2: 79, Various3: 80, Locator: 81,
+  QuantumPortal: 82, VoidRift: 83, Blink: 84, Recall: 85, ImplosionGun: 86, Refining8: 87,
+  Tools7: 88, Diggers: 89, Haulers: 90, Map: 91, ColoringTool: 92, SignalGate: 93,
+  GlassFoundation: 95, PrecisionTools: 96, SignalDevices: 97, SignalControls: 98,
+  LogicGates: 99, RetroConsole: 100, WallTool: 101, Corraller: 102, PlainFoundation: 103,
+  ClearingFrame: 104, Heatmap: 105, MiningLaser: 106, GoldBattery: 107, Hover: 108,
+  SprintBoost: 109, CritterFence: 110,
+}
+
 const MatterType = {
   1: 'Solid', 2: 'Liquid', 3: 'Particle', 4: 'Gas',
   5: 'Static', 6: 'Slushy', 7: 'Wisp', 8: 'Powder',
@@ -201,6 +235,7 @@ const RESOURCES = ['gold', 'fluxite', 'energy', 'artifacts', 'lumlings', 'shinel
 
 module.exports = {
   ElementType, MatterType, ELEMENT_PHASE, CellType, StructureType, ToolType,
+  Tech,
   WorkerMessage, UIScreen, RESOURCES, ELEMENT_KEYS, TERRAIN_KEYS,
   ELEMENT_INFO, STRUCTURE_INFO, ITEM_INFO,
   /** Provenance of the vendored tables; shown by the self-test. */

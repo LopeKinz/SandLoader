@@ -18,6 +18,9 @@ const reader = require('../src/asar/reader')
 const engine = require('../src/patch/engine')
 const { corePatches } = require('../src/patch/core-patches')
 const modLoader = require('../src/mods/loader')
+const officialHost = require('../src/mods/official-host')
+const official = require('../src/mods/official')
+const apiScan = require('../src/mods/api-scan')
 const prelude = require('../src/renderer/prelude')
 const enums = require('../src/game/enums')
 const flCompat = require('../src/compat/fluxloader')
@@ -984,11 +987,19 @@ check('manager-worker.js exists and is a patch target', () => {
 })
 
 check('sandkit is reachable through the game state', () => {
-  // 0.5.4 exposes the official API as state.sandkit.getApi(). Confirm the shape
-  // the runtime relies on is really in the bundle.
+  // This check used to assert bundle.includes('sandkit.getApi') and pass on the
+  // 44 *call* sites while the method was never defined anywhere - which is
+  // precisely how the "mods enabled but nothing loads" bug shipped unnoticed.
+  // Presence of a call proves only that something is expected to define it.
   assert(/\bsandkit\s*:/.test(bundle) || /\.sandkit\s*=/.test(bundle), 'state.sandkit is never assigned')
-  assert(bundle.includes('sandkit.getApi'), 'sandkit.getApi() not found')
-  return 'state.sandkit.getApi() present'
+  assert(/sandkit\.getApi\(/.test(bundle), 'nothing calls sandkit.getApi()')
+
+  // Who defines it is the part that matters, and on 0.5.x the answer is "the
+  // host" - see the patch check below.
+  const defined = /getApi\s*[:=]\s*(?:function\b|\(|[\w$]+\s*=>)/.test(bundle)
+  return defined
+    ? 'state.sandkit.getApi() defined by the game'
+    : 'state.sandkit.getApi() called by the game, supplied by the host patch'
 })
 
 check('runtime captures sandkit alongside FH', () => {
@@ -1969,6 +1980,471 @@ check('a re-scan only runs when the installation actually changed', () => {
     assert(autoheal.readState(dir) === null, 'a corrupt state file should mean "re-scan"')
     return 'scans on first run and on change, skips otherwise'
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ------------------------------------------------- official Sandkit host gap
+/*
+ * The bug these cover: the renderer calls state.sandkit.getApi() dozens of
+ * times and never defines it, so SMLN.sandkit was always null and every
+ * official main entry failed - while the manager still showed the mod as
+ * "Enabled". Nothing caught it because no test looked at the real bundle's
+ * sandkit shape. These do.
+ */
+check('the renderer still needs a host-supplied sandkit.getApi()', () => {
+  const calls = (bundle.match(/sandkit\.getApi\(/g) || []).length
+  assert(calls > 0, 'the renderer no longer calls sandkit.getApi() at all')
+
+  const defines = /getApi\s*[:=]\s*(?:function\b|\(|[\w$]+\s*=>)/.test(bundle)
+  const report = officialHost.inspect((f) => (f === 'dist/js/bundle.js' ? bundle : null))
+
+  if (defines) {
+    // A fixed game build. Then the probe must agree, or it is lying.
+    assert(report.supported, 'the bundle defines getApi but the host probe still reports it missing')
+    return 'this build defines getApi itself (' + calls + ' call sites); no host repair needed'
+  }
+  assert(!report.supported && report.missing.some((m) => m.id === 'sandkit-get-api'),
+    'getApi is undefined in the bundle but the host probe did not report it')
+  return calls + ' call sites, 0 definitions - correctly reported as unmet'
+})
+
+check('the getApi patch applies once and yields a working Sandkit API', () => {
+  const patch = corePatches.find((p) => p.id === 'smln:sandkit-get-api')
+  assert(patch, 'the smln:sandkit-get-api patch is missing')
+
+  const out = engine.apply(bundle, [patch])
+  const outcome = out.outcomes[0]
+  assert(outcome.status === 'applied', 'patch did not apply: ' + (outcome.reason || outcome.status))
+  assert(outcome.matches === 1, 'expected exactly 1 match, got ' + outcome.matches)
+
+  // It must still be valid JavaScript. A patch that corrupts the bundle is
+  // strictly worse than the bug it fixes.
+  new vm.Script(out.source, { filename: 'bundle.js' })
+
+  // And the emitted method must actually return the game's FH, with the
+  // game's own registries left intact beside it.
+  const start = out.source.indexOf('sandkit={mods:{items:')
+  const snippet = out.source.slice(start, out.source.indexOf('null}}', start) + 6)
+  const ctx = {}
+  vm.createContext(ctx)
+  vm.runInContext(
+    'globalThis.__SMLN__={game:{elements:{},structures:{}}};' +
+    'var g={};g.' + snippet + ';' +
+    'api=g.sandkit.getApi();regs=!!(g.sandkit.mods.elements&&g.sandkit.keyBindings)', ctx)
+  assert(ctx.api && ctx.regs, 'the patched object lost its registries or returns no API')
+  return 'applied once, bundle still parses, getApi() returns FH with registries intact'
+})
+
+check('an official mod reaches the renderer and actually executes', () => {
+  // The shipped bug: readMod() forced entry/workerEntry to undefined, so
+  // entry.js's `if (mod.entry)` never fired, no official source was ever
+  // injected, and no mod ran - while the manager still showed "Enabled".
+  // Staging to <userData>/mods was expected to run them; nothing reads it.
+  const found = official.discover([path.join(__dirname, '..', 'mods')], null, {})
+  const mods = found.mods.filter((m) => m.enabled !== false)
+  assert(mods.length > 0, 'no official mods discovered to test with')
+
+  const withoutEntry = mods.filter((m) => !m.entry)
+  assert(withoutEntry.length === 0,
+    'official mods carry no `entry`, so entry.js will never inject them: ' +
+    withoutEntry.map((m) => m.id).join(', '))
+
+  // Injection alone is not execution: the prelude must wrap the source so it
+  // defers to SMLN.official.execute() instead of running at parse time.
+  const mod = mods.find((m) => m.id === 'uolkx.debug-toggle') || mods[0]
+  const src = `/* official mod: ${mod.id}@${mod.version} */\n` + fs.readFileSync(mod.entry, 'utf8')
+  const wrapped = prelude.wrapOfficialRenderer(src)
+  assert(wrapped !== src, 'the official entry was not wrapped for deferred execution')
+  assert(wrapped.includes('S.official.execute('), 'the wrapper does not route through official.execute')
+
+  return mods.length + ' official mods carry entries and wrap for deferred execution'
+})
+
+check('the vendored enum tables match the installed bundle', () => {
+  /*
+   * Every mod-facing failure this loader has shipped traced back to this file
+   * being an incomplete hand-copy of the game's enums, not to the loader's
+   * machinery:
+   *
+   *   MatterType was id->name only  -> Atomic Age registered ZERO elements
+   *   Tech was missing entirely     -> its three research nodes were skipped
+   *
+   * Both failed silently, because mods read enums inside their own try/catch.
+   * So verify each vendored entry against the bundle directly. Sandustry's
+   * enums compile to `X[X.Name = value] = "Name"`, which is unambiguous even
+   * where two different enums share a member name.
+   */
+  const checked = []
+  const drift = []
+
+  for (const [tableName, table] of Object.entries({
+    MatterType: enums.MatterType,
+    Tech: enums.Tech,
+    ToolType: enums.ToolType,
+    CellType: enums.CellType,
+  })) {
+    assert(table && typeof table === 'object', tableName + ' is missing from enums.js')
+    let seen = 0
+    for (const [k, v] of Object.entries(table)) {
+      // Tables come in both orientations; normalise to (name, id).
+      const name = typeof v === 'string' ? v : k
+      const id = typeof v === 'string' ? Number(k) : v
+      if (!Number.isFinite(id)) continue
+      seen++
+      // `X[X.Name=id]="Name"` - the minifier renames X but never the members.
+      const needle = new RegExp('\.' + name + '\s*=\s*' + id + '\]\s*=\s*"' + name + '"')
+      if (!needle.test(bundle)) drift.push(tableName + '.' + name + ' = ' + id)
+    }
+    assert(seen > 0, tableName + ' has no numeric members to verify')
+    checked.push(tableName + ':' + seen)
+  }
+
+  assert(drift.length === 0,
+    drift.length + ' vendored enum entr(ies) do not match this build: ' + drift.slice(0, 8).join(', '))
+  return 'verified against the bundle - ' + checked.join(', ')
+})
+
+check('enums handed to mods resolve by name as well as by id', () => {
+  /*
+   * Sandustry's enums are bidirectional (`e[e.Solid=1]="Solid"`). Ours were
+   * id->name only, so the documented `MatterType[def.matter]` returned
+   * undefined. Atomic Age breaks out of its element loop on the first bad
+   * matter type, so this registered ZERO elements while the mod still reported
+   * itself loaded - no error anywhere.
+   */
+  const src = prelude.build({ modScripts: [], mods: [] })
+  const m = src.match(/__SMLN_ENUMS__=(\{[\s\S]*?\});/)
+  assert(m, 'enum payload not found in the prelude')
+  const e = JSON.parse(m[1])
+
+  for (const name of ['Solid', 'Liquid', 'Gas', 'Wisp']) {
+    assert(typeof e.MatterType[name] === 'number',
+      'MatterType.' + name + ' does not resolve by name')
+  }
+  // The id->name direction must survive too.
+  assert(e.MatterType[1] === 'Solid', 'MatterType[1] lost its name mapping')
+
+  // Tech is the table Atomic Age reads to name its parent node. Its absence
+  // made `sandkit.enums.Tech.Smelter` throw inside the mod's safe() wrapper,
+  // so parentId came back undefined and all three research nodes were skipped
+  // silently - the mod still reported itself loaded.
+  assert(e.Tech && typeof e.Tech.Smelter === 'number', 'Tech.Smelter does not resolve')
+  assert(e.Tech[e.Tech.Smelter] === 'Smelter', 'Tech is not bidirectional')
+
+  for (const table of ['ElementType', 'CellType', 'StructureType', 'ToolType', 'Tech']) {
+    const named = Object.keys(e[table]).filter((k) => !/^\d+$/.test(k))
+    assert(named.length > 0, table + ' has no name keys')
+    const first = named[0]
+    assert(e[table][e[table][first]] === first, table + ' is not bidirectional at ' + first)
+  }
+  return 'MatterType and the four id enums resolve in both directions'
+})
+
+check('mod content is registered with the simulation workers', () => {
+  /*
+   * Sandustry flushes sandkit.mods to the simulation workers during world init,
+   * BEFORE game:ready. Official entries run at game:ready, so their elements
+   * and structures landed on the main thread and the workers never heard of
+   * them: registered, no error, and invisible in game. The runtime repeats the
+   * flush once the entries have settled.
+   */
+  const { S } = bootConsole()
+  const posted = []
+  const FH = {
+    elements: { createAt() {}, getElementTypeFromId() {}, register(st, d) { st.sandkit.mods.elements[d.id] = d } },
+    structures: { register(st, d) { st.sandkit.mods.structures[d.id] = d } },
+  }
+  const st = {
+    store: { structures: [], meta: { time: 0 } },
+    environment: {
+      config: { cellSize: 4 },
+      multithreading: { simulation: { postAll: (state, msg) => posted.push(msg) } },
+    },
+  }
+  st.sandkit = {
+    mods: { elements: {}, structures: {}, terrains: {}, matters: {}, misc: {} },
+    hooks: {}, getApi: () => FH,
+  }
+  S.__capture(FH, st, 'game:ready')
+
+  // Register content the way a mod does, then flush as the runtime does.
+  S.api.elements.register({ id: 'uolkxYellowcake' })
+  S.api.structures.register({ id: 'uolkxReactorCore' })
+  assert(posted.length === 0, 'registering alone should not post to the workers')
+
+  assert(S.official.flushModRegistries(), 'flush reported failure')
+  const W = enums.WorkerMessage
+  const ids = posted.map((m) => m[0])
+  for (const name of ['RegisterModMatters', 'RegisterModElements', 'RegisterModTerrains', 'RegisterModStructures']) {
+    assert(ids.includes(W[name]), name + ' was never sent to the workers')
+  }
+  const els = posted.find((m) => m[0] === W.RegisterModElements)
+  assert(els && els[1].uolkxYellowcake, 'the element never reached the worker payload')
+  const strs = posted.find((m) => m[0] === W.RegisterModStructures)
+  assert(strs && strs[1].uolkxReactorCore, 'the structure never reached the worker payload')
+
+  return '4 registry messages posted, carrying the mod content'
+})
+
+check('mixed-convention namespaces keep their real argument order', () => {
+  /*
+   * `tech` is state-first for isLocked/setLocked but NOT for the definition
+   * calls. Binding state into those shifts every argument by one, so
+   * getDefinition("x") looks up registry[state] and silently returns
+   * undefined. Nothing throws, which is why this went unnoticed.
+   */
+  const { S } = bootConsole()
+  const registry = { conveyors: { cost: 100 } }
+  const FH = {
+    elements: { createAt() {}, getElementTypeFromId() {} },
+    tech: {
+      getDefinition: (id) => registry[id],
+      addDefinition: (id, def) => { registry[id] = def },
+      updateDefinition: (id, patch) => Object.assign(registry[id] || {}, patch),
+      isLocked: (state, id) => {
+        if (!state || !state.store) throw new Error('isLocked was not given state')
+        return !!(state.store.lockedTechs || {})[id]
+      },
+    },
+  }
+  const st = { store: { lockedTechs: { conveyors: true } }, session: {} }
+  st.sandkit = { mods: {}, getApi: () => FH }
+  S.__capture(FH, st, 'game:ready')
+
+  const tech = S.api.tech
+  const def = tech.getDefinition('conveyors')
+  assert(def && def.cost === 100,
+    'getDefinition got state injected and returned ' + JSON.stringify(def))
+
+  tech.addDefinition('modTech', { cost: 42 })
+  assert(registry.modTech && registry.modTech.cost === 42, 'addDefinition wrote to the wrong key')
+
+  // And the genuinely state-first ones must still receive it.
+  assert(tech.isLocked('conveyors') === true, 'isLocked lost its state argument')
+  return 'definition calls keep (id, ...), isLocked keeps (state, id)'
+})
+
+check('whole non-state namespaces keep their argument order', () => {
+  /*
+   * i18n, utils and random take no state at all - the game calls
+   * `FH.i18n.t("ui|common|thousandsShort")` directly. Binding state shifted
+   * every argument, so `i18n.register("en", table)` arrived as
+   * `register(state, "en")` and the table was dropped: every mod-registered
+   * string vanished and the tech tree rendered "[MISSING: tech|...|name]".
+   */
+  const { S } = bootConsole()
+  const registered = {}
+  const FH = {
+    elements: { createAt() {}, getElementTypeFromId() {} },
+    i18n: {
+      register: (locale, table) => { registered[locale] = table },
+      t: (key) => 'T:' + key,
+    },
+    utils: { getRandomIntBetween: (min, max) => [min, max] },
+    // A state-first namespace alongside them, to prove the exception is scoped.
+    storage: { get: (state, key) => (state && state.store ? 'S:' + key : 'NO_STATE') },
+  }
+  const st = { store: {}, session: {} }
+  st.sandkit = { mods: {}, getApi: () => FH }
+  S.__capture(FH, st, 'game:ready')
+
+  S.api.i18n.register('en', { 'tech|uolkxChemistry|name': 'Industrial Chemistry' })
+  assert(registered.en && registered.en['tech|uolkxChemistry|name'] === 'Industrial Chemistry',
+    'i18n.register lost its table: ' + JSON.stringify(registered))
+  assert(S.api.i18n.t('ui|x') === 'T:ui|x', 'i18n.t got state injected')
+  assert(S.api.utils.getRandomIntBetween(1, 9).join(',') === '1,9', 'utils lost its arguments')
+
+  // Scoped, not global: storage must still be state-bound.
+  assert(S.api.storage.get('k') === 'S:k', 'storage lost its state argument')
+  return 'i18n/utils/random unbound, storage still state-bound'
+})
+
+check('a mod can register a tech node into the tree', () => {
+  // The tree renders from a grid, so registering a definition is not enough:
+  // the node also needs a cell. The grid is returned by reference, which is
+  // what makes this possible at all.
+  const { S, sandbox } = bootConsole()
+  const CONN = { kind: 'connection', from: 'shaker', to: 'conveyors' }
+  const grid = [[null, null, 'shaker', null], [null, 'conveyors', CONN, null]]
+  const defs = { shaker: { cost: 0 }, conveyors: { cost: 100 } }
+  let cache = null
+  const techModule = {
+    getTechGrid: () => grid,
+    addTechDefinition: (id, d) => { defs[id] = d; cache = null },
+    getTechDefinition: (id) => defs[id],
+    getTechNodes: () => cache || (cache = grid.flatMap((row, r) => row
+      .map((id, c) => (typeof id === 'string' && defs[id] ? { id, row: r, col: c } : null))
+      .filter(Boolean))),
+  }
+  // Expose it the way the real one is reached: through the webpack registry.
+  // The renderer stack runs inside the harness sandbox, so the chunk array has
+  // to live on *that* global, not on Node's.
+  const modules = { 1: { junk: true }, 2: techModule }
+  const chunks = []
+  chunks.push = (chunk) => {
+    const req = (id) => modules[id]
+    req.m = modules
+    if (chunk[2]) chunk[2](req)
+  }
+  sandbox.webpackChunksand_v1 = chunks
+
+  const FH = {
+    elements: { createAt() {}, getElementTypeFromId() {} },
+    tech: {
+      getDefinition: (id) => defs[id],
+      addDefinition: (id, d) => techModule.addTechDefinition(id, d),
+    },
+  }
+  const st = { store: { lockedTechs: {} }, session: {} }
+  st.sandkit = { mods: {}, getApi: () => FH }
+  S.__capture(FH, st, 'game:ready')
+
+  try {
+    // The three-argument form is what the bundled mods actually call:
+    // registerNode(id, definition, { parentId }). Reading only the object form
+    // rejected every real caller and silently created no node.
+    const ok = S.api.tech.registerNode(
+      'uolkxChemistry',
+      { cost: 2000, nameKey: 'tech|uolkxChemistry|name' },
+      { parentId: 'conveyors' })
+    assert(ok, 'registerNode reported failure for the (id, def, opts) form')
+    assert(defs.uolkxChemistry && defs.uolkxChemistry.cost === 2000,
+      'the definition did not reach the registry')
+
+    const nodes = techModule.getTechNodes()
+    const placed = nodes.find((n) => n.id === 'uolkxChemistry')
+    assert(placed, 'the node never appeared in the rebuilt tree')
+    assert(Math.abs(placed.row - 1) <= 1 && Math.abs(placed.col - 1) <= 1,
+      'the node was not placed next to its prerequisite')
+
+    // A connection descriptor is not a free cell; overwriting one erases a
+    // line the game draws between two existing nodes.
+    assert(grid[1][2] === CONN, 'a connection descriptor was overwritten')
+
+    // Re-registering must update in place, never add a second cell.
+    S.api.tech.registerNode('uolkxChemistry', { cost: 3000 }, { parentId: 'conveyors' })
+    assert(techModule.getTechNodes().filter((n) => n.id === 'uolkxChemistry').length === 1,
+      'the node was placed twice')
+    assert(defs.uolkxChemistry.cost === 3000, 're-registering did not update the definition')
+  } finally {
+    delete sandbox.webpackChunksand_v1
+  }
+  return 'node placed beside its prerequisite, connections preserved, idempotent'
+})
+
+check('shims fill v1 gaps without shadowing anything real', () => {
+  const { S } = bootConsole()
+
+  // A live API where some names exist and some do not. The ones that exist
+  // must survive untouched - a shim that overwrote a real implementation would
+  // silently downgrade the game.
+  const realCreateLight = function () { return 'REAL' }
+  const FH = {
+    // The adapter identifies the API generation from this namespace, so it has
+    // to be present for anything downstream to be built at all.
+    elements: { createAt() {}, getElementTypeFromId() {}, getConfig() {} },
+    effects: { createLight: realCreateLight, createParticles() {} },
+    energy: { add() { return 'add' }, getNetworkFreeCapacity() { return 7 } },
+    structures: { resolveTypeName() {} },
+    ui: { confirm() {}, toast() {} },
+    config: { getLegacy() { return { cellSize: 4 } } },
+    workers: { shared: { create() {}, get() {} } },
+    // Already provides a v1 name: the shim must not replace it.
+    input: { registerKeyBinding() {}, registerBinding() { return 'GAMES_OWN' } },
+  }
+  const st = {
+    store: { structures: [{ type: 'a', x: 1, y: 2 }, { type: 'b' }, { type: 'a', x: 3, y: 4 }],
+      meta: { time: 99 }, world: { size: { width: 10, height: 10 } } },
+    environment: { config: { cellSize: 4 } },
+  }
+  st.sandkit = { mods: { elements: { sand: {} } }, getApi: () => FH }
+  S.__capture(FH, st, 'game:ready')
+
+  const api = S.api
+  assert(api, 'no adapted API was built')
+
+  // Filled in where absent.
+  assert(typeof api.time.getTick === 'function', 'time.getTick was not shimmed')
+  assert(api.time.getTick() === 99, 'time.getTick did not read the live tick')
+  assert(typeof api.scene.getActive === 'function', 'scene.getActive was not shimmed')
+  assert(typeof api.grid.forEachCellInCircle === 'function', 'grid helper was not shimmed')
+  assert(api.shared && api.shared.buffers === api.workers.shared,
+    'shared.buffers was not mapped onto workers.shared')
+
+  // forEachOfType must visit only matching structures.
+  const hit = []
+  api.structures.forEachOfType('a', (s, x, y) => hit.push(x + ',' + y))
+  assert(hit.join(' ') === '1,2 3,4', 'forEachOfType visited the wrong set: ' + hit.join(' '))
+
+  // Never shadow a real implementation.
+  assert(api.input.registerBinding() === 'GAMES_OWN',
+    'a shim overwrote a method the build already provides')
+
+  // Geometry uses the live cell size, not a guess.
+  assert(S.shims.cellSize() === 4, 'cellSize did not come from the live config')
+  assert(S.shims.worldToCell(9) === 2, 'world->cell conversion is wrong')
+
+  return '23 shims install, live methods preserved, geometry from live config'
+})
+
+check('the Sandkit namespace scan reads code, not prose', () => {
+  // Mods here ship long explanatory headers that mention api.* calls. Counting
+  // those as real usage would report namespaces the mod never touches, and a
+  // warning players learn to ignore is worse than none.
+  const tricky = [
+    '// uses api.effects.glow to draw, per the docs',
+    'const label = "api.fake.method";',
+    '/* api.block.comment and api.another.one */',
+    'const t = `api.template.literal`;',
+    'api.real.call(); api.elements.createAtCellWhenIdle(1,2);',
+  ].join('\n')
+  const r = apiScan.scan(tricky)
+  const seen = Object.keys(r.namespaces).sort()
+  assert(seen.join(',') === 'elements,real',
+    'scanner picked up non-code namespaces: ' + seen.join(', '))
+
+  // And it must still see the real calls it did find.
+  assert(r.namespaces.elements.includes('createAtCellWhenIdle'), 'missed a real method')
+  return 'comments, strings and template literals ignored; real calls kept'
+})
+
+check('unsupported Sandkit namespaces are detected and named', () => {
+  const usage = { namespaces: { elements: ['createAt', 'ghostMethod'], effects: ['glow'], ui: ['update'] } }
+  const live = { elements: { createAt() {} }, ui: { update() {} } }
+
+  const r = apiScan.compare(usage, live)
+  assert(r.missingNamespaces.join(',') === 'effects',
+    'wrong missing namespaces: ' + r.missingNamespaces.join(','))
+  assert(r.missingMethods.length === 1 && r.missingMethods[0].methods.join(',') === 'ghostMethod',
+    'wrong missing methods: ' + JSON.stringify(r.missingMethods))
+  assert(!r.ok, 'a mod with gaps was reported as fine')
+
+  const line = apiScan.summarise(r)
+  assert(line.includes('effects') && line.includes('ghostMethod'), 'summary omits a gap: ' + line)
+
+  // A fully satisfied mod must produce no noise at all.
+  const clean = apiScan.compare({ namespaces: { ui: ['update'] } }, live)
+  assert(clean.ok && apiScan.summarise(clean) === null, 'a satisfied mod produced a warning')
+
+  // No API to compare against is "inconclusive", never "everything is broken".
+  const blind = apiScan.compare(usage, null)
+  assert(blind.ok && blind.inconclusive, 'a missing API should not condemn every namespace')
+  return 'missing namespaces, missing methods, clean mods and the blind case'
+})
+
+check('every bundled mod is scanned for its Sandkit surface', () => {
+  const found = official.discover([path.join(__dirname, '..', 'mods')], null, {})
+  const scanned = found.mods.filter((m) => m.entry).map((m) => ({
+    id: m.id,
+    usage: apiScan.scan(fs.readFileSync(m.entry, 'utf8')),
+  }))
+  assert(scanned.length > 0, 'no mods scanned')
+
+  const empty = scanned.filter((s) => Object.keys(s.usage.namespaces).length === 0)
+  assert(empty.length === 0, 'no Sandkit usage detected in: ' + empty.map((e) => e.id).join(', '))
+
+  const total = new Set()
+  for (const s of scanned) Object.keys(s.usage.namespaces).forEach((n) => total.add(n))
+  return scanned.length + ' mods using ' + total.size + ' distinct namespaces'
 })
 
 // ------------------------------------------------- vendored content tables

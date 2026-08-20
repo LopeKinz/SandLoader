@@ -43,6 +43,7 @@ const flCompat = require('../compat/fluxloader')
 const modManage = require('../mods/manage')
 const workshop = require('../mods/workshop')
 const official = require('../mods/official')
+const apiScan = require('../mods/api-scan')
 const permissions = require('../mods/permissions')
 const approvals = require('../mods/approvals')
 const configStore = require('../mods/config')
@@ -319,6 +320,10 @@ function modSummary() {
       // Workshop provenance. `removable` is false for Workshop items, and the
       // manager hides its delete button on it; manage.remove() refuses the
       // path independently, so the two do not have to agree to stay safe.
+      // Sandkit namespaces this mod calls. The renderer resolves them against
+      // the live API - only there is the answer authoritative - and the manager
+      // shows what this build cannot satisfy.
+      apiUsage: m.apiUsage || null,
       source: m.source || 'local',
       publishedFileId: m.publishedFileId || null,
       workshopUrl: m.workshopUrl || null,
@@ -854,9 +859,30 @@ function assemble() {
 
   // ---- official Sandustry mods (manifestVersion 1)
   try {
-    const officialFound = official.discover([...roots, ...flRoots], logger.child('official'))
+    // Whether this build runs official mods at all is a property of the game,
+    // so answer it from the installed archive rather than assuming. Opened once
+    // here and closed immediately; discover() only reads during the call.
+    const hostReader = require('../asar/reader')
+    let hostArchive = null
+    try { hostArchive = hostReader.open(runtime.install.asar) } catch (_) { /* probe is best-effort */ }
+
+    let officialFound
+    try {
+      officialFound = official.discover([...roots, ...flRoots], logger.child('official'), {
+        readGameFile: hostArchive
+          ? (file) => { try { return hostArchive.readText(file) } catch (_) { return null } }
+          : undefined,
+        workshopPath: (() => { try { return locate.workshopDir() } catch (_) { return null } })(),
+      })
+    } finally {
+      if (hostArchive) { try { hostArchive.close() } catch (_) { /* nothing left to do */ } }
+    }
+
     applyModStates(officialFound.mods)
     for (const e of officialFound.errors) note(e, 'official', null, 'warn')
+    // Surfaced to the renderer so the manager can say so where the player looks,
+    // instead of showing "Enabled" for a mod that cannot run.
+    runtime.officialHost = officialFound.host || null
     runtime.officialMods = officialFound.mods
     const officialActive = officialFound.mods.filter((m) => m.enabled !== false)
 
@@ -870,8 +896,14 @@ function assemble() {
         if (mod.dir) runtime.modAssets[mod.id] = mod.dir
         if (mod.entry) {
           try {
+            const entrySource = fs.readFileSync(mod.entry, 'utf8')
+            // Record which Sandkit namespaces this mod reaches for. The
+            // renderer resolves them against the live API once it exists and
+            // the manager shows anything this build cannot satisfy.
+            try { mod.apiUsage = apiScan.scan(entrySource) }
+            catch (_) { /* a scan failure must never block loading the mod */ }
             runtime.rendererScripts.push(
-              `/* official mod: ${mod.id}@${mod.version} */\n` + fs.readFileSync(mod.entry, 'utf8'))
+              `/* official mod: ${mod.id}@${mod.version} */\n` + entrySource)
           } catch (e) {
             note(new SmlnError('E_MOD_LOAD', `official mod "${mod.id}": ${e.message}`, { detail: { mod: mod.id } }),
               'official', mod.id)
