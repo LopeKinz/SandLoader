@@ -246,6 +246,34 @@ check('patch engine leaves source intact on a failed required patch', () => {
 })
 
 // ------------------------------------------------------- fluxloader compat
+check('one mod\'s stale patches cannot break the bundle or veto anyone else', () => {
+  // corelib's patches assume each other: colorIdFix rewrites buffer sizing in
+  // one patch and that buffer's readers in the next. On a game build where
+  // only half still match, applying that half leaves the bundle internally
+  // inconsistent - the game boots to a black screen. Aborting the file instead
+  // would drop SandLoader's own patches. So a mod's patches for a file are one
+  // atomic group: all of them land, or none do, and no other mod is affected.
+  const source = 'KEEP_ME alpha BETA gamma'
+  const stale = flCompat.toSmlnPatch({ type: 'replace', from: 'alpha', to: 'ALPHA' }, 'moda', 'p1')
+  const alsoStale = flCompat.toSmlnPatch(
+    { type: 'replace', from: 'NOT_PRESENT', to: 'x' }, 'moda', 'p2')
+  const other = flCompat.toSmlnPatch({ type: 'replace', from: 'gamma', to: 'GAMMA' }, 'modb', 'p1')
+  const own = { id: 'smln:keep', owner: 'smln', description: 'loader patch',
+    find: 'KEEP_ME', replace: 'KEPT', expect: 'any', required: true }
+
+  const r = engine.apply(source, [stale, alsoStale, other, own], { logger: testLogger() })
+  assert(r.ok, 'the file was aborted by a third-party mod: ' + (r.error && r.error.message))
+
+  // moda's half-matching pair must land as a unit - meaning not at all.
+  assert(!r.source.includes('ALPHA'),
+    'a mod applied half of its patches, leaving the file inconsistent: ' + r.source)
+  // modb is independent and still matches, so it applies.
+  assert(r.source.includes('GAMMA'), 'an unrelated mod lost its patch: ' + r.source)
+  // SandLoader's own patch must never be collateral damage.
+  assert(r.source.includes('KEPT'), 'the loader lost its own patch: ' + r.source)
+  return 'stale group skipped whole, other mod and loader unaffected'
+})
+
 check('fluxloader patch: plain replace', () => {
   const p = flCompat.toSmlnPatch({ type: 'replace', from: 'abc', to: 'xyz' }, 'demo', 't1')
   const r = engine.apply('--abc--', [p])
