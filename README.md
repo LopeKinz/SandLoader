@@ -868,7 +868,7 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.2.0**, verified against **Sandustry 0.5.5**. Self-test: **104/104**.
+SandLoader **0.3.0**, verified against **Sandustry 0.5.5**. Self-test: **104/104**.
 
 ## License
 
