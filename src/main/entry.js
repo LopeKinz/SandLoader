@@ -303,6 +303,42 @@ function isApproved(mod) {
 
 // ---------------------------------------------------------------- summaries
 
+/**
+ * Which entrypoint slots a mod fills, normalised across the three flavours.
+ *
+ * Each flavour spells this differently - SMLN uses `entrypoints.native`,
+ * Fluxloader `entrypoints.electron`, and official mods a flat `entry` /
+ * `workerEntry` pair whose `entry` runs in the renderer, not the main process.
+ * Consumers should not have to know that, so all three collapse to the same
+ * `{native, game, worker}` shape here.
+ *
+ * Paths are relative to the mod's own `dir`. An external consumer of this
+ * payload runs in the browser and cannot open a host path anyway, and the
+ * relative form is the one that means something to it.
+ *
+ * @param {any} m
+ * @returns {{native: string|null, game: string|null, worker: string|null}}
+ */
+function entrypointSummary(m) {
+  const ep = m.entrypoints || {}
+  const raw = {
+    // Fluxloader's `electron` half is the same tier as SMLN's `native`.
+    native: ep.native || ep.electron || m.main || null,
+    game: ep.game || m.renderer || m.entry || null,
+    worker: ep.worker || m.worker || m.workerEntry || null,
+  }
+  const base = m.dir ? path.resolve(m.dir) : null
+  const rel = (abs) => {
+    if (typeof abs !== 'string' || !abs) return null
+    if (!base) return abs
+    const r = path.relative(base, abs)
+    // A path outside the mod directory should not be rewritten into `..`
+    // soup; the loaders reject those, but this is a summary, not a gate.
+    return r && !r.startsWith('..') ? r.split(path.sep).join('/') : abs
+  }
+  return { native: rel(raw.native), game: rel(raw.game), worker: rel(raw.worker) }
+}
+
 /** Metadata handed to the renderer for the manager UI and the splash. */
 function modSummary() {
   return allMods().map((m) => {
@@ -318,6 +354,11 @@ function modSummary() {
       capability: cap,
       hasSettings: Object.keys(schemaFor(m)).length > 0,
       needsApproval: !isApproved(m),
+      // Which halves this mod actually has. A renderer-only consumer - the
+      // manager UI, or another loader shimming SMLN mods - needs this to tell
+      // what it can run: `game` and `worker` live in the browser, `native`
+      // does not and cannot be honoured outside the main process.
+      entrypoints: entrypointSummary(m),
       // Workshop provenance. `removable` is false for Workshop items, and the
       // manager hides its delete button on it; manage.remove() refuses the
       // path independently, so the two do not have to agree to stay safe.

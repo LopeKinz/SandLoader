@@ -79,6 +79,12 @@
     '.smln-modal .prob .det{color:#64748b;font-size:11px;margin-top:4px;white-space:pre-wrap;',
     'max-height:9em;overflow:auto}',
     '.smln-modal .prob .rep{color:#64748b;font-size:11px}',
+    '.smln-modal .reg{padding:9px 22px;border-bottom:1px solid rgba(100,116,139,.16)}',
+    '.smln-modal .reg:last-child{border-bottom:0}',
+    '.smln-modal .reg .rh{display:flex;gap:10px;align-items:baseline}',
+    '.smln-modal .reg .kind{font-size:11px;letter-spacing:.08em;color:#4ade80}',
+    '.smln-modal .reg .n{color:#64748b;font-size:11px}',
+    '.smln-modal .reg .ids{color:#cbd5e1;font-size:12px;margin-top:3px;word-break:break-word}',
     '.smln-modal .empty{padding:34px 22px;text-align:center;color:#64748b}',
     '.smln-modal .body>p{padding:14px 22px 6px;margin:0;color:#cbd5e1}',
     '.smln-modal .body>p.hint{color:#64748b;font-size:12px;padding-top:8px}',
@@ -322,6 +328,11 @@
       for (var p = 0; p < problems.length; p++) m.body.appendChild(problemRow(problems[p]))
     }
 
+    var registered = registeredSection(mod.id)
+    if (registered) {
+      for (var ri = 0; ri < registered.length; ri++) m.body.appendChild(registered[ri])
+    }
+
     // --- approval state, and the buttons that change it
     var status = global.document.createElement('div')
     m.body.appendChild(status)
@@ -446,6 +457,85 @@
   }
 
   // ------------------------------------------------------------ 3. problems
+  /** Ids listed per content type; the remainder is counted, not printed. */
+  var REG_ID_LIMIT = 12
+
+  function registeredRow(type, ids) {
+    var row = global.document.createElement('div')
+    row.className = 'reg'
+
+    var head = global.document.createElement('div')
+    head.className = 'rh'
+    var kind = global.document.createElement('span')
+    kind.className = 'kind'
+    // The raw registry type ("element", "keyBinding", ...). These are API
+    // names a mod author typed, not prose, so they are not translated.
+    kind.textContent = type
+    var n = global.document.createElement('span')
+    n.className = 'n'
+    n.textContent = 'x' + ids.length
+    head.appendChild(kind)
+    head.appendChild(n)
+
+    var shown = ids.slice(0, REG_ID_LIMIT)
+    var line = global.document.createElement('div')
+    line.className = 'ids'
+    line.textContent = shown.join(', ') +
+      (ids.length > shown.length ? t('registered.more', { count: ids.length - shown.length }) : '')
+
+    row.appendChild(head)
+    row.appendChild(line)
+    return row
+  }
+
+  /**
+   * What this mod actually put into the game.
+   *
+   * `SMLN.register` is the only thing that knows who registered what - FH
+   * keeps no owner - so its ledger is the whole answer. Registration is queued
+   * until the game emits `game:ready`, which is why an empty list has two
+   * meanings and the panel says which one it is reporting: in the main menu
+   * nothing has run yet, and calling that "no content" would be a lie.
+   *
+   * Returns null when the registration API is absent, so a build without it
+   * shows no section rather than an empty one.
+   *
+   * @returns {any[]|null}
+   */
+  function registeredSection(modId) {
+    var reg = SMLN.register
+    if (!reg || typeof reg.owned !== 'function') return null
+
+    var owned = reg.owned(modId) || []
+    var stats = (typeof reg.stats === 'function' && reg.stats()) || {}
+    var nodes = []
+
+    var head = global.document.createElement('div')
+    head.className = 'lead'
+    head.textContent = t('registered.forMod', { count: owned.length })
+    nodes.push(head)
+
+    if (!owned.length) {
+      var note = global.document.createElement('div')
+      note.className = 'note-box'
+      note.textContent = stats.drained ? t('registered.none') : t('registered.pending')
+      nodes.push(note)
+      return nodes
+    }
+
+    // Grouped by type: a mod with forty sprites should read as one line.
+    var order = []
+    var byType = Object.create(null)
+    for (var i = 0; i < owned.length; i++) {
+      var type = String(owned[i].type || 'unknown')
+      if (!byType[type]) { byType[type] = []; order.push(type) }
+      byType[type].push(String(owned[i].id))
+    }
+    order.sort()
+    for (var k = 0; k < order.length; k++) nodes.push(registeredRow(order[k], byType[order[k]]))
+    return nodes
+  }
+
   function problemRow(p) {
     var row = global.document.createElement('div')
     row.className = 'prob' + (p.severity === 'warn' ? ' warn' : '')

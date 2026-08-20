@@ -36,7 +36,71 @@
    * Verified against 0.5.4's bundle; anything absent here passes through.
    */
   var ALIASES = {
+    authorization: {
+      canBuildAtCell: 'canBuild',
+      canGrabAtCell: 'canGrab',
+      canUseToolAtCell: 'canUseToolAt',
+      getZoneIdAtCell: 'getZoneIdAt',
+    },
+    collector: {
+      getValueByType: 'getValueFromElementType',
+      isCellIdCollectable: 'isCellCollectable',
+      isCellIdCollectableForSprite: 'isCellCollectableForSprite',
+      notifyPickupAtCell: 'notifyPickup',
+    },
+    discoveries: {
+      addElementByType: 'addElement',
+      addTerrainByType: 'addTerrain',
+    },
+    fire: {
+      burnElementAtCell: 'burnElementAt',
+      burnElementAtCellWhenIdle: 'burnElementAt',
+      canBurnElementAtCell: 'canBurnElementAt',
+    },
+    grid: {
+      forEachCellInRect: 'iterateRect',
+      forEachCellInCircle: 'iterateCircle',
+    },
+    patterns: {
+      excavateAtCell: 'excavate',
+    },
+    raycast: {
+      castFromWorld: 'cast',
+    },
+    upgrades: {
+      getLevelById: 'getLevel',
+      getAvailableLevelById: 'getAvailableLevel',
+    },
+    sprites: {
+      loadFromMod: 'load',
+      getById: 'get',
+    },
+    items: {
+      createFromId: 'create',
+      isActiveById: 'isActive',
+    },
+    effects: {
+      createDistortionWaveAtWorld: 'createDistortionWave',
+      createLaserAtWorld: 'createLaser',
+      createLightAtWorld: 'createLight',
+      createParticlesAtWorld: 'createParticles',
+      createEffectAtWorld: 'createEffect',
+    },
+    tech: {
+      getDefinitionById: 'getDefinition',
+      isLockedById: 'isLocked',
+      setLockedById: 'setLocked',
+    },
     elements: {
+      setVelocityAtCellWhenIdle: 'setVelocity',
+      convertToParticleAtCellWhenIdle: 'convertToParticle',
+      convertFromParticleAtCellWhenIdle: 'convertFromParticle',
+      setDurationAtCellWhenIdle: 'setDuration',
+      findFreeCellInStructure: 'findFreePositionInStructure',
+      isTypeAtCell: 'isTypeAt',
+      isFreeFallingAtCell: 'isFreeFalling',
+      getVelocityAtCell: 'getVelocity',
+      getDataFieldAtCell: 'getDataField',
       createAtCellWhenIdle: 'createAt',
       replaceAtCellWhenIdle: 'replaceAt',
       removeAtCellWhenIdle: 'removeAt',
@@ -44,7 +108,7 @@
       addParticleVelocityAtCellWhenIdle: 'addParticleVelocity',
       refreshColorAtCellWhenIdle: 'refreshColorAt',
       setPhysicsAtCellWhenIdle: 'setPhysics',
-      setDataFieldAtCellWhenIdle: 'setDataField1',
+      setDataFieldAtCellWhenIdle: 'setDataField',
       getTypeFromId: 'getElementTypeFromId',
       getTypeAtCell: 'getElementTypeAtPos',
       getResolvedTypeAtCell: 'getResolvedTypeAtPos',
@@ -55,16 +119,23 @@
       addInteractionInfo: 'addInteraction',
     },
     terrains: {
+      getTypeAtCell: 'getGroundCellTypeAtPos',
+      damageAtCell: 'damageTerrain',
+      isCellIdTerrain: 'isTerrain',
       createAtCellWhenIdle: 'createAt',
       replaceAtCellWhenIdle: 'replaceAt',
       removeAtCellWhenIdle: 'removeAt',
-      getTypeFromId: 'getTerrainTypeFromId',
+      getTypeFromId: 'world.getCellTypeByName',
       isAtCell: 'isPosTerrain',
       isTypeAtCell: 'isPosTerrainId',
       getDataAtCell: 'getTerrainData',
       setHpAtCellWhenIdle: 'setTerrainHP',
     },
     structures: {
+      setSpritesheetIndexAtCell: 'setSpritesheetIndexAt',
+      setSpritesheetIndexByValueAtCell: 'setSpritesheetIndexByValueAt',
+      removeAtCellsWhenIdle: 'removeAtPositions',
+      isUnlockedByType: 'isUnlocked',
       isTypeAtCell: 'isTypeAt',
       getAtCell: 'getAtCell',
       hasBuiltAtCell: 'hasBuiltAtCell',
@@ -84,9 +155,10 @@
       redrawAroundCellWhenIdle: 'redrawSurroundingCells',
     },
     player: {
+      isCollidingWithCell: 'isCollidingWithCell',
       getWorldPosition: 'getPosition',
       setWorldPosition: 'setPosition',
-      isWithinRadiusOfCell: 'isWithinRadiusOfCell',
+      isWithinRadiusOfCell: 'isWithinRadius',
       isWorldPositionClear: 'isPositionClear',
     },
   }
@@ -124,10 +196,24 @@
   }
 
   /**
+   * Bind a method that lives on a different namespace than the alias exposing
+   * it. `this` must stay its own namespace, not the aliasing one.
+   */
+  function bindCross(owner, fn, bindState) {
+    if (!bindState) return fn.bind(owner)
+    return function () {
+      var args = new Array(arguments.length + 1)
+      args[0] = SMLN.getState()
+      for (var i = 0; i < arguments.length; i++) args[i + 1] = arguments[i]
+      return fn.apply(owner, args)
+    }
+  }
+
+  /**
    * Wrap one namespace. On legacy builds every call gets the live state
    * injected ahead of its own arguments.
    */
-  function adaptNamespace(raw, nsName, bindState) {
+  function adaptNamespace(raw, nsName, bindState, root) {
     var aliases = ALIASES[nsName] || {}
     var out = {}
 
@@ -156,10 +242,31 @@
     }
 
     // Then add the v1 spellings on top, where the target exists.
+    //
+    // A target may name another namespace ('world.getCellTypeByName'). 0.5.5
+    // has no terrains-level id lookup at all - `getTerrainTypeFromId` appears
+    // nowhere in the bundle - so the only honest mapping for
+    // `terrains.getTypeFromId` crosses namespaces. Resolve against the root
+    // sandkit object, and bind state from the owning namespace so the call
+    // still receives it.
     for (var v1 in aliases) {
       var legacyName = aliases[v1]
       if (typeof out[v1] === 'function') continue
-      if (raw && typeof raw[legacyName] === 'function') out[v1] = wrap(raw[legacyName], legacyName)
+
+      var dot = legacyName.indexOf('.')
+      if (dot === -1) {
+        if (raw && typeof raw[legacyName] === 'function') out[v1] = wrap(raw[legacyName], legacyName)
+        continue
+      }
+
+      var ownerName = legacyName.slice(0, dot)
+      var methodName = legacyName.slice(dot + 1)
+      var owner = root && root[ownerName]
+      if (!owner || typeof owner[methodName] !== 'function') continue
+
+      var ownerExceptions = NO_STATE_ARG[ownerName] || {}
+      var ownerSkipsState = ownerExceptions === true || ownerExceptions[methodName] === true
+      out[v1] = bindCross(owner, owner[methodName], bindState && !ownerSkipsState)
     }
 
     return out
@@ -175,7 +282,7 @@
       try {
         var value = raw[ns]
         api[ns] = value && typeof value === 'object'
-          ? adaptNamespace(value, ns, bindState)
+          ? adaptNamespace(value, ns, bindState, raw)
           : value
       } catch (_) { /* keep going; one bad namespace must not lose the rest */ }
     }

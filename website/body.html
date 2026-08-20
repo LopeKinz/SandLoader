@@ -1,0 +1,1216 @@
+<header class="hdr">
+  <a class="brand" href="#/" data-nav aria-label="SandLoader — home">
+    <canvas id="brandmark" width="177" height="21" role="img" aria-label="SandLoader"></canvas>
+  </a>
+  <span class="ver">0.3.0</span>
+  <nav class="hnav" id="hnav">
+    <a href="#/" data-nav data-view="home">Overview</a>
+    <a href="#/docs" data-nav data-view="docs">Documentation</a>
+    <a href="#/mods" data-nav data-view="mods">Making mods</a>
+    <a href="#/reference" data-nav data-view="reference">Reference</a>
+    <a href="#/faq" data-nav data-view="faq">FAQ</a>
+  </nav>
+  <span class="hgap"></span>
+  <div class="hact">
+    <button class="searchbtn" id="openSearch" type="button" aria-label="Search the documentation">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <span>Search…</span><kbd>/</kbd>
+    </button>
+    <button class="iconbtn" id="themeBtn" type="button" aria-label="Switch colour theme">
+      <svg viewBox="0 0 24 24" id="themeIcon"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <a class="ghbtn" id="ghBtn" href="https://github.com/LopeKinz/SandLoader" target="_blank" rel="noopener noreferrer"
+       aria-label="SandLoader on GitHub">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.380-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .271.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.150 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.20 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+    </a>
+    <button class="iconbtn menubtn" id="menuBtn" type="button" aria-label="Menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+  </div>
+</header>
+
+<!-- ======================= OVERVIEW ======================= -->
+<div class="view" id="view-home">
+  <section class="hero">
+    <div class="hero-in">
+      <canvas id="wordmark" aria-label="SandLoader"></canvas>
+      <h1>Mods for Sandustry, <em>without touching the game.</em></h1>
+      <p class="lede">
+        A mod loader with an in-game console, a mod manager, and support for existing
+        <a href="https://fluxloader.app/">Fluxloader</a> mods. Patching happens in memory
+        while the game loads — so Steam's file verification stays green, and uninstalling
+        is deleting one folder.
+      </p>
+      <div class="cta">
+        <a class="btn primary" href="#/docs" data-nav>
+          Install SandLoader
+          <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a class="btn ghost" href="#/mods" data-nav>
+          <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+          Write a mod
+        </a>
+      </div>
+      <div class="branchbar">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        <div>
+          <b>Vanilla branch only</b>
+          <p>SandLoader targets Sandustry's default <code>public</code> branch. The experimental
+          <strong>modded branch is not supported</strong> — it ships a different modding API
+          generation, and this loader is built and verified against the vanilla one.</p>
+        </div>
+      </div>
+      <div class="trust">
+        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Zero game files modified</span>
+        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Steam · GOG · standalone</span>
+        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Windows · Linux · macOS</span>
+        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> MIT licensed</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="band"><div class="band-in"><div class="metrics">
+    <div class="metric"><b>0</b><span>game files changed</span></div>
+    <div class="metric"><b>79</b><span>API namespaces</span></div>
+    <div class="metric"><b>1</b><span>patch to reach them</span></div>
+    <div class="metric"><b>123</b><span>self-tests passing</span></div>
+    <div class="metric"><b>~50<span style="font-size:.5em"> ms</span></b><span>re-scan after update</span></div>
+  </div></div></div>
+
+  <section class="sect">
+    <div class="sect-head">
+      <span class="kicker">Why it is built this way</span>
+      <h2>A mod loader that cannot break your install</h2>
+      <p>Every design decision follows from one constraint: nothing may be written into the
+      game directory. What that buys you is below.</p>
+    </div>
+    <div class="grid3">
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.4-3.4 8.3-8 9-4.6-.7-8-4.6-8-9V7z"/><path d="M9.5 12.5l1.8 1.8 3.4-3.6"/></svg></div>
+        <h3>Verification stays green</h3>
+        <p>Patches are applied to bytes in flight, never on disk. Steam's file check sees an
+        untouched install, because it is one.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="18" cy="17" r="2.4"/></svg></div>
+        <h3>Anchored on source, not offsets</h3>
+        <p>Hooks match authored string literals like <code>"game:ready"</code> — never module
+        ids or minified names, which change on every build.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/><circle cx="12" cy="12" r="3.4"/></svg></div>
+        <h3>Fails safe, never halfway</h3>
+        <p>A failed required patch aborts and serves the file untouched. A broken loader must
+        not become a broken game.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 9l2.5 2L7 13M12 14h5"/></svg></div>
+        <h3>A real in-game console</h3>
+        <p>Spawn any material, set resources, control the simulation, inspect the live modding
+        API — with completion and history.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-6.2-8.6"/><path d="M22 4l-9 9-3-3"/></svg></div>
+        <h3>Fluxloader mods, unmodified</h3>
+        <p>Reads their manifest, runs all three entrypoints, provides <code>fluxloaderAPI</code>,
+        and translates their patches onto its own engine.</p>
+      </article>
+      <article class="card">
+        <div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg></div>
+        <h3>Permissions you can withdraw</h3>
+        <p>Reviewed before a single line of mod code is read — and revocable afterwards from
+        the manager, not just at install time.</p>
+      </article>
+    </div>
+  </section>
+
+  <div style="border-top:1px solid var(--rule)"></div>
+
+  <div class="showcase">
+    <div class="sc-txt">
+      <span class="kicker">One hook</span>
+      <h3>The whole modding API, already in the game</h3>
+      <p>Sandustry ships a complete internal API — the object its bundle calls <code>FH</code>,
+      with <strong>79 namespaces</strong>. It is simply never published to <code>window</code>.</p>
+      <p>So SandLoader reimplements none of it. A single patch captures the game's own object at
+      the moment it announces readiness, and from then on <code>SandLoader.game</code>
+      <em>is</em> <code>FH</code>.</p>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>js/bundle.js — patched in memory</span></div>
+      <pre><code><span class="t-com">// the game's own readiness announcement</span>
+FH.events.<span class="t-fn">emit</span>(state, <span class="t-str">"game:ready"</span>, { state })
+
+<span class="t-com">// one anchor, and every namespace follows</span>
+events    elements  ui        structures
+storage   sprites   workers   effects
+world     terrains  input     sound
+items     rendering config    player
+i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pre>
+    </div>
+  </div>
+
+  <div class="showcase flip">
+    <div class="sc-txt">
+      <span class="kicker">Version resistance</span>
+      <h3>A game update usually changes nothing</h3>
+      <p>Hooks are anchored on invariant string literals, so a rebuild that only reshuffles
+      local names still resolves. Here is a real version bump:</p>
+      <p>Only the local variable moved. When the <em>shape</em> moves too, ordered fallback
+      patterns take over — and adoption is gated on the patched bundle still parsing.</p>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>0.5.4 → 0.5.5</span></div>
+      <pre><code><span class="t-com">0.5.4</span>  ie.FH.events.emit(<span class="t-key">p</span>,<span class="t-str">"game:ready"</span>,{state:<span class="t-key">p</span>})
+<span class="t-com">0.5.5</span>  ie.FH.events.emit(<span class="t-str">g</span>,<span class="t-str">"game:ready"</span>,{state:<span class="t-str">g</span>})
+
+<span class="t-com">anchor matched · 1 of 1 expected · adopted</span></code></pre>
+    </div>
+  </div>
+
+  <section class="sect" style="padding-top:1rem">
+    <div class="sect-head">
+      <span class="kicker">Compatibility</span>
+      <h2>Where it runs</h2>
+      <p>Sandustry only scans for a loader on Steam. Everywhere else SandLoader supplies its own
+      entry point — by adding a directory, never by modifying one. On every store, this targets the
+      <strong>vanilla</strong> branch.</p>
+    </div>
+    <div class="cmp">
+      <table>
+        <thead><tr><th>Store</th><th>Status</th><th>How SandLoader attaches</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Steam</strong></td><td><span class="pill ok dot">supported</span></td><td>the game's own Workshop loader slot — writes nothing into the install</td></tr>
+          <tr><td><strong>GOG</strong></td><td><span class="pill ok dot">supported</span></td><td>an added <code>resources/app/</code> bootstrap — no original file is modified</td></tr>
+          <tr><td><strong>Manual / standalone</strong></td><td><span class="pill ok dot">supported</span></td><td>same bootstrap</td></tr>
+          <tr><td><strong>Microsoft Store</strong></td><td><span class="pill no dot">not supported</span></td><td>package is ACL-protected and signature-verified</td></tr>
+          <tr><td><strong>Modded branch</strong></td><td><span class="pill no dot">not supported</span></td><td>experimental branch ships a different modding API generation — <a href="#/docs#branch" data-nav>details</a></td></tr>
+          <tr><td><strong>Game Pass</strong></td><td><span class="pill no dot">not supported</span></td><td>same package, same reason</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="cta-band"><div class="cta-in">
+    <div>
+      <h2>Three commands and you are modding</h2>
+      <p>Node 18+, a supported install, and no build step anywhere in the process.</p>
+    </div>
+    <a class="btn primary" href="#/docs" data-nav>Read the install guide
+      <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+  </div></div>
+</div>
+
+<!-- ======================= DOCUMENTATION ======================= -->
+<div class="view" id="view-docs">
+  <div class="docs">
+    <aside class="side"><div class="sidewrap">
+      <h6>Getting started</h6>
+      <a href="#/docs#requirements" data-nav>Requirements</a>
+      <a href="#/docs#branch" data-nav>Which branch</a>
+      <a href="#/docs#install" data-nav>Install</a>
+      <a href="#/docs#update" data-nav>Update &amp; uninstall</a>
+      <h6>Using it</h6>
+      <a href="#/docs#console" data-nav>The console</a>
+      <a href="#/docs#mods" data-nav>Managing mods</a>
+      <a href="#/docs#achievements" data-nav>Achievements</a>
+      <h6>Authoring</h6>
+      <a href="#/mods" data-nav>Making mods →</a>
+      <a href="#/docs#permissions" data-nav>Permissions</a>
+      <h6>Help</h6>
+      <a href="#/docs#trouble" data-nav>Troubleshooting</a>
+    </div></aside>
+
+    <main class="doc">
+      <h1>Documentation</h1>
+      <p class="sub">Everything needed to install SandLoader, use it, and write mods for it.
+      Verified against Sandustry 0.5.5.</p>
+
+      <h2 id="requirements">Requirements</h2>
+      <div class="tablewrap"><table><tbody>
+        <tr><td><strong>Game</strong></td><td>Sandustry <strong>0.5.5</strong></td></tr>
+        <tr><td><strong>Branch</strong></td><td><strong>Vanilla only</strong> — Steam's default <code>public</code> branch. The experimental modded branch is <span class="pill no">not supported</span></td></tr>
+        <tr><td><strong>Stores</strong></td><td>Steam, GOG, manual/standalone</td></tr>
+        <tr><td><strong>OS</strong></td><td>Windows, Linux or macOS</td></tr>
+        <tr><td><strong>Node.js</strong></td><td><strong>18 or newer</strong>, only to run the installer — <a href="https://nodejs.org">nodejs.org</a></td></tr>
+      </tbody></table></div>
+      <p>Microsoft Store and Game Pass builds live under <code>WindowsApps</code>, which refuses
+      writes even to an administrator and verifies its own signature. There is no file we are
+      allowed to add and no non-destructive way in, so the installer says so plainly rather than
+      offering a workaround that would modify game files.</p>
+
+      <h3 id="branch">Which branch</h3>
+      <p>Sandustry ships two Steam branches, and they are not interchangeable for modding:</p>
+      <div class="branches">
+        <div class="branch yes">
+          <header><b>Vanilla</b><span class="pill ok dot">supported</span></header>
+          <dl>
+            <dt>Steam branch</dt><dd><code>public</code> — the default, what you get unless you opted in</dd>
+            <dt>Modding API</dt><dd>Legacy Sandkit — state-first calls such as <code>api.elements.createAt(state, …)</code></dd>
+            <dt>Status here</dt><dd>Built against it, verified against it, 123/123 self-tests green on 0.5.5</dd>
+          </dl>
+        </div>
+        <div class="branch no">
+          <header><b>Modded / experimental</b><span class="pill no dot">not supported</span></header>
+          <dl>
+            <dt>Steam branch</dt><dd>The opt-in experimental branch</dd>
+            <dt>Modding API</dt><dd>Sandkit v1 — state-bound, <code>…AtCell</code> naming, plus namespaces vanilla lacks</dd>
+            <dt>Status here</dt><dd>Untested. Patch anchors and the loader ABI are not verified against it</dd>
+          </dl>
+        </div>
+      </div>
+      <p>The two branches ship <strong>different generations of the modding API</strong>, which is
+      the same split the <a href="#/mods#compatible" data-nav>compatibility guide</a> describes.
+      SandLoader is built for the vanilla generation and translates v1 names onto it — it does not
+      run the other way round.</p>
+      <div class="note warn">
+        <span class="lbl">If you are on the modded branch</span>
+        <p>Switch back before installing: right-click <strong>Sandustry</strong> in your Steam
+        library → <strong>Properties</strong> → <strong>Betas</strong> → select
+        <strong>None</strong>, and let Steam re-download. You can confirm which branch you are on
+        from <code>appmanifest_2764460.acf</code>, where <code>BetaKey</code> reads
+        <code>public</code> on vanilla.</p>
+        <p>Installing on the experimental branch is not blocked, but nothing about it is verified:
+        anchors may not resolve, and the loader will report what failed rather than pretend.</p>
+      </div>
+
+      <h2 id="install">Install</h2>
+      <ol class="steps">
+        <li>
+          <h3>Get the project</h3>
+          <p>Clone it, or download the ZIP and unpack it somewhere permanent — SandLoader runs
+          from wherever you put it, so don't leave it in a temp folder.</p>
+          <div class="codewrap"><pre><code>git clone https://github.com/LopeKinz/SandLoader.git
+cd SandLoader</code></pre></div>
+        </li>
+        <li>
+          <h3>Check Node</h3>
+          <div class="codewrap"><pre><code>node --version      <span class="t-com"># must print v18.x or higher</span></code></pre></div>
+        </li>
+        <li>
+          <h3>Run the installer</h3>
+          <p>It detects your build and picks the right attach point on its own.</p>
+          <div class="codewrap"><pre><code>node install.js</code></pre></div>
+          <div class="term" style="margin-top:.9rem">
+            <div class="term-bar"><i></i><i></i><i></i><span>Steam install</span></div>
+            <pre><code>  <span class="t-com">game     </span> sandustry 0.5.5
+  <span class="t-com">at       </span> C:\Program Files (x86)\Steam\steamapps\common\Sandustry
+  <span class="t-com">platform </span> steam (certain)  -  resources/steam_appid.txt
+  <span class="t-com">slot     </span> C:\...\workshop\content\2764460\smln
+  <span class="t-com">loader   </span> C:\...\sandloader\src\main\entry.js
+
+  <span class="t-str">Installed.</span> Start Sandustry and press ^ (or F1) to open the console.
+  <span class="t-str">Nothing in the game directory was modified.</span></code></pre>
+          </div>
+        </li>
+        <li>
+          <h3>Play</h3>
+          <p>Start Sandustry. Press <code>^</code> or <code>F1</code> for the console;
+          <strong>SandLoader Mods</strong> appears in the main menu.</p>
+        </li>
+      </ol>
+      <div class="note good">
+        <span class="lbl">On GOG and standalone</span>
+        <p>SandLoader adds three files beside the untouched <code>app.asar</code> and names each
+        one. Electron already searches <code>resources/</code> for <code>app</code> before
+        <code>app.asar</code>, so the added directory loads first and hands control straight back
+        to the real game.</p>
+      </div>
+
+      <h2 id="update">Update &amp; uninstall</h2>
+      <p>Editing SandLoader's own code needs no reinstall — just restart the game. To remove it
+      entirely:</p>
+      <div class="codewrap"><pre><code>node install.js --uninstall</code></pre></div>
+      <p>Deleting one folder is the whole operation, because nothing was ever written into the
+      game. To see what is currently installed, on what evidence:</p>
+      <div class="codewrap"><pre><code>node install.js --status</code></pre></div>
+
+      <h2 id="console">The console</h2>
+      <p>Press <code>^</code> or <code>F1</code>. <code>Tab</code> completes the highlighted
+      suggestion, <code>↑</code>/<code>↓</code> move through suggestions or history,
+      <code>Esc</code> closes.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>spawn &lt;material&gt; [radius] [x] [y]</code></td><td>Place any material at your cursor. Works for elements <em>and</em> terrain.</td></tr>
+          <tr><td><code>give &lt;resource&gt; &lt;amount&gt;</code></td><td>Add to a resource.</td></tr>
+          <tr><td><code>set &lt;resource&gt; &lt;amount&gt;</code></td><td>Set a resource to an exact value.</td></tr>
+          <tr><td><code>resources</code></td><td>Show every resource this save has.</td></tr>
+          <tr><td><code>list &lt;kind&gt;</code></td><td><code>elements</code>, <code>terrains</code>, <code>gases</code>, <code>liquids</code>, <code>solids</code>, <code>machines</code>, <code>resources</code></td></tr>
+          <tr><td><code>tech &lt;on|off&gt;</code></td><td>Free tech and upgrades, for this session only.</td></tr>
+          <tr><td><code>sim &lt;pause|resume|speed N&gt;</code></td><td>Control the simulation.</td></tr>
+          <tr><td><code>integrity [on|off|clear|status]</code></td><td>Achievement policy — <a href="#/docs#achievements" data-nav>see below</a>.</td></tr>
+          <tr><td><code>api [namespace]</code></td><td>Inspect the game's live modding API.</td></tr>
+          <tr><td><code>help [command]</code>, <code>clear</code></td><td></td></tr>
+        </tbody>
+      </table></div>
+      <div class="codewrap"><pre><code>spawn water            <span class="t-com">place water at the cursor (radius 2)</span>
+spawn lava 6           <span class="t-com">a bigger blob</span>
+spawn copper 3         <span class="t-com">resolved as an element or terrain automatically</span>
+spawn steam 4 120 80   <span class="t-com">at explicit cell coordinates</span>
+give gold 10000        <span class="t-com">add 10 000 gold</span>
+list gases
+sim speed 5</code></pre></div>
+      <p>All 50 elements and 34 terrains the game ships are available, and anything a mod
+      registers appears automatically.</p>
+
+      <h2 id="mods">Managing mods</h2>
+      <p>Main menu → <strong>SandLoader Mods</strong> to install, enable, or remove mods.
+      <strong>Details</strong> on any row shows what that mod can reach, and lets you approve or
+      withdraw those permissions afterwards.</p>
+      <h3>Install from Workshop</h3>
+      <p>Takes a Workshop URL or a bare id. An item you are already subscribed to is found
+      locally instead of downloaded; anything else goes through SteamCMD, which the installer
+      fetches from Valve on first use. A Workshop mod is copied out into your local mods folder
+      rather than loaded in place, so Steam still owns its content and SandLoader never deletes it.</p>
+      <h3>Where mods live</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Kind</th><th>Folder</th></tr></thead>
+        <tbody>
+          <tr><td>SandLoader mods</td><td><code>mods/</code> in this project, and <code>&lt;userData&gt;/smln-mods/</code></td></tr>
+          <tr><td>Fluxloader mods</td><td><code>&lt;userData&gt;/fluxloader-mods/</code> and the Steam Workshop folder</td></tr>
+        </tbody>
+      </table></div>
+      <p><code>&lt;userData&gt;</code> is <code>%APPDATA%\sandustry</code> on Windows,
+      <code>~/.config/sandustry</code> on Linux, and
+      <code>~/Library/Application Support/sandustry</code> on macOS.</p>
+      <h3>Scanned before they run</h3>
+      <p>Mod sources are read for the Sandkit namespaces they call and checked against what this
+      build actually offers — statically, so calls on code paths that never execute are still
+      seen. A mod needing a namespace this build lacks is flagged <em>before</em> you enable it,
+      rather than throwing in a tooltip an hour later.</p>
+
+      <h2 id="achievements">Achievements</h2>
+      <p>Sandustry refuses to unlock achievements on a save that has been cheated on or modded.
+      That is the game's own rule, in its own code:</p>
+      <div class="codewrap"><pre><code><span class="t-key">function</span> <span class="t-fn">unlockAchievement</span>(state, id) {
+  <span class="t-key">if</span> (state.store.integrity?.cheatsUsed || state.store.integrity?.modsUsed
+      || config.debug.active || state.session.cinematic) <span class="t-key">return</span>   <span class="t-com">// blocked</span>
+  ...
+}</code></pre></div>
+      <p><strong>SandLoader respects that by default.</strong> Any console command that changes
+      your world or your resources marks the save, and says so in its reply:</p>
+      <div class="codewrap"><pre><code>&gt; give gold 1000
+gold  gold: 0 -&gt; 1000 <span class="t-com">(save marked: achievements now disabled)</span></code></pre></div>
+      <p>You can opt out. The choice is stored <strong>inside that savegame</strong>, so it
+      travels with it.</p>
+      <div class="tablewrap"><table><tbody>
+        <tr><td><code>integrity status</code></td><td>Show the current policy and whether this save is marked</td></tr>
+        <tr><td><code>integrity off</code></td><td>Stop marking the save when you cheat</td></tr>
+        <tr><td><code>integrity on</code></td><td>Resume marking (the default)</td></tr>
+      </tbody></table></div>
+
+      <h2 id="writing">Writing mods</h2>
+      <p>Mod authoring has its own guide — the manifest, both halves, console commands,
+      registering content, patching, and how to keep a mod working across game versions.</p>
+      <div class="cta" style="margin-bottom:1.6rem">
+        <a class="btn primary" href="#/mods" data-nav>Open the modding guide
+          <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a class="btn ghost" href="#/mods#compatible" data-nav>How to make my mod compatible</a>
+      </div>
+
+      <h2 id="permissions">Permissions</h2>
+      <p>Sandustry's window runs with Electron's modern defaults —
+      <code>contextIsolation: true</code>, <code>nodeIntegration: false</code>. Renderer and
+      worker mod code therefore has no <code>require</code>, no <code>process</code> and no
+      <code>Buffer</code>. That boundary is enforced by Chromium, not by SandLoader.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Tier</th><th>Runs in</th><th>Reaches</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill ok">SANDBOXED</span></td><td>renderer / worker</td><td>game API, worker API, config, private storage</td></tr>
+          <tr><td><span class="pill" style="background:var(--sand-soft);color:var(--sand);border:1px solid color-mix(in srgb,var(--sand) 34%,transparent)">ELEVATED</span></td><td>renderer / worker</td><td>the above, plus network and/or a wider filesystem root</td></tr>
+          <tr><td><span class="pill no">NATIVE</span></td><td>Electron main process</td><td>real Node.js — everything the game itself can</td></tr>
+        </tbody>
+      </table></div>
+      <ul>
+        <li>mods never receive the game's <code>window.electron</code> bridge or SandLoader's own <code>SMLN.callMain</code> RPC;</li>
+        <li><code>SMLN.net</code> and <code>SMLN.fs</code> are gated on declared permissions — a mod without them gets a rejection, not a missing function;</li>
+        <li>every mod gets a private storage directory that traversal, absolute paths, UNC paths, device names and symlink escapes cannot leave;</li>
+        <li>the permission review happens <strong>before</strong> any mod code is read, required or evaluated.</li>
+      </ul>
+      <div class="note warn">
+        <span class="lbl">Stated plainly</span>
+        <p>A mod declaring <code>node</code> gets a real <code>require</code>, from which
+        <code>fs</code>, <code>net</code>, <code>http</code> and <code>child_process</code> are
+        one line away. SandLoader therefore does <strong>not</strong> claim that
+        <code>filesystem</code> and <code>network</code> restrict a native mod. They cannot, the
+        capability reports <code>enforceable: false</code>, and the mod manager says so in plain
+        language. Native mods are supported on purpose — they are just labelled.</p>
+        <p><code>vm</code> is not treated as a security boundary anywhere in this codebase,
+        because it is not one when the sandbox object carries <code>require</code>.</p>
+      </div>
+
+      <h2 id="trouble">Troubleshooting</h2>
+      <p>The log is the first place to look:
+      <code>&lt;userData&gt;/smln/logs/smln-&lt;timestamp&gt;.log</code></p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Symptom</th><th>Cause / fix</th></tr></thead>
+        <tbody>
+          <tr><td><strong>No splash, console won't open</strong></td><td>SandLoader didn't load at all. Check whether the log file exists. If not, re-run <code>node install.js</code> then <code>--status</code>.</td></tr>
+          <tr><td><strong>Splash appears, console doesn't</strong></td><td>Look for <code>console installed</code> in the log. If missing, a mod's renderer script probably threw — search for <code>renderer mod failed</code>.</td></tr>
+          <tr><td><code>could not find a Sandustry installation</code></td><td>Set <code>SANDUSTRY_DIR</code> to the game folder.</td></tr>
+          <tr><td><code>patch … anchor did not match</code></td><td>The game updated and a hook broke. <code>node tools/selftest.js</code> names it. The game still starts, just unpatched.</td></tr>
+          <tr><td><strong>A command does nothing</strong></td><td>Read the reply — commands report <em>why</em> they failed. <code>no game loaded</code> means you are still in the main menu.</td></tr>
+          <tr><td><code>spawn</code> <strong>says "nothing was placed"</strong></td><td>The target cells are solid terrain or outside the world. Move the cursor or pass explicit coordinates.</td></tr>
+          <tr><td><strong>A mod doesn't load</strong></td><td>The log names the mod and the reason. Bad manifests, missing dependencies and cycles are reported separately.</td></tr>
+          <tr><td><strong>The game won't start at all</strong></td><td><code>node install.js --uninstall</code>. If it still won't start, SandLoader wasn't the cause.</td></tr>
+          <tr><td><strong>GOG: starts but no splash</strong></td><td>The bootstrap did not take. <code>--status</code> says whether <code>resources/app</code> is installed and whether it is ours.</td></tr>
+          <tr><td><strong>GOG: launcher reports changed files</strong></td><td>Expected. The bootstrap <em>adds</em> <code>resources/app/</code>. <code>--uninstall</code> restores the original layout exactly.</td></tr>
+          <tr><td><code>cannot attach to this build</code></td><td>Microsoft Store / Game Pass. Not supported.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="codewrap"><pre><code>node tools/selftest.js   <span class="t-com"># game version, every anchor, the ABI, the console</span></code></pre></div>
+    </main>
+
+    <nav class="toc" id="toc-docs"><h6>On this page</h6></nav>
+  </div>
+</div>
+
+<!-- ======================= MAKING MODS ======================= -->
+<div class="view" id="view-mods">
+  <div class="docs">
+    <aside class="side"><div class="sidewrap">
+      <h6>Build one</h6>
+      <a href="#/mods#first" data-nav>Your first mod</a>
+      <a href="#/mods#anatomy" data-nav>Anatomy of a mod</a>
+      <a href="#/mods#manifest" data-nav>The manifest</a>
+      <a href="#/mods#renderer" data-nav>The renderer half</a>
+      <a href="#/mods#main" data-nav>The main-process half</a>
+      <h6>Go further</h6>
+      <a href="#/mods#commands" data-nav>Console commands</a>
+      <a href="#/mods#content" data-nav>Registering content</a>
+      <a href="#/mods#patching" data-nav>Patching the game</a>
+      <a href="#/mods#storage" data-nav>Storage &amp; settings</a>
+      <h6>Ship it</h6>
+      <a href="#/mods#compatible" data-nav>Make it compatible</a>
+      <a href="#/mods#debug" data-nav>Debugging</a>
+      <a href="#/mods#package" data-nav>Packaging</a>
+    </div></aside>
+
+    <main class="doc">
+      <h1>Making mods</h1>
+      <p class="sub">A mod is a folder with a manifest. No build step, no dependencies, no
+      boilerplate — a single file is a valid mod, and editing it needs only a restart. Built for
+      Sandustry's <strong>vanilla branch</strong>; the experimental modded branch is not
+      supported.</p>
+
+      <div class="inline-stats">
+        <div><b>2</b><span>files minimum</span></div>
+        <div><b>0</b><span>dependencies</span></div>
+        <div><b>0</b><span>build steps</span></div>
+        <div><b>79</b><span>API namespaces</span></div>
+      </div>
+
+      <h2 id="first">Your first mod</h2>
+      <p>Create <code>mods/hello/</code> with two files. That is the entire setup.</p>
+      <div class="split">
+        <div>
+          <h4>mods/hello/smln.mod.json</h4>
+          <div class="codewrap"><pre><code>{
+  <span class="t-key">"id"</span>: <span class="t-str">"hello"</span>,
+  <span class="t-key">"name"</span>: <span class="t-str">"Hello"</span>,
+  <span class="t-key">"version"</span>: <span class="t-str">"1.0.0"</span>,
+  <span class="t-key">"renderer"</span>: <span class="t-str">"renderer.js"</span>
+}</code></pre></div>
+        </div>
+        <div>
+          <h4>mods/hello/renderer.js</h4>
+          <div class="codewrap"><pre><code>SMLN.<span class="t-fn">registerCommand</span>({
+  name: <span class="t-str">'hello'</span>,
+  summary: <span class="t-str">'Say hello'</span>,
+  args: [{ name: <span class="t-str">'who'</span>, optional: <span class="t-key">true</span> }],
+  run: (args) =&gt;
+    [<span class="t-str">'hello, '</span> + (args[<span class="t-num">0</span>] || <span class="t-str">'world'</span>)],
+})</code></pre></div>
+        </div>
+      </div>
+      <p>Restart the game, open the console with <code>^</code>, type <code>hello</code>. Done.</p>
+      <div class="note good">
+        <span class="lbl">No reinstall loop</span>
+        <p>Editing a renderer file and restarting the game is the whole iteration cycle. With hot
+        reload enabled you do not even restart — the mod is disposed and re-injected while the
+        game keeps running.</p>
+      </div>
+
+      <h2 id="anatomy">Anatomy of a mod</h2>
+      <p>A mod can have up to three halves, each running somewhere different. Most mods only ever
+      need the first.</p>
+      <div class="tree" role="img" aria-label="Mod folder layout: smln.mod.json, renderer.js, worker.js, main.js, assets and locales inside mods/my-mod/">
+        <div class="tree-hd"># a fully-equipped mod</div>
+        <div class="tree-row"><span class="p"></span><span class="d">mods/my-mod/</span><span class="n">the folder you create</span></div>
+        <div class="tree-row"><span class="p">├─</span><span class="f">smln.mod.json</span><span class="n">the manifest — the only required file</span></div>
+        <div class="tree-row"><span class="p">├─</span><span class="f">renderer.js</span><span class="n">runs in the game page, next to the console</span></div>
+        <div class="tree-row"><span class="p">├─</span><span class="f">worker.js</span><span class="n">runs inside the simulation threads</span></div>
+        <div class="tree-row"><span class="p">├─</span><span class="f">main.js</span><span class="n">runs in the Electron main process <em>(privileged)</em></span></div>
+        <div class="tree-row"><span class="p">├─</span><span class="d">assets/</span><span class="n">sprites and other files you ship</span></div>
+        <div class="tree-row"><span class="p">└─</span><span class="d">locales/</span><span class="n">en.json, de.json …</span></div>
+      </div>
+      <div class="flow">
+        <div class="fstep"><span class="n">1</span><div>
+          <b>The manifest is read and reviewed</b>
+          <span>Permissions are resolved <em>before</em> any of your code is read or evaluated.</span>
+        </div></div>
+        <div class="fstep"><span class="n">2</span><div>
+          <b>Patches are applied in memory</b>
+          <span>Yours and SandLoader's are merged, conflict-checked, then the bundle is served.</span>
+        </div></div>
+        <div class="fstep"><span class="n">3</span><div>
+          <b>Your renderer script runs</b>
+          <span>Before any game code, with <code>SMLN</code> already installed.</span>
+        </div></div>
+        <div class="fstep"><span class="n">4</span><div>
+          <b>The game becomes ready</b>
+          <span><code>SMLN.whenReady()</code> fires and the game's own API is captured.</span>
+        </div></div>
+      </div>
+
+      <h2 id="manifest">The manifest</h2>
+      <p><code>smln.mod.json</code> in the mod's root folder. Two fields are required; everything
+      else is opt-in.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>id</code></td><td><strong>yes</strong></td><td>Lowercase letters, digits, <code>.</code>, <code>-</code>, <code>_</code>. 2–64 chars. Must be unique.</td></tr>
+          <tr><td><code>version</code></td><td><strong>yes</strong></td><td>Any string. Shown in the manager.</td></tr>
+          <tr><td><code>name</code></td><td>no</td><td>Display name. Defaults to <code>id</code>.</td></tr>
+          <tr><td><code>renderer</code></td><td>no</td><td>Script injected into the game page, next to the console.</td></tr>
+          <tr><td><code>main</code></td><td>no</td><td>CommonJS module loaded in the Electron main process. <strong>Privileged.</strong></td></tr>
+          <tr><td><code>entrypoints</code></td><td>no</td><td><code>{ game, worker, native }</code>. The newer spelling; adds <code>worker</code>.</td></tr>
+          <tr><td><code>permissions</code></td><td>no</td><td>Array of capability names — <code>network</code>, <code>filesystem</code>, <code>node</code>.</td></tr>
+          <tr><td><code>dependencies</code></td><td>no</td><td>Array of ids, or <code>{ id: versionRange }</code>.</td></tr>
+          <tr><td><code>optionalDependencies</code></td><td>no</td><td>Same shapes. A missing one is a warning, not a failure.</td></tr>
+          <tr><td><code>configSchema</code></td><td>no</td><td>Editable settings, surfaced in the mod manager.</td></tr>
+          <tr><td><code>priority</code></td><td>no</td><td>Lower loads earlier. Default <code>100</code>.</td></tr>
+          <tr><td><code>enabled</code></td><td>no</td><td>Set <code>false</code> to ship a mod switched off.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="renderer">The renderer half</h2>
+      <p>Runs in the game page with <code>SMLN</code> already installed, <strong>before</strong>
+      any game code. A throwing renderer script is caught and logged — it cannot stop the game
+      from booting, or stop other mods from loading.</p>
+      <div class="annot">
+        <div class="codewrap"><pre><code><span class="t-com">// 1 — runs immediately, before the game exists</span>
+SMLN.<span class="t-fn">log</span>(<span class="t-str">'info'</span>, <span class="t-str">'hello mod loading'</span>)
+
+<span class="t-com">// 2 — runs once the game is up</span>
+SMLN.<span class="t-fn">whenReady</span>((api) =&gt; {
+  api.game     <span class="t-com">// the game's own API</span>
+  api.state    <span class="t-com">// live game state</span>
+})
+
+<span class="t-com">// 3 — every scene load re-runs this</span>
+SMLN.<span class="t-fn">on</span>(<span class="t-str">'ready'</span>, (api) =&gt; {
+  <span class="t-com">/* ... */</span>
+})
+
+<span class="t-com">// 4 — clean up after yourself</span>
+SMLN.<span class="t-fn">onDispose</span>(() =&gt; {
+  <span class="t-com">/* listeners, timers, patches */</span>
+})</code></pre></div>
+        <ol>
+          <li><strong>Top-level code runs first.</strong> The game does not exist yet, so
+          <code>SMLN.game</code> and <code>SMLN.state</code> are still <code>null</code>. Use this
+          for registration only.</li>
+          <li><strong><code>whenReady</code> fires once</strong> the game is up — and fires
+          immediately if it already is, so you never miss it by registering late.</li>
+          <li><strong><code>'ready'</code> fires on every scene load.</strong> Treat your script
+          as an entry point that may run more than once.</li>
+          <li><strong><code>onDispose</code> is what makes hot reload work.</strong> Give back
+          what you took and your mod reloads without a restart.</li>
+        </ol>
+      </div>
+
+      <h2 id="main">The main-process half</h2>
+      <p>A <code>main</code> entrypoint is a CommonJS module in the Electron main process with
+      real Node. It is <strong>privileged</strong> — declaring it makes your mod
+      <span class="pill no">NATIVE</span>, and the installer says so before anyone enables it.</p>
+      <div class="split">
+        <div>
+          <h4>main.js</h4>
+          <div class="codewrap"><pre><code><span class="t-com">// Called once, in the Electron main process.</span>
+<span class="t-com">// Return { patches } to contribute bundle patches.</span>
+module.exports = {
+  <span class="t-fn">setup</span>(ctx) {
+    ctx.logger.<span class="t-fn">info</span>(<span class="t-str">'native half up'</span>)
+    <span class="t-key">return</span> {
+      patches: [ <span class="t-com">/* see below */</span> ],
+    }
+  },
+}</code></pre></div>
+        </div>
+        <div>
+          <h4>What <code>ctx</code> carries</h4>
+          <div class="codewrap"><pre><code>ctx.mod          <span class="t-com">// your manifest</span>
+ctx.capability   <span class="t-com">// resolved tier</span>
+ctx.logger       <span class="t-com">// namespaced to your id</span></code></pre></div>
+          <p style="font-size:.85rem;color:var(--ink-2);margin:.7rem 0 0">Exporting a bare
+          function works too — it is treated as <code>setup</code>. A <code>patches</code> array
+          exported directly is also picked up.</p>
+        </div>
+      </div>
+      <div class="note warn">
+        <span class="lbl">Only when you actually need it</span>
+        <p>Renderer and worker code runs behind Chromium's own boundary — no <code>require</code>,
+        no <code>process</code>, no <code>Buffer</code>. That is a real guarantee. A
+        <code>main</code> entrypoint gives it all up, so add one only when the mod genuinely needs
+        the filesystem, a socket or a subprocess.</p>
+      </div>
+
+      <h2 id="commands">Console commands</h2>
+      <p>Commands get completion, history and argument hints for free. Return an array of strings
+      and each becomes a line in the console.</p>
+      <div class="codewrap"><pre><code>SMLN.<span class="t-fn">registerCommand</span>({
+  name: <span class="t-str">'flood'</span>,
+  summary: <span class="t-str">'Fill an area with a material'</span>,
+  args: [
+    { name: <span class="t-str">'material'</span>, values: () =&gt; SMLN.enums.ELEMENT_KEYS },  <span class="t-com">// tab-completes</span>
+    { name: <span class="t-str">'radius'</span>, optional: <span class="t-key">true</span> },
+  ],
+  <span class="t-fn">run</span>(args) {
+    <span class="t-key">if</span> (!SMLN.state) <span class="t-key">return</span> [<span class="t-str">'no game loaded'</span>]     <span class="t-com">// say why, always</span>
+    <span class="t-key">const</span> r = <span class="t-fn">Number</span>(args[<span class="t-num">1</span>] || <span class="t-num">3</span>)
+    <span class="t-com">// ... do the work ...</span>
+    <span class="t-key">return</span> [<span class="t-str">`flooded r=${r} with ${args[0]}`</span>]
+  },
+})</code></pre></div>
+
+      <h2 id="content">Registering content</h2>
+      <p>Elements, terrains, structures, items, projectiles and more go through
+      <code>SMLN.register</code>. Every registrar returns a <strong>Promise</strong> and queues
+      until the game exists, so you can call them at the top of your script. A build that lacks
+      the underlying registry <strong>rejects with a plain-language reason</strong> rather than
+      failing silently.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Call</th><th>Registers</th></tr></thead>
+        <tbody>
+          <tr><td><code>register.element(def)</code></td><td>An element. <code>def.id</code> is required.</td></tr>
+          <tr><td><code>register.terrain(def)</code></td><td>A terrain type.</td></tr>
+          <tr><td><code>register.structure(def)</code></td><td>A structure. <code>register.machine</code> is an alias — machines <em>are</em> structures.</td></tr>
+          <tr><td><code>register.item(def)</code></td><td>An item; loads its sprite first.</td></tr>
+          <tr><td><code>register.sprite(id, path, opts)</code></td><td>A sprite, resolved relative to your mod folder.</td></tr>
+          <tr><td><code>register.trigger(id, def)</code></td><td>A trigger.</td></tr>
+          <tr><td><code>register.recipe(kind, def)</code></td><td>A recipe — <strong>v1 only</strong>, rejects on vanilla.</td></tr>
+          <tr><td><code>register.keyBinding(id, keys, opts)</code></td><td>An input binding.</td></tr>
+          <tr><td><code>register.hook(hookId, fn, opts)</code></td><td>A game hook.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="codewrap"><pre><code><span class="t-com">// Registrars are async — they queue until the game exists.</span>
+<span class="t-key">await</span> SMLN.register.<span class="t-fn">element</span>({
+  id: <span class="t-str">'quicksand'</span>,
+  name: <span class="t-str">'Quicksand'</span>,
+  matterType: <span class="t-str">'Powder'</span>,
+  density: <span class="t-num">150</span>,
+  color: <span class="t-str">'#C2A063'</span>,
+})
+
+<span class="t-com">// A build without the feature rejects — catch it, do not assume.</span>
+SMLN.register.<span class="t-fn">recipe</span>(<span class="t-str">'smelter'</span>, { id: <span class="t-str">'my-alloy'</span> })
+  .<span class="t-fn">catch</span>((e) =&gt; SMLN.<span class="t-fn">log</span>(<span class="t-str">'warn'</span>, e.message))
+  <span class="t-com">// "this Sandustry build has no recipe registry …"</span></code></pre></div>
+
+      <h2 id="patching">Patching the game</h2>
+      <p>Your mod can use the same anchor-based patch engine SandLoader uses for itself. Patches
+      are contributed from the <a href="#/mods#main" data-nav>main-process half</a> — return them
+      from <code>setup()</code>, or export a <code>patches</code> array. Match an authored string
+      literal, never an offset or a minified name.</p>
+      <div class="dodont">
+        <div class="dd good">
+          <header><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Do</header>
+          <pre><code>{
+  id: 'my-mod-ready-hook',
+  description: 'why this exists',
+  find: /"game:ready"/g,
+  replace: (m) =&gt; m,
+  expect: 1,
+  required: true,
+}</code></pre>
+          <div class="why">Anchored on a literal the authors wrote. Survives reminification, and
+          <code>expect</code> makes ambiguity an error instead of corruption.</div>
+        </div>
+        <div class="dd bad">
+          <header><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg> Don't</header>
+          <pre><code>{
+  id: 'my-mod-ready-hook',
+  find: /ie\.FH\.events\.emit\(p,/g,
+  replace: '...',
+}</code></pre>
+          <div class="why"><code>ie</code> and <code>p</code> are minifier output. They changed
+          between 0.5.4 and 0.5.5, and will change again on the next build.</div>
+        </div>
+      </div>
+
+      <h2 id="storage">Storage &amp; settings</h2>
+      <p>Every mod gets a private storage directory that traversal, absolute paths, UNC paths,
+      device names and symlink escapes cannot leave. Declare settings in the manifest and they
+      appear in the mod manager automatically.</p>
+      <div class="split">
+        <div>
+          <h4>smln.mod.json</h4>
+          <div class="codewrap"><pre><code><span class="t-key">"configSchema"</span>: {
+  <span class="t-key">"radius"</span>: {
+    <span class="t-key">"type"</span>: <span class="t-str">"number"</span>,
+    <span class="t-key">"default"</span>: <span class="t-num">3</span>,
+    <span class="t-key">"label"</span>: <span class="t-str">"Brush radius"</span>
+  }
+}</code></pre></div>
+        </div>
+        <div>
+          <h4>renderer.js</h4>
+          <div class="codewrap"><pre><code><span class="t-key">const</span> r = SMLN.config.radius
+
+<span class="t-key">await</span> SMLN.storage.<span class="t-fn">set</span>(<span class="t-str">'seen'</span>, <span class="t-key">true</span>)
+<span class="t-key">const</span> seen = <span class="t-key">await</span> SMLN.storage.<span class="t-fn">get</span>(<span class="t-str">'seen'</span>)</code></pre></div>
+        </div>
+      </div>
+
+      <!-- =================== THE COMPATIBILITY SECTION =================== -->
+      <h2 id="compatible">How to make my mod compatible</h2>
+      <div class="leadcard">
+        <p><strong>The single biggest source of broken mods is the Sandkit generation split.</strong>
+        Sandustry's modding API exists in two shapes, and a mod written against the wrong one fails
+        at the moment that code path runs — often long after startup, in a tooltip or on a button
+        press. From a player's side that is indistinguishable from a mod that does nothing.</p>
+        <p>This section is how to not be that mod.</p>
+      </div>
+
+      <h3>0. Target the vanilla branch</h3>
+      <p>Before any API question: <strong>SandLoader supports Sandustry's vanilla
+      (<code>public</code>) branch only.</strong> The experimental modded branch ships a different
+      Sandkit generation, and nothing here is verified against it.</p>
+      <div class="branchbar">
+        <svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+        <div>
+          <b>This is the whole reason the generation split exists</b>
+          <p>The modded branch ships <strong>Sandkit v1</strong>; vanilla ships the
+          <strong>legacy</strong> surface. A mod written on the modded branch and shipped to
+          vanilla players is the single most common way a mod arrives broken.</p>
+        </div>
+      </div>
+      <ul class="check">
+        <li><strong>Develop on vanilla.</strong> If you build against the modded branch you are
+        testing an API your players do not have.</li>
+        <li><strong>Write v1 names anyway</strong> — see below. SandLoader translates them onto
+        vanilla, so you get the forward-compatible spelling without needing the other branch.</li>
+        <li><strong>Never assume a v1-only namespace exists.</strong> <code>api.structures.recipes</code>
+        is the classic case: present on the modded branch, absent on vanilla.</li>
+      </ul>
+
+      <h3>1. Write against v1 names, always</h3>
+      <p>The two generations name the same calls differently:</p>
+      <div class="dodont">
+        <div class="dd good">
+          <header><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> v1 — write this</header>
+          <pre><code>api.elements.createAtCellWhenIdle(x, y, t)
+api.elements.getTypeFromId('copper')
+api.structures.isTypeAtCell(x, y, 'pump')
+api.player.getWorldPosition()</code></pre>
+          <div class="why">SandLoader presents v1 names on <em>both</em> generations, binding the
+          live state for you on legacy builds.</div>
+        </div>
+        <div class="dd bad">
+          <header><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg> legacy — don't</header>
+          <pre><code>api.elements.createAt(state, x, y, t)
+api.elements.getElementTypeFromId(state, 'copper')
+api.structures.isTypeAt(state, x, y, 'pump')
+api.player.getPosition(state)</code></pre>
+          <div class="why">State-first and older names. Works only on 0.5.x, and breaks the day
+          the game ships v1.</div>
+        </div>
+      </div>
+      <p>SandLoader translates <strong>91 renamed calls across 17 namespaces</strong>, every target
+      verified present in the shipped bundle. Write the v1 name and the adapter does the rest.</p>
+      <div class="inline-stats">
+        <div><b>91</b><span>calls translated</span></div>
+        <div><b>17</b><span>namespaces covered</span></div>
+        <div><b>2</b><span>generations, one API</span></div>
+      </div>
+
+      <h3>2. Feature-detect anything that might not exist</h3>
+      <p>The adapter can rename a call. It cannot invent a namespace this build does not have.
+      <code>api.structures.recipes</code>, for instance, does not exist in 0.5.5 at all.</p>
+      <div class="dodont">
+        <div class="dd good">
+          <header><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Do</header>
+          <pre><code>if (api.effects?.createLightAtWorld) {
+  api.effects.createLightAtWorld(x, y, opts)
+} else {
+  SMLN.log('info', 'no lights on this build')
+}</code></pre>
+          <div class="why">Degrades to a working mod with one feature missing.</div>
+        </div>
+        <div class="dd bad">
+          <header><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg> Don't</header>
+          <pre><code>api.effects.createLightAtWorld(x, y, opts)
+// throws on a build without effects,
+// taking the rest of your tick with it</code></pre>
+          <div class="why">One missing namespace kills every line after it.</div>
+        </div>
+      </div>
+
+      <h3>3. Check what the scanner will say about you</h3>
+      <p>Before a mod runs, SandLoader reads its source for the Sandkit namespaces it calls and
+      compares them against what this build actually offers — <strong>statically</strong>, so calls
+      on code paths that never execute are still seen. That is deliberate: running the mod to find
+      out would defeat the purpose.</p>
+      <p>The mod manager shows the result on your mod's row before anyone enables it:</p>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>SandLoader Mods → my-mod</span></div>
+        <pre><code><span class="t-com">API check</span>   <span class="t-oxide">needs effects, tech.registerNode</span>
+             <span class="t-com">this build does not provide them</span></code></pre>
+      </div>
+      <p>The scan reads two levels deep, so <code>api.player.buildings.unlockByType</code> is
+      checked at the method, not just at the container. It is intentionally conservative — it
+      reports only what it can prove from the source text, because a false "unsupported" would
+      train players to ignore the warning.</p>
+
+      <h3>4. Know which generation you are on</h3>
+      <div class="codewrap"><pre><code>SMLN.<span class="t-fn">whenReady</span>((api) =&gt; {
+  <span class="t-key">if</span> (SMLN.api.generation === <span class="t-str">'legacy'</span>) {
+    <span class="t-com">// 0.5.x: state is bound for you, v1 names still work</span>
+  }
+  SMLN.sandkit   <span class="t-com">// the raw, unadapted object, if you really need it</span>
+})</code></pre></div>
+      <p>Unknown methods always pass through untranslated, so the adapter can never be the reason
+      a call is unavailable — if the build has it under that name, you can call it.</p>
+
+      <h3>5. Survive a game update</h3>
+      <ul class="check">
+        <li><strong>Anchor patches on authored strings.</strong> Never on <code>ie.FH</code>,
+        never on a module id, never on a byte offset.</li>
+        <li><strong>Declare <code>expect</code> on every patch.</strong> Zero matches fails; more
+        than expected also fails, which is what stops a silently-ambiguous pattern from corrupting
+        the bundle in several places at once.</li>
+        <li><strong>Read content from the runtime, not from a table you copied.</strong> Element
+        ids and resource fields shift between builds; <code>api</code> is always current.</li>
+        <li><strong>Guard every optional namespace</strong> with <code>?.</code> or an explicit
+        check, so a missing feature costs you one feature.</li>
+        <li><strong>Implement <code>onDispose</code></strong> so hot reload can reclaim your
+        listeners, timers and handlers instead of leaking them.</li>
+        <li><strong>Run the self-test after a game update</strong> — <code>node
+        tools/selftest.js</code> names any anchor that stopped resolving.</li>
+      </ul>
+
+      <h3>Compatibility at a glance</h3>
+      <div class="matrix">
+        <div class="mrow n">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+          <span class="tx"><b>Experimental modded branch</b><span>Ships a different Sandkit generation. Not supported, not verified — develop and test on vanilla.</span></span>
+          <span class="pill no">vanilla only</span>
+        </div>
+        <div class="mrow y">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+          <span class="tx"><b>v1 call names</b><span>Translated onto legacy builds automatically — 91 of them.</span></span>
+          <span class="pill ok">handled</span>
+        </div>
+        <div class="mrow y">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+          <span class="tx"><b>State-first arguments</b><span>Bound for you on legacy builds; <code>i18n</code>, <code>utils</code> and <code>random</code> correctly excluded.</span></span>
+          <span class="pill ok">handled</span>
+        </div>
+        <div class="mrow y">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+          <span class="tx"><b>Fluxloader mods</b><span>Manifest, all three entrypoints, <code>fluxloaderAPI</code> and patches, unmodified.</span></span>
+          <span class="pill ok">handled</span>
+        </div>
+        <div class="mrow m">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+          <span class="tx"><b>Missing namespaces</b><span>Cannot be invented. Feature-detect, and the scanner will warn players first.</span></span>
+          <span class="pill" style="background:var(--sand-soft);color:var(--sand);border:1px solid color-mix(in srgb,var(--sand) 34%,transparent)">your job</span>
+        </div>
+        <div class="mrow m">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+          <span class="tx"><b>Nested namespaces</b><span><code>api.structures.recipes.*</code> and friends are passed through unbound — call them off the raw object.</span></span>
+          <span class="pill" style="background:var(--sand-soft);color:var(--sand);border:1px solid color-mix(in srgb,var(--sand) 34%,transparent)">your job</span>
+        </div>
+        <div class="mrow n">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
+          <span class="tx"><b>Worker-side Sandkit</b><span>A <code>workerEntry</code> has no worker API yet and fails loudly by design.</span></span>
+          <span class="pill no">not yet</span>
+        </div>
+      </div>
+
+      <h2 id="debug">Debugging</h2>
+      <p>Everything a mod does is logged with its id attached, to the console and the log file at
+      <code>&lt;userData&gt;/smln/logs/</code>.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Symptom</th><th>Where to look</th></tr></thead>
+        <tbody>
+          <tr><td>Mod does not appear at all</td><td>The log names the mod and the reason. Bad manifests, missing dependencies and cycles are reported separately.</td></tr>
+          <tr><td>Mod loads, then nothing happens</td><td>Search the log for <code>renderer mod failed</code> — a throw in your top-level code is caught, not silent.</td></tr>
+          <tr><td><code>undefined is not a function</code></td><td>A namespace this build lacks. Run the API check on the mod's row in the manager.</td></tr>
+          <tr><td>Works, then breaks after an update</td><td><code>node tools/selftest.js</code> names the anchor that stopped resolving.</td></tr>
+          <tr><td>Changes not taking effect</td><td>A <code>main</code> entrypoint needs a restart; renderer changes only need a scene reload.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="codewrap"><pre><code>SMLN.<span class="t-fn">log</span>(<span class="t-str">'warn'</span>, <span class="t-str">'something looks off'</span>)   <span class="t-com">// console + log file, tagged with your id</span>
+SMLN.console.<span class="t-fn">print</span>(<span class="t-str">'visible to the player'</span>)</code></pre></div>
+
+      <h2 id="package">Packaging</h2>
+      <p>Zip the mod folder — the folder itself, not its contents — and hand it over. The installer
+      validates the manifest, refuses archives that try to write outside the mods folder, and
+      strips a single wrapper directory if you zipped one level too high.</p>
+      <pre class="filetree"><span class="c"># correct</span>
+<span class="f">my-mod.zip</span>
+<span class="tw">└─</span> <span class="d">my-mod/</span>
+   <span class="tw">├─</span> <span class="f">smln.mod.json</span>
+   <span class="tw">└─</span> <span class="f">renderer.js</span></pre>
+      <ul class="check">
+        <li>Bump <code>version</code> — the manager shows it, and escalating permissions on update triggers a fresh review.</li>
+        <li>Declare every permission you actually use; a mod without them gets a rejection, not a missing function.</li>
+        <li>Ship <code>locales/en.json</code> if you show any text, so translators have something to work from.</li>
+        <li>Test with a clean profile once — your own <code>&lt;userData&gt;</code> may already hold state your mod depends on.</li>
+        <li><strong>Test on the vanilla branch</strong> before publishing. A mod verified only on the experimental modded branch is verified against an API your players are not running.</li>
+      </ul>
+    </main>
+
+    <nav class="toc" id="toc-mods"><h6>On this page</h6></nav>
+  </div>
+</div>
+
+<!-- ======================= REFERENCE ======================= -->
+<div class="view" id="view-reference">
+  <div class="docs">
+    <aside class="side"><div class="sidewrap">
+      <h6>Reference</h6>
+      <a href="#/reference#smln" data-nav>SMLN API</a>
+      <a href="#/reference#pipeline" data-nav>Patch pipeline</a>
+      <a href="#/reference#resistance" data-nav>Version resistance</a>
+      <a href="#/reference#layout" data-nav>Project layout</a>
+      <a href="#/reference#limits" data-nav>Limitations</a>
+      <a href="#/reference#status" data-nav>Status</a>
+    </div></aside>
+
+    <main class="doc">
+      <h1>Reference</h1>
+      <p class="sub">The API surface, the patch pipeline, and an honest account of what is not
+      built yet.</p>
+
+      <h2 id="smln">The SMLN API</h2>
+      <p>Every mod's renderer half receives a global <code>SMLN</code>. These are its most-used
+      members; the full reference lives in <code>docs/WRITING-MODS.md</code>.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Member</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>SMLN.game</code></td><td>The game's internal modding API. <code>null</code> before capture.</td></tr>
+          <tr><td><code>SMLN.state</code></td><td>Live game state. <code>null</code> before capture.</td></tr>
+          <tr><td><code>SMLN.api</code></td><td>The v1-shaped Sandkit facade, state-bound on legacy builds.</td></tr>
+          <tr><td><code>SMLN.enums</code></td><td>Static type tables — element ids, worker messages, UI screens.</td></tr>
+          <tr><td><code>SMLN.whenReady(fn)</code></td><td>Run <code>fn</code> when the game is ready.</td></tr>
+          <tr><td><code>SMLN.on(event, fn)</code></td><td><code>'ready'</code>, <code>'game:ready'</code>, <code>'game:started'</code>.</td></tr>
+          <tr><td><code>SMLN.registerCommand(spec)</code></td><td>Add a console command.</td></tr>
+          <tr><td><code>SMLN.register</code></td><td>Register elements, structures, recipes and tech.</td></tr>
+          <tr><td><code>SMLN.storage</code></td><td>The mod's own private, escape-proof storage.</td></tr>
+          <tr><td><code>SMLN.config</code></td><td>Values from the manifest's <code>configSchema</code>.</td></tr>
+          <tr><td><code>SMLN.net</code> · <code>SMLN.fs</code></td><td>Permission-gated network and filesystem.</td></tr>
+          <tr><td><code>SMLN.messaging</code></td><td>Talk to the simulation and utility workers.</td></tr>
+          <tr><td><code>SMLN.postSim([type, …])</code></td><td>Raw message to the simulation worker.</td></tr>
+          <tr><td><code>SMLN.callMain(action, payload)</code></td><td>Call your own main-process handler. Returns a Promise.</td></tr>
+          <tr><td><code>SMLN.onDispose(fn)</code></td><td>Clean-up hook, run on hot reload.</td></tr>
+          <tr><td><code>SMLN.log</code></td><td>Namespaced logging that reaches the console and the log file.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h2 id="pipeline">The patch pipeline</h2>
+      <p>The game loads its UI with <code>loadFile(dist/index.html)</code>, so every asset
+      arrives as a <code>file://</code> request. SandLoader takes over that protocol and rewrites
+      three files on the way past — the bytes on disk are never touched.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Target</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>js/bundle.js</code></td><td>renderer — hooks, runtime, console, mod scripts</td></tr>
+          <tr><td><code>js/simulation-worker.js</code></td><td>simulation thread — worker-side mods</td></tr>
+          <tr><td><code>js/utility-worker.js</code></td><td>utility thread</td></tr>
+        </tbody>
+      </table></div>
+      <h3>The host interface</h3>
+      <p>On Steam, Sandustry's own <code>main.js</code> scans
+      <code>steamapps/workshop/content/2764460/*/</code> for a <code>modinfo.json</code>
+      declaring <code>modID: "fluxloader"</code> and drives whatever it finds through a fixed
+      interface. That is the game's ABI — SandLoader implements it directly.</p>
+      <div class="codewrap"><pre><code><span class="t-fn">initialize</span>(hostAPI) → { success }    <span class="t-com">// hostAPI: { ipcMain, shell, dialog, screen,</span>
+<span class="t-fn">startManager</span>()                       <span class="t-com">//            createWindow, paths, startGame }</span>
+<span class="t-fn">getAPI</span>() → { events: { trigger } }
+<span class="t-fn">setGameWindow</span>(win) · <span class="t-fn">onGameStarted</span>() · <span class="t-fn">closeGame</span>()</code></pre></div>
+
+      <h2 id="resistance">Version resistance</h2>
+      <p>SandLoader records a fingerprint of the installation — version, <code>app.asar</code>
+      size and mtime. When any of it moves, the next launch re-reads the renderer bundle and
+      re-resolves every hook before serving a single file. An unchanged install pays nothing; a
+      changed one costs about <strong>50 ms</strong>.</p>
+      <ol class="rules">
+        <li><strong>Anchors, never offsets.</strong> Patches match authored strings
+        (<code>"game:ready"</code>), never module ids or minified names.</li>
+        <li><strong>Ambiguity is an error.</strong> Every patch declares its expected match
+        count. Zero fails; <em>more</em> than expected also fails, because a pattern that
+        silently became ambiguous would corrupt the bundle in several places at once.</li>
+        <li><strong>All or nothing.</strong> A failed required patch aborts and serves the file
+        untouched. A broken loader must not become a broken game.</li>
+        <li><strong>Runtime over static.</strong> Element ids, resource fields and API surfaces
+        are read from the running game; the tables in <code>src/game/enums.js</code> are
+        fallbacks.</li>
+        <li><strong>Drift detection.</strong> <code>tools/selftest.js</code> reports which hooks
+        still resolve, before anyone launches.</li>
+      </ol>
+      <div class="note warn">
+        <span class="lbl">What it cannot do</span>
+        <p>It cannot invent a hook. If the game removes <code>"game:ready"</code> outright, no
+        scan finds a semantic replacement, and guessing would be worse than failing — SandLoader
+        would patch a place nobody chose. In that case it reports where the literal used to be,
+        serves the file unmodified, and the game still starts.</p>
+      </div>
+
+      <h2 id="layout">Project layout</h2>
+      <p>No dependencies. No build step. <code>install.js</code> writes a shim that points here.</p>
+      <div class="codewrap"><pre><code>src/
+  core/       errors, Result, logging, the problem registry
+  asar/       archive reader, installation discovery, platform detection
+  boot/       non-Steam bootstrap
+  patch/      anchor-based patch engine, conflict preflight, core patches
+  mods/       manifests, semver, dependency ordering, permissions, approvals,
+              config, restricted storage, network capability, sandbox, watcher,
+              ZIP install/remove, Workshop import and its SteamCMD driver
+  compat/     Fluxloader mod compatibility and its messaging bridge
+  main/       host-ABI entry point, file interceptor, RPC
+  renderer/   injected runtime, capability facades, registration API, messaging,
+              worker runtime, i18n, console, splash, mod manager, settings,
+              permission UI, hot reload
+  game/       type tables extracted from the bundle
+tools/        self-test and its DOM harness
+mods/         your mods
+docs/         mod authoring guide</code></pre></div>
+
+      <h2 id="limits">Limitations</h2>
+      <p>An honest list of what is not built yet.</p>
+      <ul>
+        <li><strong>Recipes.</strong> Sandustry 0.5.5 has no recipe registry at all —
+        <code>recipes</code> appears nowhere in the build's API object, and
+        <code>api.structures.recipes</code> exists only in the newer Sandkit v1.
+        <code>SMLN.register.recipe()</code> feature-detects it and reports that it is unavailable
+        rather than pretending to have registered something.</li>
+        <li><strong>Worker entrypoints do not get a Sandkit API yet.</strong> A mod with a
+        <code>workerEntry</code> is injected into the simulation workers, but there is no
+        worker-side <code>sandkit</code> for it to call, so it fails loudly. Handing a mod the
+        main adapter inside a simulation worker would corrupt simulation state.</li>
+        <li><strong>Map mods.</strong> Custom-map blueprints are discovered and reported, but
+        loading them needs game-side support that is not exposed.</li>
+        <li><strong>Renderer hot reload is partial by nature.</strong> SandLoader reclaims what
+        it handed out — listeners, timers, messaging handlers, recorded registrations. A mod that
+        monkey-patched a game function in place stays patched until the window reloads, and the
+        UI says which stage actually happened.</li>
+      </ul>
+
+      <h2 id="status">Status</h2>
+      <div class="tablewrap"><table><tbody>
+        <tr><td><strong>Version</strong></td><td>SandLoader 0.3.0</td></tr>
+        <tr><td><strong>Verified against</strong></td><td>Sandustry 0.5.5</td></tr>
+        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">123 / 123 passing</span></td></tr>
+        <tr><td><strong>Dependencies</strong></td><td>None</td></tr>
+        <tr><td><strong>License</strong></td><td>MIT</td></tr>
+      </tbody></table></div>
+    </main>
+
+    <nav class="toc" id="toc-reference"><h6>On this page</h6></nav>
+  </div>
+</div>
+
+<!-- ======================= FAQ ======================= -->
+<div class="view" id="view-faq">
+  <div class="docs" style="grid-template-columns:minmax(0,1fr);max-width:820px">
+    <main class="doc" style="max-width:none">
+      <h1>Frequently asked</h1>
+      <p class="sub">The questions that come up before people install, answered directly.</p>
+
+      <details open><summary>Does this modify my game files?</summary>
+        <div class="a"><p>No. Not one byte. Patching happens in memory as files are served to
+        the renderer.</p></div></details>
+      <details><summary>Will Steam file verification flag it?</summary>
+        <div class="a"><p>No, because nothing in the game folder changes. On Steam, SandLoader
+        lives in the Workshop content folder.</p></div></details>
+      <details><summary>What about GOG?</summary>
+        <div class="a"><p>Supported. Since GOG builds never scan for a loader, SandLoader adds
+        its own <code>resources/app/</code> directory — three new files beside the untouched
+        <code>app.asar</code>. Electron already searches for <code>app</code> before
+        <code>app.asar</code>, so it loads first and hands control straight back to the real
+        game. No original file is modified, and <code>--uninstall</code> removes the directory
+        again.</p></div></details>
+      <details><summary>Why not Microsoft Store or Game Pass?</summary>
+        <div class="a"><p>That package is ACL-protected and signature-verified. There is no file
+        we are allowed to add, and forcing one would mean modifying the game — so it is reported
+        as unsupported instead of half-working.</p></div></details>
+      <details><summary>Does it work on the experimental / modded branch?</summary>
+        <div class="a"><p>No — SandLoader supports the <strong>vanilla</strong> branch only, which
+        is Steam's default <code>public</code> branch.</p>
+        <p>The two branches ship different generations of Sandustry's modding API: vanilla has the
+        legacy Sandkit surface, the modded branch has Sandkit v1 with namespaces vanilla does not
+        have. SandLoader is built and verified against the vanilla generation, and translates v1
+        call names onto it so mods are written once — but it does not run on the modded branch.</p>
+        <p>To switch back: right-click Sandustry in Steam → Properties → Betas → select
+        <strong>None</strong>. Installing on the experimental branch is not blocked, but nothing
+        about it is verified — patch anchors may not resolve, and the loader will report what
+        failed rather than pretend it worked.</p></div></details>
+      <details><summary>Can this get me banned?</summary>
+        <div class="a"><p>Sandustry is single-player and ships no anti-cheat. There is nothing to
+        ban.</p></div></details>
+      <details><summary>Will a game update break it?</summary>
+        <div class="a"><p>Possibly — and it will tell you. Hooks are anchored on strings from the
+        game's source rather than on positions or minified names, so they usually survive. When
+        one doesn't, the loader serves the game unpatched instead of half-patched: you can still
+        play, just without mods, and <code>tools/selftest.js</code> names the break.</p></div></details>
+      <details><summary>Do I need to reinstall after editing SandLoader's code?</summary>
+        <div class="a"><p>No. Just restart the game.</p></div></details>
+      <details><summary>Is it safe to install a random mod ZIP?</summary>
+        <div class="a"><p>A mod is arbitrary code with full Node access, exactly like this
+        loader. The installer rejects archives without a valid manifest and refuses any that try
+        to write outside the mods folder, but it cannot judge what the code does. Treat mods like
+        any other software you install.</p></div></details>
+      <details><summary>Does it work with Fluxloader mods?</summary>
+        <div class="a"><p>Yes, unmodified. SandLoader reads their <code>modinfo.json</code>, runs
+        all three entrypoints, provides the <code>fluxloaderAPI</code> global, translates their
+        patches onto its own patch engine, and persists their config. It shares no code with that
+        project — it answers the same interface.</p></div></details>
+      <details><summary>Why does it need Node.js?</summary>
+        <div class="a"><p>Only to run the installer, which locates your game and writes the
+        attach point. The loader itself runs inside the game's own Electron process and needs
+        nothing extra at play time.</p></div></details>
+    </main>
+  </div>
+</div>
+
+<footer>
+  <div class="foot">
+    <div>
+      <span class="fb">Sand<i>Loader</i></span>
+      <p>A mod loader for Sandustry that never modifies your game files. MIT licensed, no
+      dependencies, no build step.</p>
+    </div>
+    <div>
+      <h6>Documentation</h6>
+      <a href="#/docs" data-nav>Install</a>
+      <a href="#/docs#console" data-nav>Console</a>
+      <a href="#/mods" data-nav>Making mods</a>
+      <a href="#/mods#compatible" data-nav>Compatibility</a>
+      <a href="#/reference" data-nav>Reference</a>
+    </div>
+    <div>
+      <h6>Project</h6>
+      <a href="#/faq" data-nav>FAQ</a>
+      <a href="#/reference#limits" data-nav>Limitations</a>
+      <a href="#/reference#status" data-nav>Status</a>
+      <a href="https://store.steampowered.com/app/2764460/Sandustry/">Sandustry on Steam</a>
+      <a href="https://github.com/LopeKinz/SandLoader">Source on GitHub</a>
+    </div>
+  </div>
+  <div class="legal">
+    <span>SandLoader 0.3.0 · verified against Sandustry 0.5.5 · self-test 123/123</span>
+    <span>Not affiliated with the authors of Sandustry.</span>
+  </div>
+</footer>
+
+<div class="sdlg" id="searchDlg" role="dialog" aria-modal="true" aria-label="Search">
+  <div class="sbox">
+    <input id="searchInput" type="text" placeholder="Search the documentation…" autocomplete="off" spellcheck="false">
+    <div class="sres" id="searchResults"></div>
+  </div>
+</div>

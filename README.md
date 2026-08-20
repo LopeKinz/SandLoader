@@ -10,6 +10,9 @@ broken patched file behind. Uninstalling is deleting one folder.
 
 Works on **Steam**, **GOG** and **manual/standalone** installs.
 
+**Vanilla branch only.** SandLoader targets Sandustry's default `public` branch. The
+experimental modded branch ships a different Sandkit generation and is not supported.
+
 ```
 Press  ^  (or F1) in game        →  console
 Main menu → "SandLoader Mods"    →  install / enable / remove mods
@@ -41,6 +44,7 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 | | |
 |---|---|
 | **Game** | Sandustry **0.5.5** |
+| **Branch** | **Vanilla only** — Steam's default `public` branch. The experimental modded branch is **not supported** |
 | **Stores** | Steam, GOG, manual/standalone |
 | **OS** | Windows, Linux or macOS |
 | **Node.js** | **18 or newer**, only to run the installer — [nodejs.org](https://nodejs.org) |
@@ -84,8 +88,8 @@ permanent — SandLoader runs from wherever you put it, so don't leave it in a
 temp folder.
 
 ```bash
-git clone https://github.com/<you>/sandloader.git
-cd sandloader
+git clone https://github.com/LopeKinz/SandLoader.git
+cd SandLoader
 ```
 
 **2. Run the installer.**
@@ -538,8 +542,14 @@ can still play, just without mods, and `tools/selftest.js` names the break.
 **Do I need to reinstall after editing SandLoader's code?**
 No. Just restart the game.
 
-**Does it work on GOG / Microsoft Store / Game Pass?**
-No — see [requirements](#requirements).
+**Does it work on the experimental / modded branch?**
+No — SandLoader supports the **vanilla** branch only, which is Steam's default `public`
+branch. The two branches ship different generations of Sandustry's modding API: vanilla
+has the legacy Sandkit surface, the modded branch has Sandkit v1 with namespaces vanilla
+does not have. To switch back: right-click Sandustry in Steam → Properties → Betas →
+select **None**. Installing on the experimental branch is not blocked, but nothing about
+it is verified — anchors may not resolve, and the loader reports what failed rather than
+pretending it worked.
 
 **Is it safe to install a random mod ZIP?**
 A mod is arbitrary code with full Node access, exactly like this loader. The
@@ -679,6 +689,7 @@ src/
               permission UI, hot reload
   game/       type tables extracted from the bundle
 tools/        self-test and its DOM harness
+website/      the documentation site (one generated index.html)
 mods/         your mods
 docs/         mod authoring guide
 ```
@@ -779,8 +790,9 @@ offering a workaround.
 
 An honest list:
 
-- **Recipes.** Sandustry 0.5.4 has no recipe registry at all —
-  `api.structures.recipes` exists only in the newer Sandkit v1.
+- **Recipes.** Sandustry 0.5.5 has no recipe registry at all — `recipes`
+  appears nowhere in the build's API object, and `api.structures.recipes`
+  exists only in the newer Sandkit v1.
   `SMLN.register.recipe()` feature-detects it and reports that it is
   unavailable on this build rather than pretending to have registered
   something.
@@ -850,6 +862,36 @@ Self-test: 123 checks (+19).
   "modID"` — a valid mod, read by the wrong reader. It now discriminates on
   `manifestVersion` the way `manage.js` and `official.js` already did. This
   affected ZIP installs too, not only Workshop ones.
+- **Three adapter aliases pointed at methods this build does not have**, found
+  by diffing the alias table against the API object extracted from the shipped
+  `app.asar` rather than against memory of it. `player.isWithinRadiusOfCell`
+  mapped to itself, and 0.5.5 spells it `isWithinRadius`. `terrains.getTypeFromId`
+  mapped to `getTerrainTypeFromId`, which appears **nowhere in the bundle** — the
+  only id lookup this build has is `world.getCellTypeByName`. Both resolved to
+  nothing, so a mod calling either got `undefined is not a function`.
+  `elements.setDataFieldAtCellWhenIdle` mapped to `setDataField1`, which takes
+  `(state, x, y, value)` — one argument short of the v1 signature's
+  `(x, y, fieldNumber, value)`. That one did not throw: the field *number* landed
+  in the value slot and the value was dropped, so the call silently wrote the
+  wrong number to data field 1. It now maps to `setDataField`, which has the
+  matching arity.
+- **Alias targets may now name another namespace.** `terrains.getTypeFromId`
+  cannot be fixed inside a namespace-local table because its only honest target
+  lives on `world`. A dotted target (`'world.getCellTypeByName'`) is resolved
+  against the root sandkit object, keeps `this` bound to the namespace that owns
+  the method, and takes its state-binding decision from *that* namespace's
+  `NO_STATE_ARG` entry rather than the aliasing one.
+- **51 v1 calls that had no alias at all** now have one, each target verified
+  present in 0.5.5 before being written: the `...WhenIdle` element mutators
+  (`setVelocity`, `convertToParticle`, `convertFromParticle`, `setDuration`),
+  the `...AtCell` reads (`isTypeAt`, `isFreeFalling`, `getVelocity`,
+  `getDataField`), four `structures` renames including
+  `removeAtCellsWhenIdle` → `removeAtPositions`, and twelve namespaces the table
+  never covered — `authorization`, `collector`, `discoveries`, `fire`, `grid`,
+  `patterns`, `raycast`, `upgrades`, `sprites`, `items`, `effects` and `tech`.
+  Unaliased names still pass through untouched, so this only ever adds
+  translations; it cannot take one away. A self-test now holds all 91 alias
+  targets to a method that exists in the build.
 - **The API scan was blind to calls two levels deep.** `api.player.buildings.unlockByType`
   was read as `player.buildings` — a container that exists — so the scan reported
   the mod supported and the mod then died at runtime on the method, which is

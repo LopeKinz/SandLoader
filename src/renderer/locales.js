@@ -169,6 +169,12 @@
     'problems.button': 'Problems',
     'problems.badge': '{count} problem(s)',
 
+    // -------------------------------------------------------- registered.*
+    'registered.forMod': 'Registered content ({count})',
+    'registered.none': 'This mod registered no content.',
+    'registered.pending': 'Nothing yet - mods register their content when the game starts.',
+    'registered.more': ' + {count} more',
+
     // ------------------------------------------------- settings.* (additions)
     'settings.reloadNotice': 'Some changes take effect after a reload.',
     'settings.loadFailed': 'Could not load settings: {error}',
@@ -393,6 +399,12 @@
     'problems.forMod': 'Probleme dieses Mods ({count})',
     'problems.button': 'Probleme',
     'problems.badge': '{count} Problem(e)',
+
+    // -------------------------------------------------------- registered.*
+    'registered.forMod': 'Registrierte Inhalte ({count})',
+    'registered.none': 'Dieser Mod hat keine Inhalte registriert.',
+    'registered.pending': 'Noch nichts - Mods registrieren ihre Inhalte beim Spielstart.',
+    'registered.more': ' + {count} weitere',
 
     // ------------------------------------------------- settings.* (Ergaenzungen)
     'settings.reloadNotice': 'Einige Aenderungen wirken erst nach einem Reload.',

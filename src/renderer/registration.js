@@ -563,7 +563,15 @@
   }
   root.owned = function (modId) { return (byOwner[modId] || []).slice() }
   root.stats = function () {
-    return { registered: stats.registered, failed: stats.failed, queued: queue.length }
+    // `drained` is what separates "this mod registered nothing" from "nothing
+    // has run yet": before the game emits `game:ready` every ledger is empty,
+    // and a reader that cannot tell the two apart reports the first as fact.
+    return {
+      registered: stats.registered,
+      failed: stats.failed,
+      queued: queue.length,
+      drained: drained,
+    }
   }
   root.flush = function () { drain() }
 
