@@ -287,6 +287,62 @@ check('fluxloader target aliases normalise', () => {
   return 'bundle + workers'
 })
 
+// --------------------------------------------- fluxloader content translation
+const flTranslate = require('../src/compat/flux-translate')
+
+/** The live 0.5.5 MatterType enum, both directions, as the game exposes it. */
+const LIVE_MATTER = {
+  1: 'Solid', 2: 'Liquid', 3: 'Particle', 4: 'Gas',
+  5: 'Static', 6: 'Slushy', 7: 'Wisp', 8: 'Powder',
+  Solid: 1, Liquid: 2, Particle: 3, Gas: 4,
+  Static: 5, Slushy: 6, Wisp: 7, Powder: 8,
+}
+
+check('matter type names map to the live numeric ids', () => {
+  const r = flTranslate.matterTypeToNumber('Slushy', LIVE_MATTER)
+  assert(r.ok, 'Slushy was rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value === 6, 'Slushy mapped to ' + r.value + ', not 6')
+  assert(flTranslate.matterTypeToNumber('Solid', LIVE_MATTER).value === 1, 'Solid is not 1')
+  return 'Slushy -> 6, Solid -> 1'
+})
+
+check('an unmappable matter type is reported, never defaulted', () => {
+  // Silently coercing to Solid would put the element in the wrong physics
+  // class, which is far worse than refusing it with a reason.
+  const r = flTranslate.matterTypeToNumber('Plasma', LIVE_MATTER)
+  assert(!r.ok, 'an unknown matter type was accepted')
+  assert(/Plasma/.test(r.reason), 'the reason does not name the bad value: ' + r.reason)
+  assert(/Solid/.test(r.reason), 'the reason does not list the valid names: ' + r.reason)
+  return r.reason
+})
+
+check('element name becomes the localisation key the build expects', () => {
+  // 0.5.5 entries carry nameKey, not name: {nameKey:"elements|sand|name"}.
+  assert(flTranslate.nameKeyFor('Trash') === 'elements|trash|name',
+    'wrong key: ' + flTranslate.nameKeyFor('Trash'))
+  assert(flTranslate.nameKeyFor('CompressedTrash') === 'elements|compressedTrash|name',
+    'camelCase id was not preserved: ' + flTranslate.nameKeyFor('CompressedTrash'))
+  return 'Trash -> elements|trash|name'
+})
+
+check('rgba colours convert to the packed metaColor integer', () => {
+  const r = flTranslate.rgbaToMetaColor([88, 74, 74, 255])
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value === (88 << 16) + (74 << 8) + 74, 'wrong packing: ' + r.value)
+  const bad = flTranslate.rgbaToMetaColor([88, 74])
+  assert(!bad.ok, 'a two-element colour was accepted')
+  return 'rgba packed to ' + r.value
+})
+
+check('soil colorHSL converts to rgba', () => {
+  const r = flTranslate.hslToRgba([306, 6, 37])
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value.length === 4, 'expected 4 channels, got ' + r.value.length)
+  assert(r.value.every((c) => c >= 0 && c <= 255), 'channel out of range: ' + r.value.join(','))
+  assert(r.value[3] === 255, 'alpha should default to opaque, got ' + r.value[3])
+  return 'hsl(306,6,37) -> rgba(' + r.value.join(',') + ')'
+})
+
 check('fluxloader modinfo is read into an SMLN mod', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-fl-'))
   fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
