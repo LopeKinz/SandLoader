@@ -50,10 +50,23 @@ into a pipeline that has not installed it.
 
 ## Publishing to GitHub Pages
 
-Settings → Pages → *Deploy from a branch*, then either:
+Automated by [`.github/workflows/pages.yml`](../.github/workflows/pages.yml).
+It runs on every push to `main` that touches `website/`, and can be triggered
+by hand from the Actions tab.
 
-- serve `/docs` and copy `index.html` there, or
-- keep `/website` and add a workflow that uploads it as the Pages artifact.
+The workflow:
 
-Nothing in the page loads from a relative path, so it works from any directory.
-The only external requests are Google Fonts.
+1. verifies `index.html` matches its sources (`build.js --check`) — a stale
+   committed file fails the build rather than being published;
+2. installs jsdom, only in CI, and runs both test suites;
+3. copies **`index.html` alone** into the Pages artifact, so the sources and
+   tests stay in the repo and off the public site;
+4. deploys.
+
+**One-time setup:** repository *Settings → Pages → Build and deployment →
+Source* must be set to **GitHub Actions** (not "Deploy from a branch"). Branch
+deployment can only serve the repo root or `/docs`, which is why this site —
+living in `/website` — is uploaded as an artifact instead.
+
+The published page is self-contained: it references no sibling file, and its
+only external requests are Google Fonts.

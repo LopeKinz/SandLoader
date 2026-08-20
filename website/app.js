@@ -1,4 +1,3 @@
-<script>
 (function () {
   'use strict';
 
@@ -339,4 +338,3 @@
   render(true);
   spy();
 })();
-</script>

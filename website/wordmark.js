@@ -1,4 +1,3 @@
-<script>
 /* Animated SANDLOADER wordmark: pixel letterforms built from sand-coloured
    brick and darker machine segments, assembled by blocks falling into place. */
 (function () {
@@ -220,4 +219,3 @@
       { threshold: 0 }).observe(hero);
   }
 })();
-</script>

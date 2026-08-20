@@ -6,6 +6,10 @@
  * and shipped as one, because GitHub Pages serves it directly and a single
  * file has no load-order or relative-path problem to get wrong.
  *
+ * The two scripts are stored as plain `.js` with no `<script>` wrapper, so the
+ * repository's CI can run `node --check` over every JavaScript file in the
+ * tree. The wrapper is added here instead.
+ *
  * Run it with `node website/build.js`; `--check` verifies the committed
  * index.html is current without writing, which is what CI uses.
  */
@@ -18,6 +22,10 @@ const OUT = path.join(DIR, 'index.html')
 
 /** Order matters: styles, then markup, then the scripts that read that markup. */
 const PARTS = ['shell.css', 'body.html', 'wordmark.js', 'app.js']
+
+/** Split so this file never contains a literal closing script tag. */
+const OPEN_TAG = '<script>'
+const CLOSE_TAG = '</scr' + 'ipt>'
 
 const HEAD = `<title>SandLoader</title>
 <meta name="description" content="A mod loader for Sandustry's vanilla branch, with an in-game console and mod manager that never modifies your game files.">
@@ -37,12 +45,18 @@ function read(name) {
   return fs.readFileSync(p, 'utf8')
 }
 
+/** One script source, wrapped in the tags the page needs. */
+function script(name) {
+  const body = read(name).replace(/\n+$/, '')
+  return OPEN_TAG + '\n' + body + '\n' + CLOSE_TAG + '\n'
+}
+
 function assemble() {
   return HEAD +
     read('shell.css') + '\n</style>\n\n' +
     read('body.html') + '\n' +
-    read('wordmark.js') + '\n' +
-    read('app.js') + '\n'
+    script('wordmark.js') +
+    script('app.js')
 }
 
 const html = assemble()
