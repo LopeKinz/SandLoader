@@ -34,7 +34,6 @@ const permissions = require('../mods/permissions')
 const semver = require('../mods/semver')
 const configStore = require('../mods/config')
 const fluxMessaging = require('./flux-messaging')
-const flContent = require('./flux-content')
 
 const MODINFO = 'modinfo.json'
 
@@ -300,10 +299,6 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   const patches = Object.create(null)
   const errors = []
   const listeners = Object.create(null)
-  // Set the moment corelib's own entrypoint publishes `globalThis.corelib`,
-  // from inside the mods loop below - see the comment there for why it
-  // cannot wait until after the loop.
-  let content = null
 
   // Everything mods publish with `globalThis.x = ...` lands here, and every
   // mod's context inherits from it. That is how a library mod exports its API:
@@ -535,22 +530,6 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
       new vm.Script(source, { filename: entry }).runInContext(sandbox)
 
-      // Swap corelib's content modules for capturing shims the instant
-      // corelib publishes itself, and before the next mod in this loop can
-      // run. A dependent mod (trashelement and everything built on corelib)
-      // calls `corelib.elements.registerElement(...)` at its own entrypoint's
-      // top level - not from a deferred event - so installing any later than
-      // this would let those calls reach corelib's original, unshimmed
-      // registry, where their only fate is to become the stale patches this
-      // bridge exists to replace.
-      if (!content && universe.corelib) {
-        content = flContent.install(universe, {
-          modId: 'corelib',
-          logger: logger.child('content'),
-          matterEnum: ctx.matterEnum || {},
-        })
-      }
-
       const exported = moduleObj.exports
       if (exported && typeof exported.onLoad === 'function') exported.onLoad()
       modLog.info(`electron entrypoint loaded (${Object.keys(patches).length} patched file(s) so far)`)
@@ -580,40 +559,10 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   // Declared before firing so a mod using `trigger`/`isEventRegistered`
   // (rather than the tolerant `tryTrigger`) sees a known event, and emitted
   // via the bus directly so a mod that registered no listener is not an error.
-
-  // The shim was installed inline in the loop above, the moment corelib's own
-  // entrypoint published `globalThis.corelib` and before any dependent mod's
-  // entrypoint could call into it. If corelib never loaded (not installed, or
-  // its own entrypoint threw), install it now so `content` is still defined -
-  // it will simply report that no corelib global was found.
-  if (!content) {
-    content = flContent.install(universe, {
-      modId: 'corelib',
-      logger: logger.child('content'),
-      matterEnum: ctx.matterEnum || {},
-    })
-  }
-  for (const reason of content.reasons) logger.debug(`content bridge: ${reason}`)
-
   bus.registerEvent('fl:pre-scene-loaded')
   bus.emit('fl:pre-scene-loaded')
 
-  // Drop only the patches the bridge now supplies. Everything else corelib
-  // queued is left exactly as it was.
-  let dropped = 0
-  for (const target of Object.keys(patches)) {
-    const before = patches[target].length
-    patches[target] = patches[target].filter((p) => !flContent.shouldSuppress(p.id))
-    dropped += before - patches[target].length
-    if (!patches[target].length) delete patches[target]
-  }
-  if (dropped) {
-    logger.info(`content bridge: ${dropped} superseded patch(es) dropped, ` +
-      `${content.captured.elements.length} element(s) and ` +
-      `${content.captured.soils.length} soil(s) captured for the game's own registry`)
-  }
-
-  return { patches, errors, events: bus, content: content.captured }
+  return { patches, errors, events: bus }
 }
 
 /**

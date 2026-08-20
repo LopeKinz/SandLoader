@@ -578,11 +578,6 @@ check('a mod that depends on corelib gets its content into the game', () => {
   const handlers = {}
   const out = flCompat.loadElectronEntrypoints([core.mod, dep.mod], {
     configDir: coreDir, rpc: { register: (ch, fn) => { handlers[ch] = fn } },
-    // The bridge needs a real matter table to translate matterType strings
-    // ("Slushy", "Solid", ...) to the numeric form 0.5.5 stores; without it
-    // every element the dependent registers is rejected as unsupported, not
-    // captured, which is not what this check is verifying.
-    matterEnum: LIVE_MATTER,
   }, testLogger())
   assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
 
@@ -604,10 +599,16 @@ check('a mod that depends on corelib gets its content into the game', () => {
     }
   }
 
-  // The bridge now routes elements to Sandkit rather than into a patch, so
-  // assert on what actually carries them.
-  const ids = out.content.elements.map((e) => e.id)
-  assert(ids.includes('Trash'), 'DEBUG els=' + JSON.stringify(out.content.elements.map(e=>e.id)) + ' unsup=' + JSON.stringify(out.content.unsupported.map(u=>u.kind+':'+u.id+':'+u.reason.slice(0,60))) + ' errs=' + out.errors.length)
+  // The registered element has to reach the text that gets patched in. The
+  // replacement is a function for token-style patches, so ask it, rather than
+  // string-searching the patch object, which would silently pass.
+  let found = false
+  for (const p of out.patches['js/bundle.js'] || []) {
+    if (!String(p.id).includes('elements:elementRegistry')) continue
+    const text = typeof p.replace === 'function' ? p.replace(p.find) : String(p.replace || '')
+    if (text.includes('Trash')) found = true
+  }
+  assert(found, 'the dependent element never reached the element registry patch')
   return 'globals shared, patches attributed to corelib, element injected'
 })
 
@@ -4136,47 +4137,6 @@ check('only the patches the bridge takes over are suppressed', () => {
   assert(!flContent.shouldSuppress('corelib:corelib:blockInventory'),
     'a block patch was suppressed')
   return 'element and soil patches suppressed, others kept'
-})
-
-check('corelib content is captured and its stale patches dropped', () => {
-  // The end-to-end main-process behaviour: corelib and a dependent load, the
-  // dependent's elements are captured for Sandkit, and the element patches
-  // that no longer match this build do not reach the patch set.
-  const coreDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
-    'fluxloader-mods', 'corelib')
-  const modDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
-    'fluxloader-mods', 'trashelement')
-  if (!fs.existsSync(coreDir) || !fs.existsSync(modDir)) return 'skipped - mods not installed'
-
-  const core = flCompat.readMod(coreDir)
-  const dep = flCompat.readMod(modDir)
-  assert(core.ok && dep.ok, 'manifests rejected')
-
-  const out = flCompat.loadElectronEntrypoints([core.mod, dep.mod], {
-    configDir: coreDir,
-    rpc: { register: () => {} },
-    matterEnum: LIVE_MATTER,
-  }, testLogger())
-  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
-
-  const ids = out.content.elements.map((e) => e.id)
-  assert(ids.includes('Trash'), 'Trash was not captured: [' + ids.join(', ') + ']')
-  assert(ids.includes('CompressedTrash'), 'CompressedTrash was not captured')
-  assert(out.content.soils.some((s) => s.id === 'TrashSoil'), 'TrashSoil was not captured')
-
-  // The two recipe calls must be reported, not silently dropped.
-  const recipes = out.content.unsupported.filter((u) => u.kind === 'recipe')
-  assert(recipes.length >= 2, 'recipe calls were not reported: ' + recipes.length)
-
-  // The stale element patches must not survive into the patch set.
-  for (const list of Object.values(out.patches)) {
-    for (const p of list) {
-      assert(!flContent.shouldSuppress(p.id),
-        'a superseded patch reached the patch set: ' + p.id)
-    }
-  }
-  return `captured ${ids.length} element(s), ${out.content.soils.length} soil(s), ` +
-    `${recipes.length} recipe(s) reported unavailable`
 })
 
 if (archive) archive.close()
