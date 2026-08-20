@@ -4034,6 +4034,76 @@ check('the manager offers Install from Workshop and asks for a link', () => {
   })
 })
 
+const flContent = require('../src/compat/flux-content')
+
+/** A stand-in for the corelib object an entrypoint publishes. */
+function fakeCorelib() {
+  return {
+    elements: {
+      registerElement(c) { this._e = (this._e || []).concat([c]); return true },
+      registerSoil(c) { this._s = (this._s || []).concat([c]); return true },
+    },
+    recipes: {
+      registerPressRecipe() { return true },
+      registerShakerRecipe() { return true },
+    },
+  }
+}
+
+check('the bridge captures element registrations instead of patching', () => {
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  assert(r.ok, 'install failed')
+  g.corelib.elements.registerElement({
+    id: 'Trash', name: 'Trash', colors: [[88, 74, 74, 255]], density: 150, matterType: 'Slushy',
+  })
+  assert(r.captured.elements.length === 1, 'nothing captured')
+  assert(r.captured.elements[0].def.matterType === 6, 'definition was not translated')
+  return 'captured Trash with matterType 6'
+})
+
+check('a registration the build cannot support is recorded with its reason', () => {
+  // 0.5.5 has no recipe registry at all. Reporting beats a silent no-op.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [['CompressedTrash', 0.65]] })
+  assert(r.captured.unsupported.length === 1,
+    'the recipe call was not recorded as unsupported')
+  const u = r.captured.unsupported[0]
+  assert(u.kind === 'recipe', 'wrong kind: ' + u.kind)
+  assert(/no recipe registry/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
+  return u.reason
+})
+
+check('a bad definition is recorded, and never throws into the mod', () => {
+  // corelib mods call these at entrypoint top level; throwing would take the
+  // whole mod down instead of losing one element.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  let threw = false
+  try {
+    g.corelib.elements.registerElement({ id: 'Bad', name: 'Bad', density: 1, matterType: 'Plasma' })
+  } catch (_e) { threw = true }
+  assert(!threw, 'a bad definition threw into the mod')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(/Plasma/.test(r.captured.unsupported[0].reason), 'reason lost the detail')
+  return r.captured.unsupported[0].reason
+})
+
+check('only the patches the bridge takes over are suppressed', () => {
+  // corelib has ~50 subsystems. Dropping more than the bridge replaces would
+  // break the ones whose anchors still match this build.
+  assert(flContent.shouldSuppress('corelib:corelib:elements:elementRegistry'),
+    'an element patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:elements:soilRegistry'),
+    'a soil patch was not suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:colorIdFix:countdownFix'),
+    'an unrelated patch was suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:blockInventory'),
+    'a block patch was suppressed')
+  return 'element and soil patches suppressed, others kept'
+})
+
 if (archive) archive.close()
 
 // Wait for the async checks before reporting, or their results land after the
