@@ -1074,6 +1074,15 @@ function assemble() {
         logger.info(`fluxloader: ${list.length} patch(es) for ${target}`)
       }
 
+      // Asset overwrites - a map mod's terrain PNGs, a skin mod's sprites -
+      // are served by swapping the file, not by editing its bytes, so they
+      // join the override map rather than the patch list. Official-mod
+      // overrides are assigned wholesale above, so merge instead of replacing.
+      for (const [target, file] of Object.entries(flLoaded.overrides || {})) {
+        runtime.redirects[target] = file
+        logger.info(`fluxloader: ${target} served from ${file}`)
+      }
+
       for (const mod of flActive) {
         if (mod.dir) runtime.modAssets[mod.id] = mod.dir
         try {
@@ -1178,7 +1187,11 @@ function assemble() {
         const has = (rel) => {
           try { return archive ? archive.has('dist/' + rel) : false } catch (_) { return false }
         }
-        runtime.redirects = official.buildOverrides(officialActive, has, logger.child('official'))
+        // Merge, never replace: fluxloader mods registered their asset
+        // overwrites into this same map earlier in startup, and assigning a
+        // fresh object here would silently discard every one of them.
+        Object.assign(runtime.redirects,
+          official.buildOverrides(officialActive, has, logger.child('official')))
         if (archive) archive.close()
       }
     }
@@ -1413,6 +1426,15 @@ async function initialize(hostAPI) {
     }
 
     assemble()
+
+    // Let the mods' deferred work finish before the interceptor is built from
+    // these maps. A Fluxloader listener may be async - custommaploader awaits
+    // its config to learn which map was picked, and only then registers that
+    // map's image overrides - so those land in a microtask after `assemble()`
+    // has already returned. Reading the maps in the same tick catches only the
+    // synchronous registrations, which is why the chosen map's terrain never
+    // replaced the default's.
+    await new Promise((resolve) => setImmediate(resolve))
 
     if (process.env.SMLN_WATCH === '1' || runtime.settings.watch) {
       runtime.watcher = watcher.createWatcher({

@@ -40,9 +40,14 @@ function matterTypeToNumber(name, enumTable) {
  * derives this same key from a `name` when one is passed to its own register,
  * so the two spellings agree.
  */
-function nameKeyFor(id) {
+function nameKeyFor(id, kind) {
   const s = String(id || '')
-  return 'elements|' + (s.charAt(0).toLowerCase() + s.slice(1)) + '|name'
+  // Terrains live under their own namespace: the game's own entries read
+  // `terrains|solidite|name`, not `elements|...`. A soil filed under the
+  // element namespace resolves to nothing and shows as
+  // "[MISSING: elements|trashSoil|name]" on the hover tooltip.
+  const ns = kind === 'terrain' ? 'terrains' : 'elements'
+  return ns + '|' + (s.charAt(0).toLowerCase() + s.slice(1)) + '|name'
 }
 
 /** Pack [r,g,b,a] into the 24-bit integer the registry stores as metaColor. */
@@ -158,7 +163,7 @@ function translateSoil(config, enumTable) {
   const def = {
     id: c.id,
     name: c.name || c.id,
-    nameKey: nameKeyFor(c.id),
+    nameKey: nameKeyFor(c.id, 'terrain'),
     hp: typeof c.hp === 'number' ? c.hp : 1,
     onlyRocketBreakable: !!c.onlyRocketBreakable,
   }

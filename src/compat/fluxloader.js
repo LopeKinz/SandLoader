@@ -325,6 +325,33 @@ function discover(roots, logger) {
  * @param {any} api        the mod's fluxloaderAPI
  * @param {any} logger
  */
+/**
+ * One mod in the shape Fluxloader hands to `getEnabledMods()` and to the
+ * `fl:mod-loaded` / `fl:mod-unloaded` listeners: `{info, path}`, where `info`
+ * is the raw modinfo.json plus the fields Fluxloader guarantees.
+ *
+ * Both callers go through here so they cannot drift apart: mods discover each
+ * other by tag through the event and then look the same mod up in the map, and
+ * a descriptor that differed between the two would make that lookup miss.
+ * `info.tags` is always an array even when the manifest omits it, because
+ * every consumer calls `.includes()` on it straight away.
+ *
+ * @param {any} mod
+ * @returns {{info: object, path: string}}
+ */
+function modDescriptor(mod) {
+  const info = (mod.manifest && typeof mod.manifest === 'object') ? mod.manifest : {}
+  return {
+    info: Object.assign({}, info, {
+      modID: mod.id,
+      name: mod.name || mod.id,
+      version: mod.version,
+      tags: Array.isArray(info.tags) ? info.tags : [],
+    }),
+    path: mod.dir,
+  }
+}
+
 function runSchemaScript(mod, schema, api, logger) {
   if (!mod.scriptPath) return schema
   try {
@@ -392,8 +419,22 @@ function makeConfigStore(configDir, mod, logger) {
         return Promise.resolve(value)
       }
       if (typeof value.then === 'function') return value
+      // Mods split on whether they await this: custommaploader does,
+      // skinloader reads `.skin` straight off the return. So the object is
+      // handed back as itself AND made awaitable.
+      //
+      // What `then` resolves WITH matters more than it looks. The promise
+      // machinery unwraps a thenable by calling its `then`, and if that
+      // resolves with the same thenable it unwraps again - forever, allocating
+      // a promise per turn until the heap dies. That is not a hypothetical: it
+      // took the whole game down at startup, after every synchronous phase had
+      // already logged success, because one mod awaited its config.
+      //
+      // Resolving with a plain copy terminates the unwrapping: the copy has no
+      // `then`, so the machinery accepts it as a final value.
+      const plain = Object.assign({}, value)
       return Object.defineProperty(value, 'then', {
-        value: (onFulfilled) => Promise.resolve(value).then(onFulfilled),
+        value: (onFulfilled, onRejected) => Promise.resolve(plain).then(onFulfilled, onRejected),
         enumerable: false,
         configurable: true,
         writable: true,
@@ -422,6 +463,18 @@ function makeConfigStore(configDir, mod, logger) {
 function loadElectronEntrypoints(mods, ctx, logger) {
   /** @type {Record<string, any[]>} */
   const patches = Object.create(null)
+  /**
+   * dist-relative path -> absolute replacement file, from `setPatch(...,
+   * {type:'overwrite', file})`. Asset swaps, not text edits: this is how a map
+   * mod supplies its terrain PNGs and a skin mod its sprites.
+   *
+   * Kept apart from `patches` because the patch engine is a text engine. A PNG
+   * pushed through it is read as UTF-8, mangled by the decode, and matched
+   * against anchors it cannot contain - which is why the skin silently failed
+   * to apply and the map images never swapped at all.
+   * @type {Record<string, string>}
+   */
+  const overrides = Object.create(null)
   // Set the moment corelib publishes `globalThis.corelib`, from inside the
   // mods loop below - see the comment at the install site for why it cannot
   // wait until the loop has finished.
@@ -513,6 +566,24 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
     function setTo(file, tag, patch) {
       const target = normaliseTarget(file)
+
+      // An overwrite names a replacement file rather than describing an edit,
+      // so it belongs in the override map the interceptor already serves from.
+      if (patch && String(patch.type || '').toLowerCase() === 'overwrite') {
+        if (typeof patch.file !== 'string' || !patch.file) {
+          modLog.warn(`setPatch("${file}", "${tag}") ignored: an overwrite needs a "file"`)
+          return
+        }
+        if (!fs.existsSync(patch.file)) {
+          modLog.warn(`setPatch("${file}", "${tag}") ignored: ${patch.file} does not exist`)
+          return
+        }
+        overrides[target] = patch.file
+        tags.set(tag, target)
+        modLog.debug(`override: ${target} -> ${patch.file}`)
+        return
+      }
+
       const list = patches[target] || (patches[target] = [])
       const id = `${mod.id}:${tag}`
       const i = list.findIndex((p) => p.id === id)
@@ -559,6 +630,10 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       setPatch: (file, tag, patch) => setTo(file, tag, patch),
       removePatch: (file, tag) => {
         const target = normaliseTarget(file)
+        // An override lives in its own map, so clearing one has to look there
+        // too - skinloader calls this for every sprite when the player picks
+        // "default", and a leftover override would pin the old skin forever.
+        if (overrides[target]) delete overrides[target]
         const list = patches[target] || []
         const id = `${mod.id}:${tag}`
         const i = list.findIndex((p) => p.id === id)
@@ -582,13 +657,19 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       getModsPath: () => path.dirname(mod.dir),
 
       /**
-       * The game's app.asar. Mods join it with a subfolder and read through
-       * `fs` - Electron reads inside an asar transparently, so no unpacking is
-       * needed. Custom Map Loader uses it to read the stock map's images out of
-       * the shipped game (`getGameAsarPath() + "/img"`), and without it the mod
-       * dies on its first line with "getGameAsarPath is not a function".
+       * The game's asset root inside app.asar - the `dist` directory, not the
+       * archive root. Mods join it with a subfolder and read through `fs`,
+       * which Electron resolves inside an asar transparently.
+       *
+       * The `dist` segment is the whole point: Custom Map Loader asks for
+       * `getGameAsarPath() + "/img"`, and the images live at `dist/img`
+       * inside the archive. Returning the archive root sends it to `/img`,
+       * which does not exist, and every stock map file fails to load with
+       * "Could not find map file".
        */
-      getGameAsarPath: () => (ctx.install && ctx.install.asar) || '',
+      getGameAsarPath: () => (ctx.install && ctx.install.asar
+        ? path.join(ctx.install.asar, 'dist')
+        : ''),
 
       /**
        * Every enabled mod, keyed by id, in the shape Fluxloader hands out:
@@ -602,16 +683,7 @@ function loadElectronEntrypoints(mods, ctx, logger) {
         const out = {}
         for (const m of mods) {
           if (m.enabled === false) continue
-          const info = (m.manifest && typeof m.manifest === 'object') ? m.manifest : {}
-          out[m.id] = {
-            info: Object.assign({}, info, {
-              modID: m.id,
-              name: m.name || m.id,
-              version: m.version,
-              tags: Array.isArray(info.tags) ? info.tags : [],
-            }),
-            path: m.dir,
-          }
+          out[m.id] = modDescriptor(m)
         }
         return out
       },
@@ -729,6 +801,23 @@ function loadElectronEntrypoints(mods, ctx, logger) {
     }
   }
 
+  // Announce every enabled mod. Loader mods discover the content they serve
+  // through this event rather than by scanning the folder themselves:
+  // custommaploader collects mods tagged "map" here, skinloader those tagged
+  // "skin". Without it they know only their own built-in default, and the
+  // player's installed maps and skins never appear.
+  //
+  // Fired after the whole loop, not inside it, for two reasons: a mod that is
+  // pure assets has no electron entrypoint and would be skipped by the loop's
+  // `continue`, and a listener registered by a mod loaded late must still see
+  // the mods that loaded before it - emitting per-mod mid-loop would deliver
+  // each mod only to the listeners that happened to already exist.
+  bus.registerEvent('fl:mod-loaded')
+  for (const mod of mods) {
+    if (mod.enabled === false) continue
+    bus.emit('fl:mod-loaded', modDescriptor(mod))
+  }
+
   bus.emit('fl:all-mods-loaded')
 
   // Library mods do not queue their patches while their entrypoint runs; they
@@ -775,7 +864,13 @@ function loadElectronEntrypoints(mods, ctx, logger) {
   }
 
   bus.registerEvent('fl:pre-scene-loaded')
-  bus.emit('fl:pre-scene-loaded')
+  // The scene name is not decoration: listeners branch on it. custommaploader
+  // only resolves the configured map into `loadedMapData` when the scene is
+  // "game" or "intro", and emitting with no argument left every such listener
+  // in its no-op branch - the mod loaded, reported success, and then answered
+  // its own renderer half with `undefined`, which crashed on `.valid`.
+  // "game" is the scene SandLoader is actually preparing the bundle for.
+  bus.emit('fl:pre-scene-loaded', 'game')
 
   // Drop only the patches the bridge now supplies through the game's own
   // registry. Everything else corelib queued is left exactly as it was.
@@ -792,7 +887,7 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       `${content.captured.soils.length} soil(s) captured for the game's own registry`)
   }
 
-  return { patches, errors, events: bus, content: content.captured }
+  return { patches, overrides, errors, events: bus, content: content.captured }
 }
 
 /**

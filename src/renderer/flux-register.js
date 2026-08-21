@@ -40,6 +40,33 @@
       var soils = payload.soils || []
       var unsupported = payload.unsupported || []
 
+      // Register display names before the content itself. 0.5.5 stores a
+      // `nameKey` on every element and resolves it through i18n at draw time,
+      // so an unregistered key shows in-game as "[MISSING: elements|trash|name]"
+      // on the hover tooltip. The definition's own `name` is the English text
+      // the mod author wrote, and it is registered for the player's current
+      // locale as well as English: a German client looks up `de` and would
+      // otherwise miss a translation registered only under `en`.
+      try {
+        var sk = SMLN.sandkit
+        if (sk && sk.i18n && typeof sk.i18n.register === 'function') {
+          var table = {}
+          var all = elements.concat(soils)
+          for (var n = 0; n < all.length; n++) {
+            var d = all[n].def
+            if (d && d.nameKey && d.name) table[d.nameKey] = d.name
+          }
+          if (Object.keys(table).length) {
+            var locale = typeof sk.i18n.getLocale === 'function' ? sk.i18n.getLocale() : null
+            sk.i18n.register('en', table)
+            if (locale && locale !== 'en') sk.i18n.register(locale, table)
+          }
+        }
+      } catch (e) {
+        SMLN.log('warn', 'fluxloader display names could not be registered: ' +
+          ((e && e.message) || e))
+      }
+
       function hand(entry, register, kind) {
         // One definition failing must not take the others with it: a mod that
         // registers five elements and gets one wrong should lose that one.
