@@ -30,6 +30,8 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Writing mods](docs/WRITING-MODS.md)
+- [Modding reference](docs/MODDING-REFERENCE.md) — how Sandustry looks on the
+  inside, and all three mod formats that run on it
 - [How it works](#how-it-works) · [Project layout](#project-layout)
 - [Security model](#security-model)
 - [When the game updates](#it-re-checks-itself-when-the-game-updates)
