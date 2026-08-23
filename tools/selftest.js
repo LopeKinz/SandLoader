@@ -4244,6 +4244,110 @@ check('only the patches the bridge takes over are suppressed', () => {
   return 'definition patches suppressed for all five content types, UI patches kept'
 })
 
+check('an "optional:" dependency prefix does not make a mod required', () => {
+  // Fluxloader marks soft dependencies as "optional:^1.1.4". Reading the
+  // prefix as part of the range made it both unparsable and required, so
+  // refinement was dropped entirely for "bigger-grabber", a mod it works
+  // perfectly well without.
+  const dir = tmpdir('flux-optional-dep')
+  fs.mkdirSync(path.join(dir, 'refiner'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'refiner', 'modinfo.json'), JSON.stringify({
+    modID: 'refiner', name: 'Refiner', version: '1.0.0',
+    dependencies: { corelib: '^3.0.1', 'bigger-grabber': 'optional:^1.1.4' },
+  }))
+  const found = flCompat.discover([dir])
+  const mod = (found.mods || found).find((m) => m.id === 'refiner')
+  assert(mod, 'the mod was not discovered')
+
+  const hard = mod.dependencies.find((d) => d.id === 'corelib')
+  const soft = mod.dependencies.find((d) => d.id === 'bigger-grabber')
+  assert(hard && hard.optional === false, 'a plain dependency became optional')
+  assert(soft && soft.optional === true, 'the "optional:" prefix was not honoured')
+  // The prefix must come off the range too, or it never parses as semver.
+  assert(soft.range === '^1.1.4', 'the prefix was left in the range: ' + soft.range)
+  return 'optional: parsed off the range and flagged, plain dependencies untouched'
+})
+
+check('a config schema accepts array values', () => {
+  // autosplitter declares {"type":"array","default":[1,2]}. Rejecting the
+  // type threw away its whole config and left it running on an empty one.
+  const explicit = modConfig.normaliseSchema({ splits: { type: 'array', default: [1, 2] } })
+  assert(explicit.ok, 'an explicit array type was rejected: ' +
+    (explicit.error && explicit.error.message))
+  assert(JSON.stringify(explicit.schema.splits.default) === '[1,2]',
+    'the default was not preserved')
+
+  // With no declared type, an array default has to infer 'array' - it used to
+  // fall through to 'string' and fail.
+  const inferred = modConfig.normaliseSchema({ splits: { default: [2, 5, 7] } })
+  assert(inferred.ok && inferred.schema.splits.type === 'array',
+    'an array default did not infer the array type')
+
+  // An array spec with no default gets a FRESH array each time; one shared
+  // instance would let one mod's push be seen by every other.
+  const a = modConfig.normaliseSchema({ k: { type: 'array' } })
+  const b = modConfig.normaliseSchema({ k: { type: 'array' } })
+  a.schema.k.default.push('x')
+  assert(b.schema.k.default.length === 0, 'array defaults share one instance')
+
+  // enum resolution must be unaffected: it also keys off an array field.
+  const en = modConfig.normaliseSchema({ k: { values: ['a', 'b'] } })
+  assert(en.ok && en.schema.k.type === 'enum', 'enum inference broke')
+  return 'array accepted explicitly and by inference, defaults not shared, enum intact'
+})
+
+check('getEnabledMods answers to both shapes mods use', () => {
+  // Two contracts exist in the wild and both are load-bearing: skinloader and
+  // custommaploader call Object.values(...), refinement calls .filter(...)
+  // directly. Returning either alone breaks the other.
+  const dir = tmpdir('flux-enabled-mods')
+  for (const id of ['alpha', 'beta']) {
+    fs.mkdirSync(path.join(dir, id), { recursive: true })
+    fs.writeFileSync(path.join(dir, id, 'modinfo.json'), JSON.stringify({
+      modID: id, name: id, version: '1.0.0', tags: ['map'],
+    }))
+  }
+  const found = flCompat.discover([dir])
+  const loaded = flCompat.loadElectronEntrypoints(found.mods || found, {
+    configDir: dir, rpc: { register() {} }, sendToRenderer() {},
+  }, quietLogger)
+  assert(loaded, 'the mods did not load')
+
+  // No entrypoints here, so reach the API the same way a mod would: through
+  // a mod that has one.
+  fs.mkdirSync(path.join(dir, 'probe'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'probe', 'modinfo.json'), JSON.stringify({
+    modID: 'probe', name: 'probe', version: '1.0.0',
+    electronEntrypoint: 'entry.electron.js',
+  }))
+  // Reported through a file rather than a global: the entrypoint runs in its
+  // own vm context, whose globalThis is the shared mod universe, not this one.
+  const out = path.join(dir, 'probe.json')
+  fs.writeFileSync(path.join(dir, 'probe', 'entry.electron.js'),
+    'const all = fluxloaderAPI.getEnabledMods()\n' +
+    'require("fs").writeFileSync(' + JSON.stringify(out) + ', JSON.stringify({\n' +
+    '  byKey: Object.keys(all).length,\n' +
+    '  byValues: Object.values(all).length,\n' +
+    '  filtered: all.filter(function (m) { return m.info.modID === "alpha" }).length,\n' +
+    '  length: all.length,\n' +
+    '}))\n')
+  const second = flCompat.discover([dir])
+  flCompat.loadElectronEntrypoints(second.mods || second, {
+    configDir: dir, rpc: { register() {} }, sendToRenderer() {},
+  }, quietLogger)
+
+  assert(fs.existsSync(out), 'the probe entrypoint did not run')
+  const probe = JSON.parse(fs.readFileSync(out, 'utf8'))
+  // Object.keys/values must see ONLY the mods - the array methods are added
+  // non-enumerably, or every consumer counting entries would be wrong.
+  assert(probe.byKey === probe.byValues,
+    `keys (${probe.byKey}) and values (${probe.byValues}) disagree`)
+  assert(probe.byKey === 3, 'expected 3 mods, saw ' + probe.byKey)
+  assert(probe.filtered === 1, '.filter() did not find alpha: ' + probe.filtered)
+  assert(probe.length === 3, '.length was wrong: ' + probe.length)
+  return 'keyed for Object.values, iterable for .filter, methods non-enumerable'
+})
+
 check('blocks, tech nodes and upgrades translate into the shapes 0.5.5 takes', () => {
   // The inputs are the exact payloads the portals mod passes to corelib,
   // captured from a real load - not invented shapes that only prove the

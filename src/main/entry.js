@@ -374,8 +374,43 @@ function modSummary() {
       removable: m.removable !== false,
       failed: mine.some((p) => p.severity === 'error'),
       problems: mine.map((p) => p.message),
+      // Dependencies this mod declares that are not installed, or installed
+      // but disabled. A mod dropped for a missing dependency otherwise looks
+      // enabled and healthy in the manager while silently never loading -
+      // the resolver's message is only a warning, so `failed` stays false.
+      missingDependencies: missingDependenciesOf(m),
     }
   })
+}
+
+/**
+ * Which of a mod's declared dependencies cannot be satisfied right now.
+ *
+ * Optional dependencies are reported too, but flagged as such: a mod that
+ * merely integrates with another when present is working correctly without
+ * it, and the manager should say "not installed" rather than "broken".
+ *
+ * @param {any} mod
+ * @returns {Array<{id:string, range:string, optional:boolean, reason:string}>}
+ */
+function missingDependenciesOf(mod) {
+  const deps = Array.isArray(mod && mod.dependencies) ? mod.dependencies : []
+  if (!deps.length) return []
+  const installed = new Map(allMods().map((m) => [m.id, m]))
+  const out = []
+  for (const dep of deps) {
+    const id = typeof dep === 'string' ? dep : dep && dep.id
+    if (!id) continue
+    const optional = !!(dep && dep.optional)
+    const range = (dep && dep.range) || '*'
+    const found = installed.get(id)
+    if (!found) {
+      out.push({ id, range, optional, reason: 'not installed' })
+    } else if (found.enabled === false) {
+      out.push({ id, range, optional, reason: 'installed but disabled' })
+    }
+  }
+  return out
 }
 
 // ------------------------------------------------------------------ the RPC

@@ -184,14 +184,21 @@ function readMod(dir) {
   const warnings = []
   if (info.dependencies && typeof info.dependencies === 'object' && !Array.isArray(info.dependencies)) {
     for (const [depId, raw] of Object.entries(info.dependencies)) {
-      const range = typeof raw === 'string' ? raw : '*'
+      const declared = typeof raw === 'string' ? raw : '*'
+      // Fluxloader marks a soft dependency by prefixing the range with
+      // "optional:" - refinement declares `"portals": "optional:^1.0.8"`,
+      // meaning "integrate with it when it is there". Reading the prefix as
+      // part of the range made it both unparsable AND required, so a mod was
+      // dropped for missing something it never actually needed.
+      const isOptional = /^optional:/i.test(declared.trim())
+      const range = isOptional ? declared.trim().replace(/^optional:/i, '') : declared
       const parsed = semver.parseRange(range)
       if (!parsed.ok) {
         warnings.push(`unparsable range for dependency "${depId}": "${range}" (${parsed.reason})`)
-        dependencies.push({ id: depId, range: '*', raw: String(raw), optional: false })
+        dependencies.push({ id: depId, range: '*', raw: String(raw), optional: isOptional })
         continue
       }
-      dependencies.push({ id: depId, range: range.trim() || '*', raw: String(raw), optional: false })
+      dependencies.push({ id: depId, range: range.trim() || '*', raw: String(raw), optional: isOptional })
     }
   } else if (Array.isArray(info.dependencies)) {
     for (const depId of info.dependencies) {
@@ -628,6 +635,23 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       events: bus,
       addPatch: (file, patch) => addTo(file, patch),
       setPatch: (file, tag, patch) => setTo(file, tag, patch),
+      /**
+       * Whether a patch with this tag is queued for this file, from ANY mod.
+       * Mods use it to detect each other's presence and adapt - refinement
+       * checks for a "petalium" patch to decide what to call an element.
+       * The tag is matched against the id suffix because ids are namespaced
+       * as `<modId>:<tag>` here, while the caller knows only the tag.
+       */
+      patchExists: (file, tag) => {
+        const target = normaliseTarget(file)
+        const wanted = String(tag || '')
+        if (!wanted) return false
+        const list = patches[target] || []
+        return list.some((p) => {
+          const id = String(p.id || '')
+          return id === wanted || id.endsWith(':' + wanted) || id.includes(':' + wanted + ':')
+        })
+      },
       removePatch: (file, tag) => {
         const target = normaliseTarget(file)
         // An override lives in its own map, so clearing one has to look there
@@ -681,10 +705,35 @@ function loadElectronEntrypoints(mods, ctx, logger) {
        */
       getEnabledMods: () => {
         const out = {}
+        const list = []
         for (const m of mods) {
           if (m.enabled === false) continue
-          out[m.id] = modDescriptor(m)
+          const d = modDescriptor(m)
+          out[m.id] = d
+          list.push(d)
         }
+        // Mods disagree about what this returns, and both readings are in use:
+        // custommaploader and skinloader do `Object.values(...)`, while
+        // refinement calls `.filter(...)` straight on the result. Returning
+        // either shape alone breaks the other - refinement died on
+        // "getEnabledMods(...).filter is not a function".
+        //
+        // So the keyed object also carries the iteration methods, bound to the
+        // value list. They are non-enumerable, which keeps `Object.values`,
+        // `Object.keys` and JSON.stringify seeing exactly the mod entries.
+        for (const name of ['filter', 'map', 'forEach', 'find', 'some', 'every', 'slice']) {
+          Object.defineProperty(out, name, {
+            value: (...args) => list[name](...args),
+            enumerable: false, configurable: true, writable: true,
+          })
+        }
+        Object.defineProperty(out, 'length', {
+          value: list.length, enumerable: false, configurable: true, writable: true,
+        })
+        Object.defineProperty(out, Symbol.iterator, {
+          value: () => list[Symbol.iterator](),
+          enumerable: false, configurable: true, writable: true,
+        })
         return out
       },
     }

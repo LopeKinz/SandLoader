@@ -92,31 +92,51 @@ function install(sandboxGlobal, opts) {
   if (corelib.elements && typeof corelib.elements === 'object') {
     // Keep the original object so anything else corelib hung on it survives;
     // only the two registration entry points are replaced.
+    // Each shim captures for the bridge and then still calls corelib's own
+    // register. Only the patch corelib would later emit is superseded - its
+    // registry is what its other modules read back (recipes resolve element
+    // ids through it), and leaving that empty breaks mods that never asked to
+    // be bridged.
+    const previousRegisterElement = typeof corelib.elements.registerElement === 'function'
+      ? corelib.elements.registerElement.bind(corelib.elements)
+      : null
+    const previousRegisterSoil = typeof corelib.elements.registerSoil === 'function'
+      ? corelib.elements.registerSoil.bind(corelib.elements)
+      : null
+
     corelib.elements.registerElement = function registerElement(config) {
       // Mods call this at entrypoint top level, so nothing here may throw -
       // not even a config whose `id` is a getter that throws when read.
       try {
         const r = translate.translateElement(config, matterEnum)
-        if (!r.ok) { note('element', safeId(config), r.reason); return false }
-        captured.elements.push({ id: r.def.id, def: r.def })
-        log && log.debug(`captured element ${r.def.id}`)
-        return true
+        if (!r.ok) { note('element', safeId(config), r.reason) }
+        else {
+          captured.elements.push({ id: r.def.id, def: r.def })
+          log && log.debug(`captured element ${r.def.id}`)
+        }
       } catch (e) {
         note('element', safeId(config), `reading the element definition threw: ${e && e.message}`)
-        return false
       }
+      if (previousRegisterElement) {
+        try { return previousRegisterElement(config) } catch (_e) { return false }
+      }
+      return true
     }
     corelib.elements.registerSoil = function registerSoil(config) {
       try {
         const r = translate.translateSoil(config, matterEnum)
-        if (!r.ok) { note('soil', safeId(config), r.reason); return false }
-        captured.soils.push({ id: r.def.id, def: r.def })
-        log && log.debug(`captured soil ${r.def.id}`)
-        return true
+        if (!r.ok) { note('soil', safeId(config), r.reason) }
+        else {
+          captured.soils.push({ id: r.def.id, def: r.def })
+          log && log.debug(`captured soil ${r.def.id}`)
+        }
       } catch (e) {
         note('soil', safeId(config), `reading the soil definition threw: ${e && e.message}`)
-        return false
       }
+      if (previousRegisterSoil) {
+        try { return previousRegisterSoil(config) } catch (_e) { return false }
+      }
+      return true
     }
   } else {
     reasons.push('corelib published no elements module')
@@ -153,17 +173,21 @@ function install(sandboxGlobal, opts) {
   }
 
   if (corelib.tech && typeof corelib.tech === 'object' && typeof corelib.tech.register === 'function') {
+    const previousTechRegister = corelib.tech.register.bind(corelib.tech)
     corelib.tech.register = function register(config) {
       try {
         const r = translate.translateTech(config)
-        if (!r.ok) { note('tech', safeId(config), r.reason); return false }
-        captured.tech.push({ id: r.def.id, def: r.def })
-        log && log.debug(`captured tech node ${r.def.id}`)
-        return true
+        if (!r.ok) { note('tech', safeId(config), r.reason) }
+        else {
+          captured.tech.push({ id: r.def.id, def: r.def })
+          log && log.debug(`captured tech node ${r.def.id}`)
+        }
       } catch (e) {
         note('tech', safeId(config), `reading the tech definition threw: ${e && e.message}`)
-        return false
       }
+      // Same reasoning as blocks and upgrades: corelib's registry backs its
+      // own `getTech` lookups, so it must still be filled.
+      try { return previousTechRegister(config) } catch (_e) { return false }
     }
   }
 
@@ -178,17 +202,25 @@ function install(sandboxGlobal, opts) {
     }
     for (const [fn, kind] of Object.entries(UPGRADE_FNS)) {
       if (typeof corelib.upgrades[fn] !== 'function') continue
+      const previous = corelib.upgrades[fn].bind(corelib.upgrades)
       corelib.upgrades[fn] = function registerUpgradePart(config) {
         try {
           const r = translate.translateUpgrade(kind, config)
-          if (!r.ok) { note('upgrade', safeId(config), r.reason); return false }
-          captured.upgrades.push({ id: r.def.id, kind, def: r.def })
-          log && log.debug(`captured upgrade ${kind} ${r.def.id}`)
-          return true
+          if (!r.ok) { note('upgrade', safeId(config), r.reason) }
+          else {
+            captured.upgrades.push({ id: r.def.id, kind, def: r.def })
+            log && log.debug(`captured upgrade ${kind} ${r.def.id}`)
+          }
         } catch (e) {
           note('upgrade', safeId(config), `reading the upgrade definition threw: ${e && e.message}`)
-          return false
         }
+        // corelib's own registry still has to be filled. Mods read back what
+        // they registered - refinement calls `upgrades.getUpgrade("portals",
+        // ...)` to rebalance portals' costs when both are installed - and a
+        // capture-only shim left that registry empty, so the lookup returned
+        // undefined and took the whole mod down with it. Capturing replaces
+        // the patch corelib would emit, never its bookkeeping.
+        try { return previous(config) } catch (_e) { return false }
       }
     }
   }
