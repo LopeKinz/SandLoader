@@ -213,7 +213,7 @@ setTimeout(() => {
 
   // ---- content sanity
   const text = doc.body.textContent;
-  ok('states 130/130 self-test', /130\s*\/\s*130/.test(text));
+  ok('states 159/159 self-test', /159\s*\/\s*159/.test(text));
   ok('states 0.5.5 game version', /0\.5\.5/.test(text));
   ok('no lorem/TODO text in copy', !/lorem ipsum|TODO|FIXME/i.test(text));
 
