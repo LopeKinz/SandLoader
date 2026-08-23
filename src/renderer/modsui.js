@@ -793,6 +793,38 @@
       nm.appendChild(warn)
     }
 
+    // A missing REQUIRED dependency means this mod never loads at all, and the
+    // resolver records that only as a warning - so without this the row looks
+    // enabled and healthy while the mod silently does nothing. Optional ones
+    // are shown too but worded as information, since the mod works without
+    // them and only skips the integration.
+    var missing = m.missingDependencies || []
+    if (missing.length) {
+      var required = missing.filter(function (d) { return !d.optional })
+      var optional = missing.filter(function (d) { return d.optional })
+      var describe = function (d) { return d.id + ' (' + d.reason + ')' }
+      if (required.length) {
+        var dep = document.createElement('span')
+        dep.className = 'state warn'
+        var names = required.map(describe).join(', ')
+        dep.textContent = '   ' + tx('mods.depsMissing', 'needs: ' + names, { list: names })
+        dep.title = tx('mods.depsMissingHint',
+          'This mod requires other mods that are not available, so it will not load. ' +
+          'Install or enable them, then reload.')
+        nm.appendChild(dep)
+      }
+      if (optional.length) {
+        var opt = document.createElement('span')
+        opt.className = 'state'
+        var optNames = optional.map(function (d) { return d.id }).join(', ')
+        opt.textContent = '   ' + tx('mods.depsOptional', 'optional: ' + optNames, { list: optNames })
+        opt.title = tx('mods.depsOptionalHint',
+          'This mod can integrate with these when they are installed. ' +
+          'It works without them.')
+        nm.appendChild(opt)
+      }
+    }
+
     var id = document.createElement('div')
     id.className = 'id'
     id.textContent = m.id +

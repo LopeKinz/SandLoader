@@ -374,8 +374,43 @@ function modSummary() {
       removable: m.removable !== false,
       failed: mine.some((p) => p.severity === 'error'),
       problems: mine.map((p) => p.message),
+      // Dependencies this mod declares that are not installed, or installed
+      // but disabled. A mod dropped for a missing dependency otherwise looks
+      // enabled and healthy in the manager while silently never loading -
+      // the resolver's message is only a warning, so `failed` stays false.
+      missingDependencies: missingDependenciesOf(m),
     }
   })
+}
+
+/**
+ * Which of a mod's declared dependencies cannot be satisfied right now.
+ *
+ * Optional dependencies are reported too, but flagged as such: a mod that
+ * merely integrates with another when present is working correctly without
+ * it, and the manager should say "not installed" rather than "broken".
+ *
+ * @param {any} mod
+ * @returns {Array<{id:string, range:string, optional:boolean, reason:string}>}
+ */
+function missingDependenciesOf(mod) {
+  const deps = Array.isArray(mod && mod.dependencies) ? mod.dependencies : []
+  if (!deps.length) return []
+  const installed = new Map(allMods().map((m) => [m.id, m]))
+  const out = []
+  for (const dep of deps) {
+    const id = typeof dep === 'string' ? dep : dep && dep.id
+    if (!id) continue
+    const optional = !!(dep && dep.optional)
+    const range = (dep && dep.range) || '*'
+    const found = installed.get(id)
+    if (!found) {
+      out.push({ id, range, optional, reason: 'not installed' })
+    } else if (found.enabled === false) {
+      out.push({ id, range, optional, reason: 'installed but disabled' })
+    }
+  }
+  return out
 }
 
 // ------------------------------------------------------------------ the RPC
@@ -1064,12 +1099,23 @@ function assemble() {
         sendToRenderer,
         rpc: rpcRegistry,
         isApproved,
+        // Mods that read files out of the shipped game need its asar path.
+        install: runtime.install,
       }, logger.child('fluxloader'))
       for (const e of flLoaded.errors) note(e, 'fluxloader', e.detail && e.detail.mod)
       runtime.flEvents = flLoaded.events
       for (const [target, list] of Object.entries(flLoaded.patches)) {
         addPatches(target, list)
         logger.info(`fluxloader: ${list.length} patch(es) for ${target}`)
+      }
+
+      // Asset overwrites - a map mod's terrain PNGs, a skin mod's sprites -
+      // are served by swapping the file, not by editing its bytes, so they
+      // join the override map rather than the patch list. Official-mod
+      // overrides are assigned wholesale above, so merge instead of replacing.
+      for (const [target, file] of Object.entries(flLoaded.overrides || {})) {
+        runtime.redirects[target] = file
+        logger.info(`fluxloader: ${target} served from ${file}`)
       }
 
       for (const mod of flActive) {
@@ -1176,7 +1222,11 @@ function assemble() {
         const has = (rel) => {
           try { return archive ? archive.has('dist/' + rel) : false } catch (_) { return false }
         }
-        runtime.redirects = official.buildOverrides(officialActive, has, logger.child('official'))
+        // Merge, never replace: fluxloader mods registered their asset
+        // overwrites into this same map earlier in startup, and assigning a
+        // fresh object here would silently discard every one of them.
+        Object.assign(runtime.redirects,
+          official.buildOverrides(officialActive, has, logger.child('official')))
         if (archive) archive.close()
       }
     }
@@ -1411,6 +1461,15 @@ async function initialize(hostAPI) {
     }
 
     assemble()
+
+    // Let the mods' deferred work finish before the interceptor is built from
+    // these maps. A Fluxloader listener may be async - custommaploader awaits
+    // its config to learn which map was picked, and only then registers that
+    // map's image overrides - so those land in a microtask after `assemble()`
+    // has already returned. Reading the maps in the same tick catches only the
+    // synchronous registrations, which is why the chosen map's terrain never
+    // replaced the default's.
+    await new Promise((resolve) => setImmediate(resolve))
 
     if (process.env.SMLN_WATCH === '1' || runtime.settings.watch) {
       runtime.watcher = watcher.createWatcher({

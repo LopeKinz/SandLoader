@@ -194,8 +194,13 @@ function install(opts) {
 
       if (wanted) {
         try {
+          // The type has to come from the file, not from a constant. Every
+          // target used to be a script, so a hardcoded
+          // "application/javascript" was invisible - until a mod patched
+          // index.html, which Chromium then rendered as source text instead
+          // of parsing, leaving the game a wall of markup on a black screen.
           return new Response(transform(rel, filePath), {
-            headers: { 'Content-Type': 'application/javascript; charset=utf-8' },
+            headers: { 'Content-Type': mimeFor(filePath) + '; charset=utf-8' },
           })
         } catch (e) {
           stats.failures++

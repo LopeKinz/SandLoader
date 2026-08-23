@@ -85,7 +85,11 @@ const TYPE_ALIASES = {
   enum: 'enum', select: 'enum', choice: 'enum', dropdown: 'enum', options: 'enum',
 }
 
-const KNOWN_TYPES = new Set(['boolean', 'number', 'integer', 'string', 'enum'])
+// `array` is here because Fluxloader schemas use it and real mods depend on
+// it - autosplitter declares `{"type":"array","default":[1,2]}` for its split
+// points. Rejecting the type threw away that mod's whole config, leaving it
+// running on an empty one.
+const KNOWN_TYPES = new Set(['boolean', 'number', 'integer', 'string', 'enum', 'array'])
 
 /** Work out a spec's type, inferring from `default` when `type` is absent. */
 function resolveType(spec) {
@@ -95,6 +99,9 @@ function resolveType(spec) {
   if (spec && (Array.isArray(spec.values) || Array.isArray(spec.options))) return 'enum'
   if (spec && Object.prototype.hasOwnProperty.call(spec, 'default')) {
     const d = spec.default
+    // Checked before the primitives: an array default with no declared type
+    // would otherwise fall through to 'string' and be rejected as invalid.
+    if (Array.isArray(d)) return 'array'
     if (typeof d === 'boolean') return 'boolean'
     if (typeof d === 'number') return 'number'
     if (typeof d === 'string') return 'string'
@@ -115,6 +122,10 @@ function fallbackDefault(spec) {
     }
     case 'string': return ''
     case 'enum': return spec.values[0]
+    // A fresh array per call: one shared instance would be handed to every
+    // mod that declared an array with no default, and a push by any of them
+    // would be seen by all the others.
+    case 'array': return []
     default: return null
   }
 }
@@ -239,8 +250,31 @@ function coerce(spec, value) {
     case 'integer': return coerceNumber(spec, value, true)
     case 'string': return coerceString(spec, value)
     case 'enum': return coerceEnum(spec, value)
+    case 'array': return coerceArray(value)
     default: return { ok: false, reason: `unsupported config type "${spec.type}"` }
   }
+}
+
+/**
+ * Arrays hold whatever the mod puts in them, so the contents are not
+ * inspected - only that it IS an array, and that it survives a round trip
+ * through the JSON config file.
+ *
+ * A JSON string is accepted because the config UI edits values as text; a
+ * string that parses to something other than an array is rejected rather than
+ * wrapped, since `"5"` meaning `[5]` would be a guess.
+ */
+function coerceArray(value) {
+  if (Array.isArray(value)) return { ok: true, value: value.slice() }
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (text === '') return { ok: true, value: [] }
+    let parsed
+    try { parsed = JSON.parse(text) } catch (e) { return { ok: false, reason: 'must be a JSON array' } }
+    if (!Array.isArray(parsed)) return { ok: false, reason: 'must be a JSON array' }
+    return { ok: true, value: parsed }
+  }
+  return { ok: false, reason: 'must be an array' }
 }
 
 function coerceBoolean(value) {

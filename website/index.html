@@ -982,7 +982,7 @@ li code,p code,td code,dd code{display:inline;white-space:normal;word-break:brea
         <div class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-6.2-8.6"/><path d="M22 4l-9 9-3-3"/></svg></div>
         <h3>Fluxloader mods, unmodified</h3>
         <p>Reads their manifest, runs all three entrypoints, provides <code>fluxloaderAPI</code>,
-        and translates their patches onto its own engine.</p>
+        and bridges their content onto the registries this build actually has.</p>
       </article>
       <article class="card">
         <div class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg></div>
@@ -1116,7 +1116,7 @@ i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pr
           <dl>
             <dt>Steam branch</dt><dd><code>public</code> — the default, what you get unless you opted in</dd>
             <dt>Modding API</dt><dd>Legacy Sandkit — state-first calls such as <code>api.elements.createAt(state, …)</code></dd>
-            <dt>Status here</dt><dd>Built against it, verified against it, 130/130 self-tests green on 0.5.5</dd>
+            <dt>Status here</dt><dd>Built against it, verified against it, 159/159 self-tests green on 0.5.5</dd>
           </dl>
         </div>
         <div class="branch no">
@@ -1352,6 +1352,7 @@ gold  gold: 0 -&gt; 1000 <span class="t-com">(save marked: achievements now disa
       <a href="#/mods#storage" data-nav>Storage &amp; settings</a>
       <h6>Ship it</h6>
       <a href="#/mods#compatible" data-nav>Make it compatible</a>
+      <a href="#/mods#fluxloader" data-nav>Fluxloader mods</a>
       <a href="#/mods#debug" data-nav>Debugging</a>
       <a href="#/mods#package" data-nav>Packaging</a>
     </div></aside>
@@ -1779,8 +1780,13 @@ api.player.getPosition(state)</code></pre>
         </div>
         <div class="mrow y">
           <span class="ic"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
-          <span class="tx"><b>Fluxloader mods</b><span>Manifest, all three entrypoints, <code>fluxloaderAPI</code> and patches, unmodified.</span></span>
+          <span class="tx"><b>Fluxloader mods</b><span>Manifest, all three entrypoints, <code>fluxloaderAPI</code> and config, unmodified. Content is bridged onto the game's own registries.</span></span>
           <span class="pill ok">handled</span>
+        </div>
+        <div class="mrow m">
+          <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
+          <span class="tx"><b>Patches from older mods</b><span>A patch needs anchor text that still occurs in the bundle. Where a build has moved on, the patch is skipped and named in the log — content still registers, behaviour may not.</span></span>
+          <span class="pill" style="background:var(--sand-soft);color:var(--sand);border:1px solid color-mix(in srgb,var(--sand) 34%,transparent)">mod's job</span>
         </div>
         <div class="mrow m">
           <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg></span>
@@ -1798,6 +1804,47 @@ api.player.getPosition(state)</code></pre>
           <span class="pill no">not yet</span>
         </div>
       </div>
+
+      <h2 id="fluxloader">Fluxloader mods</h2>
+      <p>Three mod formats exist and SandLoader loads all three. They share a manifest filename,
+      so they are told apart by which key is present — never by guessing.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Format</th><th>Manifest</th><th>Identifying key</th><th>Run by</th></tr></thead>
+        <tbody>
+          <tr><td>SMLN</td><td><code>smln.mod.json</code></td><td>the filename</td><td>SandLoader</td></tr>
+          <tr><td>Official (Sandkit)</td><td><code>modinfo.json</code></td><td><code>manifestVersion</code></td><td>the game's own loader</td></tr>
+          <tr><td>Fluxloader</td><td><code>modinfo.json</code></td><td><code>modID</code></td><td>SandLoader's compat layer</td></tr>
+        </tbody>
+      </table></div>
+      <p>Writing something new? Use SMLN — it has the permissions model, private storage and hot
+      reload. Publishing to the Workshop? Use the official format, which the game loads on its own.
+      Fluxloader is for compatibility with the mods that already exist.</p>
+
+      <h3>Content bridges, behaviour does not</h3>
+      <p>This one distinction explains most of what people see with older mods.</p>
+      <p><b>Content</b> — elements, soils, machines, tech nodes — is captured as the mod registers
+      it, translated into the shape the current build expects, and handed to the game's own
+      registries. That path survives game updates, because it hangs off the API rather than off
+      text in a bundle.</p>
+      <p><b>Behaviour</b> lives in patches, and a patch needs its anchor text to still occur in
+      the build. Many older mods were written against older Sandustry versions where it no longer
+      does. On 0.5.5 not one of corelib's own patches still matches, which is precisely why its
+      content is bridged instead.</p>
+      <p>So an older mod's machine can appear in the build inventory, place correctly, and still do
+      nothing — the definition registered, the logic did not. Every skipped patch is named in the
+      log with the reason.</p>
+
+      <h3>What the game itself cannot do</h3>
+      <p>Two limits are the game's, not the loader's. Sandustry 0.5.5 contains no function for
+      registering <b>upgrades</b> or <b>recipes</b> anywhere in its bundle, so no loader can add
+      one. A mod declaring them loads fine and SandLoader says plainly in the log that those
+      entries could not be registered, rather than failing quietly.</p>
+
+      <h3>Registries are per-thread</h3>
+      <p>The simulation runs across 18 worker threads, each holding its own copy of the element
+      registry. Writing into a registry object by hand reaches none of them — only the game's own
+      registration path reaches all. This is why a hand-mutated element shows up in the inventory
+      and then throws when you spawn it.</p>
 
       <h2 id="debug">Debugging</h2>
       <p>Everything a mod does is logged with its id attached, to the console and the log file at
@@ -1973,7 +2020,7 @@ docs/         mod authoring guide</code></pre></div>
       <div class="tablewrap"><table><tbody>
         <tr><td><strong>Version</strong></td><td>SandLoader 0.3.4</td></tr>
         <tr><td><strong>Verified against</strong></td><td>Sandustry 0.5.5</td></tr>
-        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">130 / 130 passing</span></td></tr>
+        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">159 / 159 passing</span></td></tr>
         <tr><td><strong>Dependencies</strong></td><td>None</td></tr>
         <tr><td><strong>License</strong></td><td>MIT</td></tr>
       </tbody></table></div>
@@ -2040,7 +2087,18 @@ docs/         mod authoring guide</code></pre></div>
         project — it answers the same interface.</p>
         <p>Library mods work too: <code>corelib</code> and the mods that build on it load in
         dependency order and share one global scope, so a mod can call
-        <code>corelib.elements.registerElement(…)</code> exactly as it does under Fluxloader.</p></div></details>
+        <code>corelib.elements.registerElement(…)</code> exactly as it does under Fluxloader.</p>
+        <p>With one honest caveat, because it decides what actually happens in game:
+        <b>content carries across, behaviour does not always.</b> A mod's elements, soils,
+        machines and tech nodes are translated and handed to the game's own registries, so they
+        appear and work. A mod's <i>patches</i> need anchor text that still occurs in the current
+        bundle — and many older mods were written against older Sandustry builds where that text
+        has since changed. On 0.5.5, none of corelib's own patches still match, which is exactly
+        why SandLoader bridges its content instead of relying on them.</p>
+        <p>The practical shape of that: a machine from an older mod shows up in the build
+        inventory and can be placed, but may do nothing until the mod itself is updated. The log
+        names every patch that failed and why. See the
+        <a href="#/mods#fluxloader" data-nav>Fluxloader section</a> for the detail.</p></div></details>
       <details><summary>Why does it need Node.js?</summary>
         <div class="a"><p>Only to run the installer, which locates your game and writes the
         attach point. The loader itself runs inside the game's own Electron process and needs
@@ -2074,7 +2132,7 @@ docs/         mod authoring guide</code></pre></div>
     </div>
   </div>
   <div class="legal">
-    <span>SandLoader 0.3.4 · verified against Sandustry 0.5.5 · self-test 130/130</span>
+    <span>SandLoader 0.3.4 · verified against Sandustry 0.5.5 · self-test 159/159</span>
     <span>Not affiliated with the authors of Sandustry.</span>
   </div>
 </footer>

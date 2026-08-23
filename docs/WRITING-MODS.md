@@ -946,5 +946,14 @@ whose path would write outside the mods folder.
 ## Fluxloader mods
 
 Existing [Fluxloader](https://fluxloader.app/) mods run unchanged — keep your
-`modinfo.json`, your three entrypoints and the `fluxloaderAPI` global. See the
-README for what is and isn't supported.
+`modinfo.json`, your three entrypoints and the `fluxloaderAPI` global.
+
+[MODDING-REFERENCE.md](MODDING-REFERENCE.md) covers that side in full: the
+`fluxloaderAPI` surface, the events and their arguments, map and skin mods, the
+content bridge that carries corelib registrations onto 0.5.5's own API, and —
+importantly — which parts of an older mod **cannot** be made to work, and why.
+
+The short version of that last point: content bridges, behaviour does not. A
+mod's element and machine definitions get translated and registered; a mod's
+patches need anchor text that still occurs in the current bundle, and on 0.5.5
+most older anchors are gone.

@@ -30,6 +30,8 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Writing mods](docs/WRITING-MODS.md)
+- [Modding reference](docs/MODDING-REFERENCE.md) — how Sandustry looks on the
+  inside, and all three mod formats that run on it
 - [How it works](#how-it-works) · [Project layout](#project-layout)
 - [Security model](#security-model)
 - [When the game updates](#it-re-checks-itself-when-the-game-updates)
@@ -869,6 +871,50 @@ straight from the Steam Workshop.
   sort favourably (`corelib` < `trashelement`); a dependent named earlier in the
   alphabet loaded first and failed. Uses the existing resolver, so version
   ranges and dependency cycles are reported the same way as for SMLN mods.
+
+**Added — Fluxloader content bridge**
+
+Fluxloader mods register content through corelib, which does it by patching the
+game bundle. On Sandustry 0.5.5 that no longer works: **75 of corelib 3.1.3's 92
+patch anchors exist in no shipped file**. The build stopped splitting into
+numbered chunks (`js/336.bundle.js` and friends are never requested), and the
+element registry changed shape — `{name:"Cinder", matterType:X.Slushy}` became
+`{nameKey:"elements|basalt|name", matterType:6}`, a localisation key and a plain
+number. Retargeting the patches would still emit entries the game cannot read.
+
+SandLoader now bridges it instead. `registerElement` and `registerSoil` are
+intercepted, each definition is translated into 0.5.5 shape, and the result goes
+to Sandkit's own `elements.register` / `terrains.register` by way of
+`SMLN.register`. The mod is not modified, corelib is not modified, and only the
+patches the bridge supersedes are dropped — the rest are left untouched.
+
+Registration has to happen in the renderer, not the main process: the simulation
+runs across **18 worker threads**, each with its own copy of the registry, and
+only the game's own registration path reaches all of them.
+
+This also fixes the reason nothing registered at all — corelib defers every
+patch to `fl:pre-scene-loaded`, and SandLoader never emitted that event, so mods
+loaded cleanly and registered nothing.
+
+Three defects surfaced once those 92 patches became real for the first time,
+each fixed:
+
+- The interceptor served every transformed file as `application/javascript`.
+  Every target had been a script, so it was invisible until a mod patched
+  `index.html` — which Chromium then rendered as source text on a black screen.
+  The type now comes from the file.
+- Fluxloader patches defaulted to `required`, so one mod's stale anchor aborted
+  the whole file and took SandLoader's own patches with it.
+- Applying only the patches that still matched was worse: corelib's `colorIdFix`
+  rewrites buffer sizing in one patch and that buffer's readers in the next, so a
+  partial apply left the bundle internally inconsistent. Fluxloader patches are
+  now **one atomic group per mod per file** — a mod's patches all land or none
+  do, and no mod can veto another's or the loader's.
+
+**Recipes remain unavailable.** Sandustry 0.5.5 has no recipe registry —
+`sandkit.structures.recipes` is undefined, no namespace among the 79 matches
+`/recipe/i`, and no module carries an input/output shape. A mod's recipe calls
+are reported with that reason rather than silently doing nothing.
 
 **Added — Install from Workshop**
 

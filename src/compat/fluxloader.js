@@ -34,8 +34,34 @@ const permissions = require('../mods/permissions')
 const semver = require('../mods/semver')
 const configStore = require('../mods/config')
 const fluxMessaging = require('./flux-messaging')
+const flContent = require('./flux-content')
+const gameEnums = require('../game/enums')
 
 const MODINFO = 'modinfo.json'
+
+/**
+ * The matter-type table the content bridge translates against, in BOTH
+ * directions.
+ *
+ * Fluxloader mods name a matter type ("Slushy"); 0.5.5 stores a number (6).
+ * `src/game/enums.js` carries the numeric->name direction that ships with the
+ * loader, so the reverse is derived here rather than asking the renderer for
+ * it: the electron entrypoints run long before a window exists, and an empty
+ * table is not a degraded translation but a total one - every element is
+ * rejected as "matterType does not exist (valid: )" while corelib's patches
+ * are dropped anyway, which is worse than not bridging at all.
+ */
+function matterEnum() {
+  const table = {}
+  const source = (gameEnums && gameEnums.MatterType) || {}
+  for (const [key, value] of Object.entries(source)) {
+    table[key] = value
+    // Only the numeric->name entries need reversing; a table that already
+    // carries both directions (the live game's) passes through unchanged.
+    if (typeof value === 'string' && !(value in table)) table[value] = Number(key)
+  }
+  return table
+}
 
 /** What SMLN reports as its Fluxloader API level. */
 const FLUXLOADER_COMPAT_VERSION = '2.0.0'
@@ -82,7 +108,17 @@ function toSmlnPatch(p, owner, tag) {
       find: re,
       replace: String(p.to),
       expect: 'any',
-      required: p.required !== false,
+      // One atomic group per mod per file. A Fluxloader mod's patches are
+      // written against whichever game build its author had, and they assume
+      // each other: corelib's colorIdFix rewrites buffer sizing in one patch
+      // and the readers of that buffer in the next. Applying the half that
+      // still matches leaves the bundle internally inconsistent - a black
+      // screen - while aborting the file outright would take SandLoader's own
+      // patches down with it. Grouping gives the third option the engine
+      // already implements: this mod's patches for this file all land, or none
+      // of them do, and everyone else's are unaffected.
+      group: `flux:${owner}`,
+      required: p.required === true,
     }
   }
 
@@ -100,7 +136,10 @@ function toSmlnPatch(p, owner, tag) {
     // here, and none wanted.
     replace: () => (to.includes(token) ? to.split(token).join(from) : to),
     expect: 'any',
-    required: p.required !== false,
+    // Same reasoning as the regex branch above: this mod's patches for this
+    // file stand or fall together, and never take another mod's with them.
+    group: `flux:${owner}`,
+    required: p.required === true,
   }
 }
 
@@ -145,14 +184,21 @@ function readMod(dir) {
   const warnings = []
   if (info.dependencies && typeof info.dependencies === 'object' && !Array.isArray(info.dependencies)) {
     for (const [depId, raw] of Object.entries(info.dependencies)) {
-      const range = typeof raw === 'string' ? raw : '*'
+      const declared = typeof raw === 'string' ? raw : '*'
+      // Fluxloader marks a soft dependency by prefixing the range with
+      // "optional:" - refinement declares `"portals": "optional:^1.0.8"`,
+      // meaning "integrate with it when it is there". Reading the prefix as
+      // part of the range made it both unparsable AND required, so a mod was
+      // dropped for missing something it never actually needed.
+      const isOptional = /^optional:/i.test(declared.trim())
+      const range = isOptional ? declared.trim().replace(/^optional:/i, '') : declared
       const parsed = semver.parseRange(range)
       if (!parsed.ok) {
         warnings.push(`unparsable range for dependency "${depId}": "${range}" (${parsed.reason})`)
-        dependencies.push({ id: depId, range: '*', raw: String(raw), optional: false })
+        dependencies.push({ id: depId, range: '*', raw: String(raw), optional: isOptional })
         continue
       }
-      dependencies.push({ id: depId, range: range.trim() || '*', raw: String(raw), optional: false })
+      dependencies.push({ id: depId, range: range.trim() || '*', raw: String(raw), optional: isOptional })
     }
   } else if (Array.isArray(info.dependencies)) {
     for (const depId of info.dependencies) {
@@ -214,6 +260,12 @@ function readMod(dir) {
       capability,
       warnings,
       configSchema: info.configSchema || {},
+      // Fluxloader's `scriptPath` names a module exporting modifySchema(schema),
+      // which the loader calls so a mod can compute its own dropdown options at
+      // load time. Custom Map Loader and Skin Loader both use it to list the
+      // installed maps/skins; without it their dropdowns only ever offer
+      // "default" and the mods look broken.
+      scriptPath: resolve(info.scriptPath),
       manifest: info,
     },
   }
@@ -262,6 +314,81 @@ function discover(roots, logger) {
  * The async/sync split is Fluxloader's: mods call `get`/`set` expecting
  * promises and `getSync` expecting a value, so both are offered.
  */
+/**
+ * Run a mod's `scriptPath` module so it can rewrite its own config schema.
+ *
+ * Fluxloader lets a mod compute options at load time: Custom Map Loader lists
+ * every installed mod tagged "map", Skin Loader every mod tagged "skin". The
+ * module is ESM (`export function modifySchema(schema)`), so the export keyword
+ * is stripped and the function is called in a context carrying this mod's
+ * `fluxloaderAPI` - the same one its entrypoint gets, so `getEnabledMods()`
+ * inside the script sees the real mod list.
+ *
+ * A script that throws costs that mod its computed options and nothing else:
+ * the schema it was handed is left as the manifest declared it.
+ *
+ * @param {any} mod
+ * @param {object} schema  mutated in place
+ * @param {any} api        the mod's fluxloaderAPI
+ * @param {any} logger
+ */
+/**
+ * One mod in the shape Fluxloader hands to `getEnabledMods()` and to the
+ * `fl:mod-loaded` / `fl:mod-unloaded` listeners: `{info, path}`, where `info`
+ * is the raw modinfo.json plus the fields Fluxloader guarantees.
+ *
+ * Both callers go through here so they cannot drift apart: mods discover each
+ * other by tag through the event and then look the same mod up in the map, and
+ * a descriptor that differed between the two would make that lookup miss.
+ * `info.tags` is always an array even when the manifest omits it, because
+ * every consumer calls `.includes()` on it straight away.
+ *
+ * @param {any} mod
+ * @returns {{info: object, path: string}}
+ */
+function modDescriptor(mod) {
+  const info = (mod.manifest && typeof mod.manifest === 'object') ? mod.manifest : {}
+  return {
+    info: Object.assign({}, info, {
+      modID: mod.id,
+      name: mod.name || mod.id,
+      version: mod.version,
+      tags: Array.isArray(info.tags) ? info.tags : [],
+    }),
+    path: mod.dir,
+  }
+}
+
+function runSchemaScript(mod, schema, api, logger) {
+  if (!mod.scriptPath) return schema
+  try {
+    const source = fs.readFileSync(mod.scriptPath, 'utf8')
+    const sandbox = {
+      console, fluxloaderAPI: api, module: { exports: {} },
+      require, path, fs, JSON, Object, Array, String, Number, Boolean,
+    }
+    sandbox.globalThis = sandbox
+    sandbox.exports = sandbox.module.exports
+    vm.createContext(sandbox)
+    // `export function modifySchema` is not valid in a classic script, and the
+    // scripts are small and self-contained, so the keyword is simply dropped
+    // rather than standing up an ESM loader for one function.
+    const classic = source.replace(/^\s*export\s+/gm, '')
+    new vm.Script(classic, { filename: mod.scriptPath }).runInContext(sandbox)
+    const fn = sandbox.modifySchema ||
+      (sandbox.module.exports && sandbox.module.exports.modifySchema)
+    if (typeof fn !== 'function') {
+      logger.warn(`${mod.id}: scriptPath exports no modifySchema(), leaving the schema as declared`)
+      return schema
+    }
+    fn(schema)
+    logger.debug(`${mod.id}: schema script applied`)
+  } catch (e) {
+    logger.warn(`${mod.id}: schema script failed, leaving the schema as declared: ${e && e.message}`)
+  }
+  return schema
+}
+
 function makeConfigStore(configDir, mod, logger) {
   const normalised = configStore.normaliseSchema(mod.configSchema)
   if (!normalised.ok) {
@@ -273,7 +400,53 @@ function makeConfigStore(configDir, mod, logger) {
   return {
     schema: mod.configSchema,
     store,
-    async get(key) { return store.getSync(key) },
+    /**
+     * Fluxloader's `get` is awaited by some mods and used directly by others:
+     * corelib opens with `const config = fluxloaderAPI.modConfig.get("corelib")`
+     * and skinloader passes the result straight into `data.config`, then reads
+     * `config.skin`. A plain Promise satisfies the first group and silently
+     * gives the second `undefined` for every key - skinloader dies on
+     * "Skin 'undefined' could not be found".
+     *
+     * So the value is returned with a `then` bolted on: reading a property
+     * works, and awaiting works, because a thenable is all `await` requires.
+     */
+    get(key) {
+      // Fluxloader mods call `get(<their own modID>)` to fetch the WHOLE config
+      // object, not a key inside it - corelib opens with
+      // `get("corelib")`, skinloader with `get("skinloader")`, custommaploader
+      // awaits `get("custommaploader")`. Treating that as a key name returns
+      // undefined and the mod reads `config.skin` off nothing, dying with
+      // "Skin 'undefined' could not be found". A key that happens to equal the
+      // mod id is not a real ambiguity: no schema here declares one.
+      const value = (key == null || key === mod.id) ? store.getAllSync() : store.getSync(key)
+      if (value === null || typeof value !== 'object') {
+        // A primitive cannot carry a `then`, so hand back a resolved promise
+        // that also coerces sensibly - mods read objects here in practice.
+        return Promise.resolve(value)
+      }
+      if (typeof value.then === 'function') return value
+      // Mods split on whether they await this: custommaploader does,
+      // skinloader reads `.skin` straight off the return. So the object is
+      // handed back as itself AND made awaitable.
+      //
+      // What `then` resolves WITH matters more than it looks. The promise
+      // machinery unwraps a thenable by calling its `then`, and if that
+      // resolves with the same thenable it unwraps again - forever, allocating
+      // a promise per turn until the heap dies. That is not a hypothetical: it
+      // took the whole game down at startup, after every synchronous phase had
+      // already logged success, because one mod awaited its config.
+      //
+      // Resolving with a plain copy terminates the unwrapping: the copy has no
+      // `then`, so the machinery accepts it as a final value.
+      const plain = Object.assign({}, value)
+      return Object.defineProperty(value, 'then', {
+        value: (onFulfilled, onRejected) => Promise.resolve(plain).then(onFulfilled, onRejected),
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      })
+    },
     async set(key, value) {
       const r = store.set(key, value)
       if (!r.ok) logger.warn(`${mod.id}: rejected config "${key}": ${r.error.message}`)
@@ -297,6 +470,23 @@ function makeConfigStore(configDir, mod, logger) {
 function loadElectronEntrypoints(mods, ctx, logger) {
   /** @type {Record<string, any[]>} */
   const patches = Object.create(null)
+  /**
+   * dist-relative path -> absolute replacement file, from `setPatch(...,
+   * {type:'overwrite', file})`. Asset swaps, not text edits: this is how a map
+   * mod supplies its terrain PNGs and a skin mod its sprites.
+   *
+   * Kept apart from `patches` because the patch engine is a text engine. A PNG
+   * pushed through it is read as UTF-8, mangled by the decode, and matched
+   * against anchors it cannot contain - which is why the skin silently failed
+   * to apply and the map images never swapped at all.
+   * @type {Record<string, string>}
+   */
+  const overrides = Object.create(null)
+  // Set the moment corelib publishes `globalThis.corelib`, from inside the
+  // mods loop below - see the comment at the install site for why it cannot
+  // wait until the loop has finished.
+  let content = null
+  const matterTable = ctx.matterEnum || matterEnum()
   const errors = []
   const listeners = Object.create(null)
 
@@ -383,6 +573,24 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
     function setTo(file, tag, patch) {
       const target = normaliseTarget(file)
+
+      // An overwrite names a replacement file rather than describing an edit,
+      // so it belongs in the override map the interceptor already serves from.
+      if (patch && String(patch.type || '').toLowerCase() === 'overwrite') {
+        if (typeof patch.file !== 'string' || !patch.file) {
+          modLog.warn(`setPatch("${file}", "${tag}") ignored: an overwrite needs a "file"`)
+          return
+        }
+        if (!fs.existsSync(patch.file)) {
+          modLog.warn(`setPatch("${file}", "${tag}") ignored: ${patch.file} does not exist`)
+          return
+        }
+        overrides[target] = patch.file
+        tags.set(tag, target)
+        modLog.debug(`override: ${target} -> ${patch.file}`)
+        return
+      }
+
       const list = patches[target] || (patches[target] = [])
       const id = `${mod.id}:${tag}`
       const i = list.findIndex((p) => p.id === id)
@@ -427,8 +635,29 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       events: bus,
       addPatch: (file, patch) => addTo(file, patch),
       setPatch: (file, tag, patch) => setTo(file, tag, patch),
+      /**
+       * Whether a patch with this tag is queued for this file, from ANY mod.
+       * Mods use it to detect each other's presence and adapt - refinement
+       * checks for a "petalium" patch to decide what to call an element.
+       * The tag is matched against the id suffix because ids are namespaced
+       * as `<modId>:<tag>` here, while the caller knows only the tag.
+       */
+      patchExists: (file, tag) => {
+        const target = normaliseTarget(file)
+        const wanted = String(tag || '')
+        if (!wanted) return false
+        const list = patches[target] || []
+        return list.some((p) => {
+          const id = String(p.id || '')
+          return id === wanted || id.endsWith(':' + wanted) || id.includes(':' + wanted + ':')
+        })
+      },
       removePatch: (file, tag) => {
         const target = normaliseTarget(file)
+        // An override lives in its own map, so clearing one has to look there
+        // too - skinloader calls this for every sprite when the player picks
+        // "default", and a leftover override would pin the old skin forever.
+        if (overrides[target]) delete overrides[target]
         const list = patches[target] || []
         const id = `${mod.id}:${tag}`
         const i = list.findIndex((p) => p.id === id)
@@ -450,10 +679,77 @@ function loadElectronEntrypoints(mods, ctx, logger) {
        * lives under the same root as the mod asking for it.
        */
       getModsPath: () => path.dirname(mod.dir),
+
+      /**
+       * The game's asset root inside app.asar - the `dist` directory, not the
+       * archive root. Mods join it with a subfolder and read through `fs`,
+       * which Electron resolves inside an asar transparently.
+       *
+       * The `dist` segment is the whole point: Custom Map Loader asks for
+       * `getGameAsarPath() + "/img"`, and the images live at `dist/img`
+       * inside the archive. Returning the archive root sends it to `/img`,
+       * which does not exist, and every stock map file fails to load with
+       * "Could not find map file".
+       */
+      getGameAsarPath: () => (ctx.install && ctx.install.asar
+        ? path.join(ctx.install.asar, 'dist')
+        : ''),
+
+      /**
+       * Every enabled mod, keyed by id, in the shape Fluxloader hands out:
+       * `{[id]: {info, path}}` where `info` is the raw modinfo.json. Mods use
+       * it to discover each other by tag - a map loader collects everything
+       * tagged "map", a skin loader everything tagged "skin" - so `info.tags`
+       * has to be present even when a manifest omitted it, or the filter throws
+       * instead of simply finding nothing.
+       */
+      getEnabledMods: () => {
+        const out = {}
+        const list = []
+        for (const m of mods) {
+          if (m.enabled === false) continue
+          const d = modDescriptor(m)
+          out[m.id] = d
+          list.push(d)
+        }
+        // Mods disagree about what this returns, and both readings are in use:
+        // custommaploader and skinloader do `Object.values(...)`, while
+        // refinement calls `.filter(...)` straight on the result. Returning
+        // either shape alone breaks the other - refinement died on
+        // "getEnabledMods(...).filter is not a function".
+        //
+        // So the keyed object also carries the iteration methods, bound to the
+        // value list. They are non-enumerable, which keeps `Object.values`,
+        // `Object.keys` and JSON.stringify seeing exactly the mod entries.
+        for (const name of ['filter', 'map', 'forEach', 'find', 'some', 'every', 'slice']) {
+          Object.defineProperty(out, name, {
+            value: (...args) => list[name](...args),
+            enumerable: false, configurable: true, writable: true,
+          })
+        }
+        Object.defineProperty(out, 'length', {
+          value: list.length, enumerable: false, configurable: true, writable: true,
+        })
+        Object.defineProperty(out, Symbol.iterator, {
+          value: () => list[Symbol.iterator](),
+          enumerable: false, configurable: true, writable: true,
+        })
+        return out
+      },
     }
 
     // Real cross-context messaging and IPC, on SandLoader's existing
     // transports. See src/compat/flux-messaging.js.
+    // Let the mod compute its own schema options now that its API exists, then
+    // rebuild the config store on the result - the store bakes defaults and
+    // validation from the schema, so a dropdown gaining options afterwards
+    // would still reject every one of them.
+    if (mod.scriptPath) {
+      const grown = runSchemaScript(mod, JSON.parse(JSON.stringify(mod.configSchema || {})), api, modLog)
+      mod.configSchema = grown
+      api.modConfig = makeConfigStore(ctx.configDir, mod, modLog)
+    }
+
     Object.assign(api, fluxMessaging.electronSurface({
       modId: mod.id,
       logger: modLog,
@@ -530,6 +826,21 @@ function loadElectronEntrypoints(mods, ctx, logger) {
 
       new vm.Script(source, { filename: entry }).runInContext(sandbox)
 
+      // Swap corelib's content modules for capturing shims the instant corelib
+      // publishes itself, before the next mod in this loop runs. A dependent
+      // mod calls `corelib.elements.registerElement(...)` at its OWN
+      // entrypoint's top level - not from the deferred event - so installing
+      // after the loop would let those calls reach corelib's original registry,
+      // where their only fate is to become the stale patches this bridge
+      // exists to replace.
+      if (!content && universe.corelib) {
+        content = flContent.install(universe, {
+          modId: 'corelib',
+          logger: logger.child('content'),
+          matterEnum: matterTable,
+        })
+      }
+
       const exported = moduleObj.exports
       if (exported && typeof exported.onLoad === 'function') exported.onLoad()
       modLog.info(`electron entrypoint loaded (${Object.keys(patches).length} patched file(s) so far)`)
@@ -539,8 +850,96 @@ function loadElectronEntrypoints(mods, ctx, logger) {
     }
   }
 
+  // Announce every enabled mod. Loader mods discover the content they serve
+  // through this event rather than by scanning the folder themselves:
+  // custommaploader collects mods tagged "map" here, skinloader those tagged
+  // "skin". Without it they know only their own built-in default, and the
+  // player's installed maps and skins never appear.
+  //
+  // Fired after the whole loop, not inside it, for two reasons: a mod that is
+  // pure assets has no electron entrypoint and would be skipped by the loop's
+  // `continue`, and a listener registered by a mod loaded late must still see
+  // the mods that loaded before it - emitting per-mod mid-loop would deliver
+  // each mod only to the listeners that happened to already exist.
+  bus.registerEvent('fl:mod-loaded')
+  for (const mod of mods) {
+    if (mod.enabled === false) continue
+    bus.emit('fl:mod-loaded', modDescriptor(mod))
+  }
+
   bus.emit('fl:all-mods-loaded')
-  return { patches, errors, events: bus }
+
+  // Library mods do not queue their patches while their entrypoint runs; they
+  // defer until a scene is about to load, because that is the first moment
+  // Fluxloader has a game to patch. corelib is the case that matters - its
+  // entrypoint only calls `registerElement`/`registerRecipe` into an in-memory
+  // registry, and every one of its ~90 patches is emitted later from
+  // `fl:pre-scene-loaded` -> `corelib.applyPatches()`.
+  //
+  // SandLoader has no scene of its own to hang that on: it transforms the
+  // bundle once, on the way to disk, and the caller harvests `patches`
+  // synchronously the moment this function returns. So the event has to fire
+  // here, after every entrypoint has registered its content and its listener
+  // but before anyone reads the patch set. Without it the listener simply
+  // never runs, the registry is never translated into patches, and mods load
+  // cleanly while registering nothing - the game ships unmodified.
+  //
+  // Declared before firing so a mod using `trigger`/`isEventRegistered`
+  // (rather than the tolerant `tryTrigger`) sees a known event, and emitted
+  // via the bus directly so a mod that registered no listener is not an error.
+  // If corelib never loaded, install now so `content` is always defined; it
+  // simply reports that no corelib global was found.
+  if (!content) {
+    content = flContent.install(universe, {
+      modId: 'corelib',
+      logger: logger.child('content'),
+      matterEnum: matterTable,
+    })
+  }
+  for (const reason of content.reasons) logger.debug(`content bridge: ${reason}`)
+
+  // Sandkit lives in the renderer, so what was captured here has to cross the
+  // process boundary. corelib already crosses it the same way for its own
+  // registry, so this reuses the existing RPC rather than inventing a
+  // transport. The handler reads `content.captured` when it is called, not
+  // now, so registrations that arrive later - from the deferred event below -
+  // are included.
+  if (ctx.rpc && typeof ctx.rpc.register === 'function') {
+    ctx.rpc.register('smln:flux-content', () => ({
+      elements: content.captured.elements,
+      soils: content.captured.soils,
+      blocks: content.captured.blocks,
+      tech: content.captured.tech,
+      upgrades: content.captured.upgrades,
+      unsupported: content.captured.unsupported,
+    }))
+  }
+
+  bus.registerEvent('fl:pre-scene-loaded')
+  // The scene name is not decoration: listeners branch on it. custommaploader
+  // only resolves the configured map into `loadedMapData` when the scene is
+  // "game" or "intro", and emitting with no argument left every such listener
+  // in its no-op branch - the mod loaded, reported success, and then answered
+  // its own renderer half with `undefined`, which crashed on `.valid`.
+  // "game" is the scene SandLoader is actually preparing the bundle for.
+  bus.emit('fl:pre-scene-loaded', 'game')
+
+  // Drop only the patches the bridge now supplies through the game's own
+  // registry. Everything else corelib queued is left exactly as it was.
+  let dropped = 0
+  for (const target of Object.keys(patches)) {
+    const before = patches[target].length
+    patches[target] = patches[target].filter((p) => !flContent.shouldSuppress(p.id))
+    dropped += before - patches[target].length
+    if (!patches[target].length) delete patches[target]
+  }
+  if (dropped) {
+    logger.info(`content bridge: ${dropped} superseded patch(es) dropped, ` +
+      `${content.captured.elements.length} element(s) and ` +
+      `${content.captured.soils.length} soil(s) captured for the game's own registry`)
+  }
+
+  return { patches, overrides, errors, events: bus, content: content.captured }
 }
 
 /**
@@ -657,6 +1056,7 @@ ${source}
 }
 
 module.exports = {
+  matterEnum,
   discover,
   readMod,
   toSmlnPatch,

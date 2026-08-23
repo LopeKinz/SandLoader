@@ -246,6 +246,34 @@ check('patch engine leaves source intact on a failed required patch', () => {
 })
 
 // ------------------------------------------------------- fluxloader compat
+check('one mod\'s stale patches cannot break the bundle or veto anyone else', () => {
+  // corelib's patches assume each other: colorIdFix rewrites buffer sizing in
+  // one patch and that buffer's readers in the next. On a game build where
+  // only half still match, applying that half leaves the bundle internally
+  // inconsistent - the game boots to a black screen. Aborting the file instead
+  // would drop SandLoader's own patches. So a mod's patches for a file are one
+  // atomic group: all of them land, or none do, and no other mod is affected.
+  const source = 'KEEP_ME alpha BETA gamma'
+  const stale = flCompat.toSmlnPatch({ type: 'replace', from: 'alpha', to: 'ALPHA' }, 'moda', 'p1')
+  const alsoStale = flCompat.toSmlnPatch(
+    { type: 'replace', from: 'NOT_PRESENT', to: 'x' }, 'moda', 'p2')
+  const other = flCompat.toSmlnPatch({ type: 'replace', from: 'gamma', to: 'GAMMA' }, 'modb', 'p1')
+  const own = { id: 'smln:keep', owner: 'smln', description: 'loader patch',
+    find: 'KEEP_ME', replace: 'KEPT', expect: 'any', required: true }
+
+  const r = engine.apply(source, [stale, alsoStale, other, own], { logger: testLogger() })
+  assert(r.ok, 'the file was aborted by a third-party mod: ' + (r.error && r.error.message))
+
+  // moda's half-matching pair must land as a unit - meaning not at all.
+  assert(!r.source.includes('ALPHA'),
+    'a mod applied half of its patches, leaving the file inconsistent: ' + r.source)
+  // modb is independent and still matches, so it applies.
+  assert(r.source.includes('GAMMA'), 'an unrelated mod lost its patch: ' + r.source)
+  // SandLoader's own patch must never be collateral damage.
+  assert(r.source.includes('KEPT'), 'the loader lost its own patch: ' + r.source)
+  return 'stale group skipped whole, other mod and loader unaffected'
+})
+
 check('fluxloader patch: plain replace', () => {
   const p = flCompat.toSmlnPatch({ type: 'replace', from: 'abc', to: 'xyz' }, 'demo', 't1')
   const r = engine.apply('--abc--', [p])
@@ -285,6 +313,156 @@ check('fluxloader target aliases normalise', () => {
   assert(n('dist/js/bundle.js') === 'js/bundle.js', 'dist path')
   assert(n('simulation-worker.js') === 'js/simulation-worker.js', 'sim worker')
   return 'bundle + workers'
+})
+
+// --------------------------------------------- fluxloader content translation
+const flTranslate = require('../src/compat/flux-translate')
+
+/** The live 0.5.5 MatterType enum, both directions, as the game exposes it. */
+const LIVE_MATTER = {
+  1: 'Solid', 2: 'Liquid', 3: 'Particle', 4: 'Gas',
+  5: 'Static', 6: 'Slushy', 7: 'Wisp', 8: 'Powder',
+  Solid: 1, Liquid: 2, Particle: 3, Gas: 4,
+  Static: 5, Slushy: 6, Wisp: 7, Powder: 8,
+}
+
+check('matter type names map to the live numeric ids', () => {
+  const r = flTranslate.matterTypeToNumber('Slushy', LIVE_MATTER)
+  assert(r.ok, 'Slushy was rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value === 6, 'Slushy mapped to ' + r.value + ', not 6')
+  assert(flTranslate.matterTypeToNumber('Solid', LIVE_MATTER).value === 1, 'Solid is not 1')
+  return 'Slushy -> 6, Solid -> 1'
+})
+
+check('an unmappable matter type is reported, never defaulted', () => {
+  // Silently coercing to Solid would put the element in the wrong physics
+  // class, which is far worse than refusing it with a reason.
+  const r = flTranslate.matterTypeToNumber('Plasma', LIVE_MATTER)
+  assert(!r.ok, 'an unknown matter type was accepted')
+  assert(/Plasma/.test(r.reason), 'the reason does not name the bad value: ' + r.reason)
+  assert(/Solid/.test(r.reason), 'the reason does not list the valid names: ' + r.reason)
+  return r.reason
+})
+
+check('element name becomes the localisation key the build expects', () => {
+  // 0.5.5 entries carry nameKey, not name: {nameKey:"elements|sand|name"}.
+  assert(flTranslate.nameKeyFor('Trash') === 'elements|trash|name',
+    'wrong key: ' + flTranslate.nameKeyFor('Trash'))
+  assert(flTranslate.nameKeyFor('CompressedTrash') === 'elements|compressedTrash|name',
+    'camelCase id was not preserved: ' + flTranslate.nameKeyFor('CompressedTrash'))
+  return 'Trash -> elements|trash|name'
+})
+
+check('rgba colours convert to the packed metaColor integer', () => {
+  const r = flTranslate.rgbaToMetaColor([88, 74, 74, 255])
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value === (88 << 16) + (74 << 8) + 74, 'wrong packing: ' + r.value)
+  const bad = flTranslate.rgbaToMetaColor([88, 74])
+  assert(!bad.ok, 'a two-element colour was accepted')
+  return 'rgba packed to ' + r.value
+})
+
+check('soil colorHSL converts to rgba', () => {
+  const r = flTranslate.hslToRgba([306, 6, 37])
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.value.length === 4, 'expected 4 channels, got ' + r.value.length)
+  assert(r.value.every((c) => c >= 0 && c <= 255), 'channel out of range: ' + r.value.join(','))
+  assert(r.value[3] === 255, 'alpha should default to opaque, got ' + r.value[3])
+  return 'hsl(306,6,37) -> rgba(' + r.value.join(',') + ')'
+})
+
+check('a corelib element definition translates to a 0.5.5 definition', () => {
+  // This is trashelement's real first registration, copied from its source.
+  const r = flTranslate.translateElement({
+    id: 'Trash',
+    name: 'Trash',
+    colors: [[88, 74, 74, 255], [108, 74, 74, 255]],
+    density: 150,
+    interactsWithHoverText: ['⬇️'],
+    matterType: 'Slushy',
+    addToFilterList: true,
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.def.id === 'Trash', 'id lost')
+  assert(r.def.matterType === 6, 'matterType is ' + r.def.matterType + ', not the numeric 6')
+  assert(r.def.nameKey === 'elements|trash|name', 'nameKey is ' + r.def.nameKey)
+  assert(typeof r.def.metaColor === 'number', 'metaColor is not a number')
+  // Colours are stored the way the game stores them: {variants: [[r,g,b,a]]}.
+  assert(r.def.colors && r.def.colors.variants.length === 2, 'colours were dropped')
+  return 'Trash -> matterType 6, ' + r.def.nameKey
+})
+
+check('element colours use the shape the renderer actually reads', () => {
+  // The game stores colours as {variants: [[r,g,b,a], ...]} and its draw path
+  // indexes .variants directly. Sandkit's installer is a bare assignment, so a
+  // flat Fluxloader array is stored as-is and spawning the element throws
+  // "Cannot read properties of undefined (reading '3')" - registered but
+  // unusable, which is worse than not registered.
+  const r = flTranslate.translateElement({
+    id: 'Trash', name: 'Trash', colors: [[88, 74, 74, 255], [108, 74, 74, 255]],
+    density: 150, matterType: 'Slushy',
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(!Array.isArray(r.def.colors), 'colours were left as a bare array')
+  assert(Array.isArray(r.def.colors.variants), 'colours have no .variants')
+  assert(r.def.colors.variants.length === 2, 'a colour variant was lost')
+  assert(r.def.metaColor === (88 << 16) + (74 << 8) + 74,
+    'metaColor no longer derives from the first colour: ' + r.def.metaColor)
+
+  // A mod that already uses the wrapped shape must not be double-wrapped.
+  const already = flTranslate.translateElement({
+    id: 'Pre', name: 'Pre', colors: { variants: [[1, 2, 3, 255]] },
+    density: 10, matterType: 'Solid',
+  }, LIVE_MATTER)
+  assert(already.ok, 'wrapped input rejected: ' + (already.ok ? '' : already.reason))
+  assert(Array.isArray(already.def.colors.variants), 'wrapped input lost its variants')
+  assert(!already.def.colors.variants[0].variants, 'colours were double-wrapped')
+
+  // Soils land in the same scheme and need the same shape.
+  const soil = flTranslate.translateSoil({
+    id: 'TrashSoil', name: 'Trashsoil', colorHSL: [306, 6, 37], outputElement: 'Trash',
+  }, LIVE_MATTER)
+  assert(soil.ok, 'soil rejected: ' + (soil.ok ? '' : soil.reason))
+  assert(soil.def.colors && Array.isArray(soil.def.colors.variants),
+    'soil colours are not in variants shape')
+  return 'colours wrapped as {variants}, no double-wrapping, soils too'
+})
+
+check('an element with a bad matter type is refused with a reason', () => {
+  const r = flTranslate.translateElement({
+    id: 'Weird', name: 'Weird', colors: [[1, 2, 3, 255]], density: 10, matterType: 'Plasma',
+  }, LIVE_MATTER)
+  assert(!r.ok, 'a bad matterType was accepted')
+  assert(/Plasma/.test(r.reason), 'reason does not name the value: ' + r.reason)
+  return r.reason
+})
+
+check('an element without an id is refused', () => {
+  const r = flTranslate.translateElement({ name: 'No Id', density: 1 }, LIVE_MATTER)
+  assert(!r.ok, 'an element with no id was accepted')
+  assert(/id/.test(r.reason), 'reason does not mention the id: ' + r.reason)
+  return r.reason
+})
+
+check('a corelib soil definition translates, including its HSL colour', () => {
+  // trashelement's real soil registration.
+  const r = flTranslate.translateSoil({
+    id: 'TrashSoil',
+    name: 'Trashsoil',
+    hp: 3,
+    interactsWithHoverText: ['🔨💥'],
+    chanceForOutput: 0.7,
+    outputElement: 'Trash',
+    colorHSL: [306, 6, 37],
+    onlyRocketBreakable: false,
+  }, LIVE_MATTER)
+  assert(r.ok, 'rejected: ' + (r.ok ? '' : r.reason))
+  assert(r.def.id === 'TrashSoil', 'id lost')
+  assert(r.def.colors && Array.isArray(r.def.colors.variants) &&
+    r.def.colors.variants[0].length === 4, 'colorHSL was not converted to rgba')
+  assert(r.def.hp === 3, 'hp lost')
+  assert(r.def.outputElement === 'Trash', 'outputElement lost')
+  return 'TrashSoil -> rgba(' + r.def.colors.variants[0].join(',') + ')'
 })
 
 check('fluxloader modinfo is read into an SMLN mod', () => {
@@ -467,7 +645,15 @@ check('a mod that depends on corelib gets its content into the game', () => {
     configDir: coreDir, rpc: { register: (ch, fn) => { handlers[ch] = fn } },
   }, testLogger())
   assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
-  out.events.emit('fl:pre-scene-loaded')
+
+  // Deliberately NOT emitting fl:pre-scene-loaded here. This test used to fire
+  // it by hand, which is what let the real bug through: corelib registers no
+  // patches from its entrypoint and defers all of them to that event, and
+  // nothing in SandLoader ever emitted it. The test emitted it, so the test
+  // passed while every Fluxloader mod silently registered no content at all.
+  // loadElectronEntrypoints now fires it before returning, exactly as the
+  // production path in src/main/entry.js needs, so the harvest below sees the
+  // same patch set the loader will.
 
   // corelib's patches must stay corelib's. They are queued from a deferred
   // callback, so a shared-but-mutable fluxloaderAPI filed them all under
@@ -478,17 +664,53 @@ check('a mod that depends on corelib gets its content into the game', () => {
     }
   }
 
-  // The registered element has to reach the text that gets patched in. The
-  // replacement is a function for token-style patches, so ask it, rather than
-  // string-searching the patch object, which would silently pass.
-  let found = false
-  for (const p of out.patches['js/bundle.js'] || []) {
-    if (!String(p.id).includes('elements:elementRegistry')) continue
-    const text = typeof p.replace === 'function' ? p.replace(p.find) : String(p.replace || '')
-    if (text.includes('Trash')) found = true
-  }
-  assert(found, 'the dependent element never reached the element registry patch')
-  return 'globals shared, patches attributed to corelib, element injected'
+  // The dependent's element must reach somewhere real. It used to be asserted
+  // against corelib's `elements:elementRegistry` patch, but that patch is one
+  // the content bridge now supersedes - it is written for a game build this
+  // one is not, so on 0.5.5 it is dropped and the element travels through the
+  // bridge to the game's own registry instead. The intent of the check is
+  // unchanged: a mod that registers content via corelib must not lose it.
+  const captured = out.content.elements.map((e) => e.id)
+  assert(captured.includes('Trash'),
+    'the dependent element never reached the registry: [' + captured.join(', ') + ']')
+  return 'globals shared, patches attributed to corelib, element captured for the game registry'
+})
+
+check('deferred patch registration is triggered by the loader, not the caller', () => {
+  // A mod may register nothing while its entrypoint runs and queue everything
+  // from an event instead - which is what corelib does, and what every mod
+  // built on it inherits. The loader owes those mods the event; if it never
+  // fires, they load without error and register nothing, and the game ships
+  // unpatched. This asserts on a synthetic mod so it keeps testing the loader
+  // even when corelib is not installed.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-deferred-'))
+  fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
+    modID: 'deferred', version: '1.0.0', electronEntrypoint: 'entry.electron.js',
+  }))
+  // Nothing is queued at load time - only a listener is registered.
+  fs.writeFileSync(path.join(dir, 'entry.electron.js'),
+    'fluxloaderAPI.events.on("fl:pre-scene-loaded", () => {\n' +
+    '  fluxloaderAPI.setPatch("js/bundle.js", "deferred:late", {\n' +
+    '    type: "replace", from: "ANCHOR", to: "PATCHED" })\n' +
+    '})\n')
+
+  const r = flCompat.readMod(dir)
+  assert(r.ok, 'synthetic manifest rejected: ' + (r.ok ? '' : r.error.message))
+  const out = flCompat.loadElectronEntrypoints([r.mod], {
+    configDir: dir, rpc: { register: () => {} },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+
+  // The patch set is read exactly as src/main/entry.js reads it: straight off
+  // the return value, with no event emitted by this test.
+  const list = out.patches['js/bundle.js'] || []
+  assert(list.length === 1,
+    `a mod that defers registration to fl:pre-scene-loaded queued ${list.length} patch(es), not 1 ` +
+    '- the loader did not fire the event before returning its patches')
+  assert(list[0].id === 'deferred:deferred:late', 'wrong patch id: ' + list[0].id)
+  assert(out.events.isEventRegistered('fl:pre-scene-loaded'),
+    'fl:pre-scene-loaded fired without being declared, so trigger() on it would throw')
+  return 'deferred patch queued without the caller emitting the event'
 })
 
 check('corelib loads and registers its patches end to end', () => {
@@ -1728,6 +1950,27 @@ check('reload stages match what actually changed', () => {
   return 'renderer / context / restart, strongest stage wins'
 })
 
+check('a transformed file is served with its own content type, not always JavaScript', () => {
+  // A patched index.html served as "application/javascript" makes Chromium
+  // render the markup as source text instead of parsing it - the game boots to
+  // a black screen full of HTML. Every patch target used to be a script, so the
+  // hardcoded type was invisible until a Fluxloader mod patched index.html.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'interceptor.js'), 'utf8')
+  assert(!/'application\/javascript; charset=utf-8'/.test(src),
+    'the interceptor still hardcodes a JavaScript content type for transformed files')
+
+  // And the table it must consult instead has to know about markup.
+  const mod = require('../src/main/interceptor')
+  const mimeFor = mod.mimeFor || mod.__mimeFor
+  if (typeof mimeFor === 'function') {
+    assert(mimeFor('dist/index.html') === 'text/html',
+      'index.html did not resolve to text/html: ' + mimeFor('dist/index.html'))
+    assert(/javascript/.test(mimeFor('dist/js/bundle.js')),
+      'bundle.js no longer resolves to a JavaScript type')
+  }
+  return 'transformed files keep their own MIME type'
+})
+
 check('a rebuild clears both caches before the window reloads, and never accumulates patches', () => {
   const order = []
   let build = 0
@@ -2384,6 +2627,34 @@ check('mod content is registered with the simulation workers', () => {
   assert(strs && strs[1].uolkxReactorCore, 'the structure never reached the worker payload')
 
   return '4 registry messages posted, carrying the mod content'
+})
+
+check('SMLN.register automatically flushes renderer content to workers', () => {
+  const { S } = bootConsole()
+  const posted = []
+  const FH = {
+    elements: { register(st, def) { st.sandkit.mods.elements[def.id] = def; return { elementType: 91 } } },
+  }
+  const st = {
+    store: { structures: [], meta: { time: 0 } },
+    environment: {
+      config: { cellSize: 4 },
+      multithreading: { simulation: { postAll: (state, msg) => posted.push(msg) } },
+    },
+    sandkit: { mods: { elements: {}, structures: {}, terrains: {}, matters: {}, misc: {} } },
+  }
+  S.__capture(FH, st, 'game:ready')
+
+  return S.register.as('creator-selftest').element({ id: 'creator-element' }).then(() =>
+    new Promise((resolve, reject) => setTimeout(() => {
+      try {
+        const message = posted.find((entry) => entry[0] === enums.WorkerMessage.RegisterModElements)
+        assert(message, 'no automatic RegisterModElements message was posted')
+        assert(message[1]['creator-element'], 'the automatic worker payload omitted the renderer element')
+        resolve('renderer registration reached the simulation workers')
+      } catch (e) { reject(e) }
+    }, 80))
+  )
 })
 
 check('mixed-convention namespaces keep their real argument order', () => {
@@ -3874,6 +4145,443 @@ check('the manager offers Install from Workshop and asks for a link', () => {
       'a cancelled prompt still started a download: ' + JSON.stringify(calls.map((c) => c.action)))
     return 'button present, SteamCMD checked first, cancelling downloads nothing'
   })
+})
+
+const flContent = require('../src/compat/flux-content')
+
+/** A stand-in for the corelib object an entrypoint publishes. */
+function fakeCorelib() {
+  return {
+    elements: {
+      registerElement(c) { this._e = (this._e || []).concat([c]); return true },
+      registerSoil(c) { this._s = (this._s || []).concat([c]); return true },
+    },
+    recipes: {
+      registerPressRecipe() { return true },
+      registerShakerRecipe() { return true },
+    },
+  }
+}
+
+check('the bridge captures element registrations instead of patching', () => {
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  assert(r.ok, 'install failed')
+  g.corelib.elements.registerElement({
+    id: 'Trash', name: 'Trash', colors: [[88, 74, 74, 255]], density: 150, matterType: 'Slushy',
+  })
+  assert(r.captured.elements.length === 1, 'nothing captured')
+  assert(r.captured.elements[0].def.matterType === 6, 'definition was not translated')
+  return 'captured Trash with matterType 6'
+})
+
+check('a registration the build cannot support is recorded with its reason', () => {
+  // 0.5.5 has no recipe registry at all. Reporting beats a silent no-op.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [['CompressedTrash', 0.65]] })
+  assert(r.captured.unsupported.length === 1,
+    'the recipe call was not recorded as unsupported')
+  const u = r.captured.unsupported[0]
+  assert(u.kind === 'recipe', 'wrong kind: ' + u.kind)
+  assert(/no recipe registry/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
+  return u.reason
+})
+
+check('a bad definition is recorded, and never throws into the mod', () => {
+  // corelib mods call these at entrypoint top level; throwing would take the
+  // whole mod down instead of losing one element.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  let threw = false
+  try {
+    g.corelib.elements.registerElement({ id: 'Bad', name: 'Bad', density: 1, matterType: 'Plasma' })
+  } catch (_e) { threw = true }
+  assert(!threw, 'a bad definition threw into the mod')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(/Plasma/.test(r.captured.unsupported[0].reason), 'reason lost the detail')
+  return r.captured.unsupported[0].reason
+})
+
+check('a throwing id getter is recorded, and never throws into the mod', () => {
+  // A malformed config (missing/wrong-typed id) is handled by translate's own
+  // validation. This is the sharper case: reading `id` itself throws, which
+  // happens before translate ever gets a chance to validate anything.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  const evil = {}
+  Object.defineProperty(evil, 'id', { get() { throw new Error('boom') } })
+  let threw = false
+  try {
+    g.corelib.elements.registerElement(evil)
+  } catch (_e) { threw = true }
+  assert(!threw, 'a throwing id getter escaped the shim')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(r.captured.unsupported[0].kind === 'element', 'wrong kind: ' + r.captured.unsupported[0].kind)
+  return r.captured.unsupported[0].reason
+})
+
+check('a throwing config getter in a recipe call never throws into the mod', () => {
+  // Same exposure in the recipe shim: it reads config.input / config.id
+  // directly before note() ever runs.
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  const evil = {}
+  Object.defineProperty(evil, 'input', { get() { throw new Error('boom') } })
+  let threw = false
+  try {
+    g.corelib.recipes.registerPressRecipe(evil)
+  } catch (_e) { threw = true }
+  assert(!threw, 'a throwing config getter escaped the recipe shim')
+  assert(r.captured.unsupported.length === 1, 'the failure was not recorded')
+  assert(r.captured.unsupported[0].kind === 'recipe', 'wrong kind: ' + r.captured.unsupported[0].kind)
+  return r.captured.unsupported[0].reason
+})
+
+check('only the patches the bridge takes over are suppressed', () => {
+  // corelib has ~50 subsystems. Dropping more than the bridge replaces would
+  // break the ones whose anchors still match this build.
+  assert(flContent.shouldSuppress('corelib:corelib:elements:elementRegistry'),
+    'an element patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:elements:soilRegistry'),
+    'a soil patch was not suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:colorIdFix:countdownFix'),
+    'an unrelated patch was suppressed')
+
+  // Blocks, tech and upgrades are bridged too, so their DEFINITION patches are
+  // superseded and must go.
+  assert(flContent.shouldSuppress('corelib:corelib:blockInventory'),
+    'a block definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:blockTypeDefinitions'),
+    'a block definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:tech:definitions'),
+    'a tech definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:upgradeDefinitions'),
+    'an upgrade definition patch was not suppressed')
+
+  // ...but only the definitions. corelib's UI patches for those same
+  // subsystems are what draw the config menus and tech-tree connectors, and
+  // the bridge does not replace them - dropping those would trade missing
+  // content for a broken interface.
+  assert(!flContent.shouldSuppress('corelib:corelib:blockConfigMenu'),
+    'a block UI patch was suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:techUI-addConnectors'),
+    'a tech UI patch was suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:upgradeUpdating'),
+    'an upgrade UI patch was suppressed')
+  return 'definition patches suppressed for all five content types, UI patches kept'
+})
+
+check('an "optional:" dependency prefix does not make a mod required', () => {
+  // Fluxloader marks soft dependencies as "optional:^1.1.4". Reading the
+  // prefix as part of the range made it both unparsable and required, so
+  // refinement was dropped entirely for "bigger-grabber", a mod it works
+  // perfectly well without.
+  const dir = tmpdir('flux-optional-dep')
+  fs.mkdirSync(path.join(dir, 'refiner'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'refiner', 'modinfo.json'), JSON.stringify({
+    modID: 'refiner', name: 'Refiner', version: '1.0.0',
+    dependencies: { corelib: '^3.0.1', 'bigger-grabber': 'optional:^1.1.4' },
+  }))
+  const found = flCompat.discover([dir])
+  const mod = (found.mods || found).find((m) => m.id === 'refiner')
+  assert(mod, 'the mod was not discovered')
+
+  const hard = mod.dependencies.find((d) => d.id === 'corelib')
+  const soft = mod.dependencies.find((d) => d.id === 'bigger-grabber')
+  assert(hard && hard.optional === false, 'a plain dependency became optional')
+  assert(soft && soft.optional === true, 'the "optional:" prefix was not honoured')
+  // The prefix must come off the range too, or it never parses as semver.
+  assert(soft.range === '^1.1.4', 'the prefix was left in the range: ' + soft.range)
+  return 'optional: parsed off the range and flagged, plain dependencies untouched'
+})
+
+check('a config schema accepts array values', () => {
+  // autosplitter declares {"type":"array","default":[1,2]}. Rejecting the
+  // type threw away its whole config and left it running on an empty one.
+  const explicit = modConfig.normaliseSchema({ splits: { type: 'array', default: [1, 2] } })
+  assert(explicit.ok, 'an explicit array type was rejected: ' +
+    (explicit.error && explicit.error.message))
+  assert(JSON.stringify(explicit.schema.splits.default) === '[1,2]',
+    'the default was not preserved')
+
+  // With no declared type, an array default has to infer 'array' - it used to
+  // fall through to 'string' and fail.
+  const inferred = modConfig.normaliseSchema({ splits: { default: [2, 5, 7] } })
+  assert(inferred.ok && inferred.schema.splits.type === 'array',
+    'an array default did not infer the array type')
+
+  // An array spec with no default gets a FRESH array each time; one shared
+  // instance would let one mod's push be seen by every other.
+  const a = modConfig.normaliseSchema({ k: { type: 'array' } })
+  const b = modConfig.normaliseSchema({ k: { type: 'array' } })
+  a.schema.k.default.push('x')
+  assert(b.schema.k.default.length === 0, 'array defaults share one instance')
+
+  // enum resolution must be unaffected: it also keys off an array field.
+  const en = modConfig.normaliseSchema({ k: { values: ['a', 'b'] } })
+  assert(en.ok && en.schema.k.type === 'enum', 'enum inference broke')
+  return 'array accepted explicitly and by inference, defaults not shared, enum intact'
+})
+
+check('getEnabledMods answers to both shapes mods use', () => {
+  // Two contracts exist in the wild and both are load-bearing: skinloader and
+  // custommaploader call Object.values(...), refinement calls .filter(...)
+  // directly. Returning either alone breaks the other.
+  const dir = tmpdir('flux-enabled-mods')
+  for (const id of ['alpha', 'beta']) {
+    fs.mkdirSync(path.join(dir, id), { recursive: true })
+    fs.writeFileSync(path.join(dir, id, 'modinfo.json'), JSON.stringify({
+      modID: id, name: id, version: '1.0.0', tags: ['map'],
+    }))
+  }
+  const found = flCompat.discover([dir])
+  const loaded = flCompat.loadElectronEntrypoints(found.mods || found, {
+    configDir: dir, rpc: { register() {} }, sendToRenderer() {},
+  }, quietLogger)
+  assert(loaded, 'the mods did not load')
+
+  // No entrypoints here, so reach the API the same way a mod would: through
+  // a mod that has one.
+  fs.mkdirSync(path.join(dir, 'probe'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'probe', 'modinfo.json'), JSON.stringify({
+    modID: 'probe', name: 'probe', version: '1.0.0',
+    electronEntrypoint: 'entry.electron.js',
+  }))
+  // Reported through a file rather than a global: the entrypoint runs in its
+  // own vm context, whose globalThis is the shared mod universe, not this one.
+  const out = path.join(dir, 'probe.json')
+  fs.writeFileSync(path.join(dir, 'probe', 'entry.electron.js'),
+    'const all = fluxloaderAPI.getEnabledMods()\n' +
+    'require("fs").writeFileSync(' + JSON.stringify(out) + ', JSON.stringify({\n' +
+    '  byKey: Object.keys(all).length,\n' +
+    '  byValues: Object.values(all).length,\n' +
+    '  filtered: all.filter(function (m) { return m.info.modID === "alpha" }).length,\n' +
+    '  length: all.length,\n' +
+    '}))\n')
+  const second = flCompat.discover([dir])
+  flCompat.loadElectronEntrypoints(second.mods || second, {
+    configDir: dir, rpc: { register() {} }, sendToRenderer() {},
+  }, quietLogger)
+
+  assert(fs.existsSync(out), 'the probe entrypoint did not run')
+  const probe = JSON.parse(fs.readFileSync(out, 'utf8'))
+  // Object.keys/values must see ONLY the mods - the array methods are added
+  // non-enumerably, or every consumer counting entries would be wrong.
+  assert(probe.byKey === probe.byValues,
+    `keys (${probe.byKey}) and values (${probe.byValues}) disagree`)
+  assert(probe.byKey === 3, 'expected 3 mods, saw ' + probe.byKey)
+  assert(probe.filtered === 1, '.filter() did not find alpha: ' + probe.filtered)
+  assert(probe.length === 3, '.length was wrong: ' + probe.length)
+  return 'keyed for Object.values, iterable for .filter, methods non-enumerable'
+})
+
+check('blocks, tech nodes and upgrades translate into the shapes 0.5.5 takes', () => {
+  // The inputs are the exact payloads the portals mod passes to corelib,
+  // captured from a real load - not invented shapes that only prove the
+  // translator agrees with itself.
+  const block = flTranslate.translateBlock({
+    sourceMod: 'portals', id: 'Portal', name: 'Portal',
+    description: 'An interdimensional portal.',
+    shape: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    imagePath: 'Portal', angles: [0], singleBuild: true,
+    hasConfigMenu: true, hasHoverUI: true, animationInterval: 200,
+  })
+  assert(block.ok, 'the portals block was rejected: ' + block.reason)
+  assert(block.def.size.width === 4 && block.def.size.height === 4,
+    'size was not derived from the shape grid')
+  // Structures have their own i18n namespace; the game's own entries read
+  // `structures|conveyor|name`. Filing one under `elements|` shows the raw key
+  // on the hover tooltip.
+  assert(block.def.nameKey === 'structures|portal|name',
+    'wrong nameKey namespace: ' + block.def.nameKey)
+  assert(!flTranslate.translateBlock({ id: 'X' }).ok,
+    'a block with no shape should be rejected, not sized 0x0')
+
+  const tech = flTranslate.translateTech({
+    id: 'portals', name: 'Portals', description: 'd', cost: 20000,
+    unlocks: { structures: ['d.Portal'] }, parent: 'Drones1',
+  })
+  assert(tech.ok, 'the portals tech node was rejected: ' + tech.reason)
+  // corelib says `parent`; the tech shim reads `requires`, an array.
+  assert(JSON.stringify(tech.def.requires) === '["Drones1"]',
+    'parent was not mapped onto requires: ' + JSON.stringify(tech.def.requires))
+  // "d.Portal" carries the bundle's minified namespace because corelib used to
+  // splice that string into the source. Nothing evaluates it here, so the
+  // prefix has to come off or the id matches no registered structure.
+  assert(tech.def.unlocks.structures[0] === 'Portal',
+    'the minified namespace was not stripped: ' + tech.def.unlocks.structures[0])
+
+  const tab = flTranslate.translateUpgrade('tab', {
+    id: 'portals', name: 'Portals', requirement: { tech: 'portals' },
+  })
+  assert(tab.ok && tab.def.kind === 'tab', 'the upgrade tab was rejected')
+  assert(tab.def.requiresTech === 'portals',
+    'the tech gate was dropped: ' + JSON.stringify(tab.def))
+  const upgrade = flTranslate.translateUpgrade('upgrade', {
+    tabID: 'portals', categoryID: 'portals', id: 'count',
+    name: 'Portal Count', maxLevel: 7, costs: [5000, 7000],
+  })
+  assert(upgrade.ok && upgrade.def.tabID === 'portals' &&
+    upgrade.def.categoryID === 'portals',
+  'the upgrade lost its tab/category nesting')
+  return 'real portals payloads translate, with the namespace prefix stripped'
+})
+
+check('the renderer bridge registers captured content through SMLN', () => {
+  // Runs the real renderer script in a sandbox with a fake SMLN, so the wiring
+  // is tested without a browser. The shapes here match the live game: verified
+  // that SMLN.register.as(id) yields .element/.terrain and that callMain and
+  // whenReady exist.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'flux-register.js'), 'utf8')
+  const calls = { element: [], terrain: [], logs: [] }
+  const SMLN = {
+    log: (level, msg) => calls.logs.push(level + ': ' + msg),
+    whenReady: (fn) => fn(),
+    // The real callMain wraps a handler's return value in an {ok, value}
+    // envelope - verified against the live game. A fake that returns the bare
+    // payload lets a renderer that forgets to unwrap pass here and register
+    // nothing in production, which is exactly what happened.
+    callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
+      ok: true,
+      value: {
+        elements: [{ id: 'Trash', def: { id: 'Trash', matterType: 6 } }],
+        soils: [{ id: 'TrashSoil', def: { id: 'TrashSoil' } }],
+        unsupported: [{ kind: 'recipe', id: 'Trash', reason: 'no recipe registry on this build' }],
+      },
+    } : null),
+    register: {
+      as: () => ({
+        element: (def) => { calls.element.push(def); return Promise.resolve({}) },
+        terrain: (def) => { calls.terrain.push(def); return Promise.resolve({}) },
+      }),
+    },
+  }
+  const sandbox = { globalThis: null, __SMLN__: SMLN, console }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(src, { filename: 'flux-register.js' }).runInContext(sandbox)
+
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try {
+      assert(calls.element.length === 1, 'no element registered: ' + calls.element.length)
+      assert(calls.element[0].id === 'Trash', 'wrong element: ' + calls.element[0].id)
+      assert(calls.terrain.length === 1, 'no soil registered: ' + calls.terrain.length)
+      assert(calls.logs.some((l) => /recipe/i.test(l)),
+        'the unsupported recipe was not reported: ' + JSON.stringify(calls.logs))
+      resolve('registered 1 element, 1 soil, reported 1 unsupported')
+    } catch (e) { reject(e) }
+  }, 20))
+})
+
+check('captured content is exposed to the renderer over IPC', () => {
+  // Sandkit lives in the renderer, so the definitions captured in the main
+  // process have to cross the boundary. corelib already crosses it the same
+  // way for its own registry (corelib:getModuleRegistrations), so this reuses
+  // the transport rather than inventing one.
+  // Two mods, as in reality: the library publishes the API, the dependent
+  // calls it. corelib does not register its own content, so a single mod that
+  // both defines and calls registerElement in one file would register before
+  // the shim is installed - which is not how any real mod pair behaves.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-content-ipc-'))
+  const dir = path.join(root, 'corelib')
+  const useDir = path.join(root, 'user')
+  fs.mkdirSync(dir); fs.mkdirSync(useDir)
+  fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({
+    modID: 'corelib', version: '3.1.3', electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(dir, 'entry.electron.js'),
+    'globalThis.corelib = { elements: {\n' +
+    '  registerElement(c) { return true },\n' +
+    '  registerSoil(c) { return true },\n' +
+    '} }\n')
+  fs.writeFileSync(path.join(useDir, 'modinfo.json'), JSON.stringify({
+    modID: 'user', version: '1.0.0', dependencies: { corelib: '^3.0.0' },
+    electronEntrypoint: 'entry.electron.js',
+  }))
+  fs.writeFileSync(path.join(useDir, 'entry.electron.js'),
+    'corelib.elements.registerElement({ id: "Ipc", name: "Ipc",\n' +
+    '  colors: [[1,2,3,255]], density: 5, matterType: "Solid" })\n')
+
+  const r = flCompat.readMod(dir)
+  const user = flCompat.readMod(useDir)
+  assert(r.ok && user.ok, 'manifest rejected')
+  const channels = {}
+  const out = flCompat.loadElectronEntrypoints([r.mod, user.mod], {
+    configDir: dir,
+    rpc: { register: (ch, fn) => { channels[ch] = fn } },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+
+  assert(typeof channels['smln:flux-content'] === 'function',
+    'the content channel was not registered: [' + Object.keys(channels).join(', ') + ']')
+  const payload = channels['smln:flux-content']()
+  assert(payload.elements.length === 1, 'payload carried no element')
+  assert(payload.elements[0].def.matterType === 1,
+    'the definition was not translated: ' + payload.elements[0].def.matterType)
+  assert(Array.isArray(payload.soils), 'soils missing from the payload')
+  assert(Array.isArray(payload.unsupported), 'unsupported missing from the payload')
+  fs.rmSync(root, { recursive: true, force: true })
+  return 'channel returns ' + payload.elements.length + ' element(s)'
+})
+
+check('the loader supplies a real matter table, not an empty one', () => {
+  // The bug this guards: the loader passed `ctx.matterEnum` through from a
+  // runtime slot nothing ever populated, so production translated every
+  // element against {} and rejected all of them with
+  // `matterType "Slushy" does not exist (valid: )` - while still dropping
+  // corelib's patches, which is the worst of both worlds. The table has to
+  // come from somewhere real, and it has to map names to numbers.
+  const table = flCompat.matterEnum()
+  assert(table && typeof table === 'object', 'no matter table')
+  assert(table.Solid === 1, 'Solid is not 1: ' + table.Solid)
+  assert(table.Slushy === 6, 'Slushy is not 6: ' + table.Slushy)
+  assert(table.Powder === 8, 'Powder is not 8: ' + table.Powder)
+  // The numeric direction must survive too - the game's own table is keyed
+  // that way and callers may read either.
+  assert(table[6] === 'Slushy', 'the numeric direction was lost: ' + table[6])
+  return 'name->number and number->name both present'
+})
+
+check('a mod that registers content gets it captured, with a working matter table', () => {
+  // End-to-end through the loader's own default context - no matterEnum
+  // supplied by the caller, exactly as src/main/entry.js invokes it. If the
+  // loader does not source its own table, every element is rejected here.
+  const coreDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
+    'fluxloader-mods', 'corelib')
+  const modDir = path.join(os.homedir(), 'AppData', 'Roaming', 'sandustry',
+    'fluxloader-mods', 'trashelement')
+  if (!fs.existsSync(coreDir) || !fs.existsSync(modDir)) return 'skipped - mods not installed'
+
+  const core = flCompat.readMod(coreDir)
+  const dep = flCompat.readMod(modDir)
+  assert(core.ok && dep.ok, 'manifests rejected')
+
+  const out = flCompat.loadElectronEntrypoints([core.mod, dep.mod], {
+    configDir: coreDir, rpc: { register: () => {} },
+  }, testLogger())
+  assert(out.errors.length === 0, 'load failed: ' + (out.errors[0] && out.errors[0].message))
+
+  const ids = out.content.elements.map((e) => e.id)
+  assert(ids.includes('Trash'),
+    'Trash was not captured (matter table empty?): [' + ids.join(', ') + '] ' +
+    JSON.stringify(out.content.unsupported.map((u) => u.reason).slice(0, 2)))
+  assert(ids.includes('CompressedTrash'), 'CompressedTrash was not captured')
+  assert(out.content.soils.some((s) => s.id === 'TrashSoil'), 'TrashSoil was not captured')
+
+  // 0.5.5 has no recipe registry, so those must be reported, not silently lost.
+  const recipes = out.content.unsupported.filter((u) => u.kind === 'recipe')
+  assert(recipes.length >= 2, 'recipe calls were not reported: ' + recipes.length)
+
+  // And the superseded patches must not reach the patch set.
+  for (const list of Object.values(out.patches)) {
+    for (const p of list) {
+      assert(!flContent.shouldSuppress(p.id), 'a superseded patch survived: ' + p.id)
+    }
+  }
+  return `captured ${ids.length} element(s), ${out.content.soils.length} soil(s), ` +
+    `${recipes.length} recipe(s) reported unavailable`
 })
 
 if (archive) archive.close()

@@ -70,9 +70,35 @@
   var byOwner = Object.create(null)
   var stats = { registered: 0, failed: 0 }
   var warnedUnknownOwner = false
+  var workerFlushTimer = null
+
+  /** Content mirrored into the simulation workers by Sandustry's registries. */
+  var WORKER_CONTENT = { matter: true, element: true, terrain: true, structure: true }
 
   function fh() { return SMLN.game }
   function state() { return SMLN.getState() }
+
+  /**
+   * The game performs its own registry flush before `game:ready`, while this
+   * API intentionally drains at `game:ready`. Debounce a second flush after a
+   * successful content registration so renderer mods are visible to the
+   * simulation workers as well as the main thread.
+   */
+  function scheduleWorkerFlush(contentType) {
+    if (!WORKER_CONTENT[contentType]) return
+    if (workerFlushTimer) global.clearTimeout(workerFlushTimer)
+    workerFlushTimer = global.setTimeout(function () {
+      workerFlushTimer = null
+      try {
+        if (SMLN.official && typeof SMLN.official.flushModRegistries === 'function') {
+          SMLN.official.flushModRegistries()
+        }
+      } catch (e) {
+        SMLN.log('error', 'could not flush registered mod content to the simulation workers: ' +
+          ((e && e.message) || String(e)))
+      }
+    }, 50)
+  }
 
   function fail(code, modId, contentType, contentId, message) {
     var err = new Error(message)
@@ -159,7 +185,10 @@
     }
     return Promise.resolve(out).then(
       function (value) {
-        if (job.register) remember(job.modId, job.contentType, job.contentId)
+        if (job.register) {
+          remember(job.modId, job.contentType, job.contentId)
+          scheduleWorkerFlush(job.contentType)
+        }
         job.resolve(value)
       },
       function (e) {
