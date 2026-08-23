@@ -40,6 +40,14 @@ const SUPPRESSED_PREFIXES = [
   'elements:soilsRepeated3Times',
   'elements:onlyRocketBreakable',
   'elements:noShovelHighlightForUnbreakable',
+  // Block, tech and upgrade definitions now reach the game through its own
+  // registries. Only the definition patches are listed: corelib's UI patches
+  // (blockConfigMenu, techUI-*, upgradeUpdating) are left in place, so the
+  // subsystems whose anchors still match this build keep working.
+  ':blockTypeDefinitions',
+  ':blockInventory',
+  ':tech:definitions',
+  ':upgradeDefinitions',
 ]
 
 function shouldSuppress(patchId) {
@@ -58,7 +66,7 @@ function install(sandboxGlobal, opts) {
   const log = o.logger
   const matterEnum = o.matterEnum || {}
   const corelib = sandboxGlobal && sandboxGlobal.corelib
-  const captured = { elements: [], soils: [], unsupported: [] }
+  const captured = { elements: [], soils: [], blocks: [], tech: [], upgrades: [], unsupported: [] }
   const reasons = []
 
   if (!corelib || typeof corelib !== 'object') {
@@ -112,6 +120,77 @@ function install(sandboxGlobal, opts) {
     }
   } else {
     reasons.push('corelib published no elements module')
+  }
+
+  // Blocks are Sandustry's structures - the machines in the build inventory.
+  // corelib keeps its own registry and installs it by patching; on this build
+  // those patches match nothing, so the entries are captured and handed to the
+  // game's own structure registry instead.
+  if (corelib.blocks && typeof corelib.blocks === 'object') {
+    const previousBlockRegister = typeof corelib.blocks.register === 'function'
+      ? corelib.blocks.register.bind(corelib.blocks)
+      : null
+    corelib.blocks.register = function register(config) {
+      try {
+        const r = translate.translateBlock(config)
+        if (!r.ok) { note('block', safeId(config), r.reason); return false }
+        captured.blocks.push({ id: r.def.id, def: r.def })
+        log && log.debug(`captured block ${r.def.id}`)
+      } catch (e) {
+        note('block', safeId(config), `reading the block definition threw: ${e && e.message}`)
+        return false
+      }
+      // corelib's own register still runs: other mods call `getBlock` to read
+      // back what they registered, and portals' schedules key off its registry.
+      // Only the patch it would later emit is superseded, not its bookkeeping.
+      if (previousBlockRegister) {
+        try { return previousBlockRegister(config) } catch (_e) { /* its patches are dropped anyway */ }
+      }
+      return true
+    }
+  } else {
+    reasons.push('corelib published no blocks module')
+  }
+
+  if (corelib.tech && typeof corelib.tech === 'object' && typeof corelib.tech.register === 'function') {
+    corelib.tech.register = function register(config) {
+      try {
+        const r = translate.translateTech(config)
+        if (!r.ok) { note('tech', safeId(config), r.reason); return false }
+        captured.tech.push({ id: r.def.id, def: r.def })
+        log && log.debug(`captured tech node ${r.def.id}`)
+        return true
+      } catch (e) {
+        note('tech', safeId(config), `reading the tech definition threw: ${e && e.message}`)
+        return false
+      }
+    }
+  }
+
+  // Tabs, categories and upgrades share one list because the renderer has to
+  // rebuild the nesting in registration order - a category before its tab has
+  // nothing to attach to.
+  if (corelib.upgrades && typeof corelib.upgrades === 'object') {
+    const UPGRADE_FNS = {
+      registerTab: 'tab',
+      registerCategory: 'category',
+      registerUpgrade: 'upgrade',
+    }
+    for (const [fn, kind] of Object.entries(UPGRADE_FNS)) {
+      if (typeof corelib.upgrades[fn] !== 'function') continue
+      corelib.upgrades[fn] = function registerUpgradePart(config) {
+        try {
+          const r = translate.translateUpgrade(kind, config)
+          if (!r.ok) { note('upgrade', safeId(config), r.reason); return false }
+          captured.upgrades.push({ id: r.def.id, kind, def: r.def })
+          log && log.debug(`captured upgrade ${kind} ${r.def.id}`)
+          return true
+        } catch (e) {
+          note('upgrade', safeId(config), `reading the upgrade definition threw: ${e && e.message}`)
+          return false
+        }
+      }
+    }
   }
 
   // Sandustry 0.5.5 has no recipe registry: `sandkit.structures.recipes` is

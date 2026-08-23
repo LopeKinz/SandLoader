@@ -38,6 +38,9 @@
       var api = SMLN.register.as('corelib')
       var elements = payload.elements || []
       var soils = payload.soils || []
+      var blocks = payload.blocks || []
+      var techNodes = payload.tech || []
+      var upgrades = payload.upgrades || []
       var unsupported = payload.unsupported || []
 
       // Register display names before the content itself. 0.5.5 stores a
@@ -51,7 +54,7 @@
         var sk = SMLN.sandkit
         if (sk && sk.i18n && typeof sk.i18n.register === 'function') {
           var table = {}
-          var all = elements.concat(soils)
+          var all = elements.concat(soils).concat(blocks)
           for (var n = 0; n < all.length; n++) {
             var d = all[n].def
             if (d && d.nameKey && d.name) table[d.nameKey] = d.name
@@ -90,6 +93,46 @@
       // Soils are mineable terrain in Sandustry's model, not elements.
       for (var j = 0; j < soils.length; j++) {
         hand(soils[j], api.terrain, 'soil')
+      }
+
+      // Blocks are structures here - the machines in the build inventory.
+      for (var b = 0; b < blocks.length; b++) {
+        hand(blocks[b], api.structure, 'block')
+      }
+
+      // Tech nodes go through the Sandkit shim rather than SMLN.register:
+      // the tech tree is a grid the shim has to place a cell in, which is not
+      // the flat "register a definition" shape the other content types share.
+      var sandkit = SMLN.sandkit
+      if (techNodes.length) {
+        if (sandkit && sandkit.tech && typeof sandkit.tech.registerNode === 'function') {
+          for (var t = 0; t < techNodes.length; t++) {
+            try {
+              var ok = sandkit.tech.registerNode(techNodes[t].def)
+              SMLN.log(ok ? 'info' : 'warn', 'fluxloader tech node "' + techNodes[t].id +
+                (ok ? '" registered' : '" was not placed in the tech tree'))
+            } catch (e) {
+              SMLN.log('error', 'fluxloader tech node "' + techNodes[t].id + '" threw: ' +
+                ((e && e.message) || e))
+            }
+          }
+        } else {
+          SMLN.log('warn', 'fluxloader: this build exposes no tech registry, so ' +
+            techNodes.length + ' research node(s) will not appear')
+        }
+      }
+
+      // Upgrades have nowhere to go on this build. Sandkit's `upgrades`
+      // namespace is read-only (getLevel / getAvailableLevel), and the bundle
+      // contains no upgrade registration function at all - unlike structures
+      // (registerStructure) and tech (addTechDefinition), both verified
+      // present on 0.5.5. So this is a real gap in the game, not a gap in the
+      // bridge, and it is reported once with the count rather than pretending
+      // per entry.
+      if (upgrades.length) {
+        SMLN.log('warn', 'fluxloader: ' + upgrades.length + ' upgrade entr(ies) ' +
+          '(tabs, categories and upgrades) were not registered - Sandustry 0.5.5 ' +
+          'exposes no way to add upgrades, so they cannot appear in the upgrade menu')
       }
 
       // Say what could not be done and why, rather than leaving the player to

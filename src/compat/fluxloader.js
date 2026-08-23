@@ -859,6 +859,9 @@ function loadElectronEntrypoints(mods, ctx, logger) {
     ctx.rpc.register('smln:flux-content', () => ({
       elements: content.captured.elements,
       soils: content.captured.soils,
+      blocks: content.captured.blocks,
+      tech: content.captured.tech,
+      upgrades: content.captured.upgrades,
       unsupported: content.captured.unsupported,
     }))
   }

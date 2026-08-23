@@ -4219,9 +4219,81 @@ check('only the patches the bridge takes over are suppressed', () => {
     'a soil patch was not suppressed')
   assert(!flContent.shouldSuppress('corelib:corelib:colorIdFix:countdownFix'),
     'an unrelated patch was suppressed')
-  assert(!flContent.shouldSuppress('corelib:corelib:blockInventory'),
-    'a block patch was suppressed')
-  return 'element and soil patches suppressed, others kept'
+
+  // Blocks, tech and upgrades are bridged too, so their DEFINITION patches are
+  // superseded and must go.
+  assert(flContent.shouldSuppress('corelib:corelib:blockInventory'),
+    'a block definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:blockTypeDefinitions'),
+    'a block definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:tech:definitions'),
+    'a tech definition patch was not suppressed')
+  assert(flContent.shouldSuppress('corelib:corelib:upgradeDefinitions'),
+    'an upgrade definition patch was not suppressed')
+
+  // ...but only the definitions. corelib's UI patches for those same
+  // subsystems are what draw the config menus and tech-tree connectors, and
+  // the bridge does not replace them - dropping those would trade missing
+  // content for a broken interface.
+  assert(!flContent.shouldSuppress('corelib:corelib:blockConfigMenu'),
+    'a block UI patch was suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:techUI-addConnectors'),
+    'a tech UI patch was suppressed')
+  assert(!flContent.shouldSuppress('corelib:corelib:upgradeUpdating'),
+    'an upgrade UI patch was suppressed')
+  return 'definition patches suppressed for all five content types, UI patches kept'
+})
+
+check('blocks, tech nodes and upgrades translate into the shapes 0.5.5 takes', () => {
+  // The inputs are the exact payloads the portals mod passes to corelib,
+  // captured from a real load - not invented shapes that only prove the
+  // translator agrees with itself.
+  const block = flTranslate.translateBlock({
+    sourceMod: 'portals', id: 'Portal', name: 'Portal',
+    description: 'An interdimensional portal.',
+    shape: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+    imagePath: 'Portal', angles: [0], singleBuild: true,
+    hasConfigMenu: true, hasHoverUI: true, animationInterval: 200,
+  })
+  assert(block.ok, 'the portals block was rejected: ' + block.reason)
+  assert(block.def.size.width === 4 && block.def.size.height === 4,
+    'size was not derived from the shape grid')
+  // Structures have their own i18n namespace; the game's own entries read
+  // `structures|conveyor|name`. Filing one under `elements|` shows the raw key
+  // on the hover tooltip.
+  assert(block.def.nameKey === 'structures|portal|name',
+    'wrong nameKey namespace: ' + block.def.nameKey)
+  assert(!flTranslate.translateBlock({ id: 'X' }).ok,
+    'a block with no shape should be rejected, not sized 0x0')
+
+  const tech = flTranslate.translateTech({
+    id: 'portals', name: 'Portals', description: 'd', cost: 20000,
+    unlocks: { structures: ['d.Portal'] }, parent: 'Drones1',
+  })
+  assert(tech.ok, 'the portals tech node was rejected: ' + tech.reason)
+  // corelib says `parent`; the tech shim reads `requires`, an array.
+  assert(JSON.stringify(tech.def.requires) === '["Drones1"]',
+    'parent was not mapped onto requires: ' + JSON.stringify(tech.def.requires))
+  // "d.Portal" carries the bundle's minified namespace because corelib used to
+  // splice that string into the source. Nothing evaluates it here, so the
+  // prefix has to come off or the id matches no registered structure.
+  assert(tech.def.unlocks.structures[0] === 'Portal',
+    'the minified namespace was not stripped: ' + tech.def.unlocks.structures[0])
+
+  const tab = flTranslate.translateUpgrade('tab', {
+    id: 'portals', name: 'Portals', requirement: { tech: 'portals' },
+  })
+  assert(tab.ok && tab.def.kind === 'tab', 'the upgrade tab was rejected')
+  assert(tab.def.requiresTech === 'portals',
+    'the tech gate was dropped: ' + JSON.stringify(tab.def))
+  const upgrade = flTranslate.translateUpgrade('upgrade', {
+    tabID: 'portals', categoryID: 'portals', id: 'count',
+    name: 'Portal Count', maxLevel: 7, costs: [5000, 7000],
+  })
+  assert(upgrade.ok && upgrade.def.tabID === 'portals' &&
+    upgrade.def.categoryID === 'portals',
+  'the upgrade lost its tab/category nesting')
+  return 'real portals payloads translate, with the namespace prefix stripped'
 })
 
 check('the renderer bridge registers captured content through SMLN', () => {

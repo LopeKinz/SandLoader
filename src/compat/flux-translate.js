@@ -42,11 +42,13 @@ function matterTypeToNumber(name, enumTable) {
  */
 function nameKeyFor(id, kind) {
   const s = String(id || '')
-  // Terrains live under their own namespace: the game's own entries read
-  // `terrains|solidite|name`, not `elements|...`. A soil filed under the
-  // element namespace resolves to nothing and shows as
-  // "[MISSING: elements|trashSoil|name]" on the hover tooltip.
-  const ns = kind === 'terrain' ? 'terrains' : 'elements'
+  // Each content type has its own namespace, and they are not interchangeable:
+  // the game's own entries read `terrains|solidite|name` and
+  // `structures|conveyor|name`. A soil filed under the element namespace
+  // resolves to nothing and shows as "[MISSING: elements|trashSoil|name]" on
+  // the hover tooltip. Verified against the 0.5.5 bundle.
+  const NS = { terrain: 'terrains', structure: 'structures', item: 'items' }
+  const ns = NS[kind] || 'elements'
   return ns + '|' + (s.charAt(0).toLowerCase() + s.slice(1)) + '|name'
 }
 
@@ -185,8 +187,124 @@ function translateSoil(config, enumTable) {
   return { ok: true, def }
 }
 
+/**
+ * A corelib block into a Sandkit structure definition.
+ *
+ * "Block" is corelib's word; Sandustry calls the same thing a structure, and
+ * registers it through `structures.register`. The shape is a grid of cells
+ * describing the machine's footprint - corelib passes it as `shape`, the game
+ * reads `size` from its dimensions.
+ *
+ * Behaviour does not come across. corelib's blocks get their tick logic from
+ * its own patches, and a mod whose patches no longer match this build gets a
+ * structure that can be seen and placed but does nothing. That is deliberate:
+ * an inert entry the player can find beats an invisible one they cannot.
+ */
+function translateBlock(config) {
+  const c = config || {}
+  if (!c.id || typeof c.id !== 'string') {
+    return { ok: false, reason: 'a block needs a string "id"' }
+  }
+
+  const shape = Array.isArray(c.shape) ? c.shape : []
+  const height = shape.length
+  const width = height && Array.isArray(shape[0]) ? shape[0].length : 0
+  if (!width || !height) {
+    return { ok: false, reason: `block "${c.id}": needs a non-empty 2D "shape"` }
+  }
+
+  const def = {
+    id: c.id,
+    name: c.name || c.id,
+    nameKey: nameKeyFor(c.id, 'structure'),
+    description: typeof c.description === 'string' ? c.description : '',
+    size: { width, height },
+    shape,
+  }
+
+  // Only forward what the caller actually set: a `false` here means "off",
+  // while an absent key means "let the game decide", and collapsing the two
+  // would override the build's own defaults.
+  if (c.imagePath != null) def.imagePath = String(c.imagePath)
+  if (Array.isArray(c.angles)) def.angles = c.angles
+  if (c.singleBuild !== undefined) def.singleBuild = !!c.singleBuild
+  if (c.hasConfigMenu !== undefined) def.hasConfigMenu = !!c.hasConfigMenu
+  if (c.hasHoverUI !== undefined) def.hasHoverUI = !!c.hasHoverUI
+  if (typeof c.animationInterval === 'number') def.animationInterval = c.animationInterval
+
+  return { ok: true, def }
+}
+
+/**
+ * A corelib tech node into the shape `SMLN.sandkit.tech.registerNode` takes.
+ *
+ * corelib names the anchor `parent`; the shim reads `requires`, an array,
+ * because a node may sit behind more than one prerequisite.
+ *
+ * `unlocks.structures` arrives prefixed with the bundle's minified namespace
+ * ("d.Portal") because corelib's patches used to splice that string straight
+ * into the bundle. Nothing evaluates it here, so the prefix is stripped back
+ * to the bare structure id the registry actually knows.
+ */
+function translateTech(config) {
+  const c = config || {}
+  if (!c.id || typeof c.id !== 'string') {
+    return { ok: false, reason: 'a tech node needs a string "id"' }
+  }
+
+  const def = {
+    id: c.id,
+    name: c.name || c.id,
+    description: typeof c.description === 'string' ? c.description : '',
+    cost: typeof c.cost === 'number' ? c.cost : 0,
+  }
+
+  if (typeof c.parent === 'string' && c.parent) def.requires = [c.parent]
+  else if (Array.isArray(c.requires)) def.requires = c.requires.slice()
+
+  const unlockedStructures = c.unlocks && Array.isArray(c.unlocks.structures)
+    ? c.unlocks.structures
+    : []
+  if (unlockedStructures.length) {
+    def.unlocks = {
+      structures: unlockedStructures.map((s) => String(s).replace(/^[A-Za-z_$][\w$]*\./, '')),
+    }
+  }
+
+  return { ok: true, def }
+}
+
+/**
+ * A corelib upgrade into a flat record the renderer can install.
+ *
+ * corelib models upgrades as tab -> category -> upgrade. The `kind` says which
+ * of the three this is, because they share one registry and the renderer has
+ * to rebuild the nesting in order.
+ */
+function translateUpgrade(kind, config) {
+  const c = config || {}
+  if (!c.id || typeof c.id !== 'string') {
+    return { ok: false, reason: `an upgrade ${kind} needs a string "id"` }
+  }
+
+  const def = { kind, id: c.id, name: c.name || c.id }
+  if (typeof c.description === 'string') def.description = c.description
+  if (typeof c.tabID === 'string') def.tabID = c.tabID
+  if (typeof c.categoryID === 'string') def.categoryID = c.categoryID
+  if (typeof c.maxLevel === 'number') def.maxLevel = c.maxLevel
+  if (Array.isArray(c.costs)) def.costs = c.costs.slice()
+  // A tab may be gated behind a tech node; the renderer needs the id to know
+  // when to reveal it.
+  if (c.requirement && typeof c.requirement.tech === 'string') {
+    def.requiresTech = c.requirement.tech
+  }
+
+  return { ok: true, def }
+}
+
 module.exports = {
   toVariants,
   matterTypeToNumber, nameKeyFor, rgbaToMetaColor, hslToRgba,
   translateElement, translateSoil,
+  translateBlock, translateTech, translateUpgrade,
 }
