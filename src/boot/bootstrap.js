@@ -1,3 +1,7 @@
+try {
+  const { app } = require('electron');
+  if (app && app.commandLine) app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
+} catch (_) {}
 'use strict'
 /**
  * The non-Steam bootstrap.
@@ -39,7 +43,7 @@ const ORIGINAL_MAIN = 'main.js'
 /** Where the untouched game actually lives, from inside `resources/app`. */
 function originalAppRoot() {
   const resources = process.resourcesPath || path.resolve(__dirname, '..', '..', '..')
-  return path.join(resources, 'app.asar')
+  const target = fs.existsSync(path.join(resources, 'game.asar')) ? 'game.asar' : 'app.asar'; return path.join(resources, target)
 }
 
 /**
@@ -109,11 +113,14 @@ function plan(opts = {}) {
  * @param {{loader?:any}} [opts]
  */
 function boot(opts = {}) {
+  const logFile = path.resolve(__dirname, "../../smln_debug.log");
+  const flog = (m) => fs.appendFileSync(logFile, new Date().toISOString() + " " + m + "\n");
+  flog("=== BOOT STARTED ===");
   const asar = originalAppRoot()
   const mainFile = path.join(asar, ORIGINAL_MAIN)
 
   /** Hand control to the untouched game, whatever happened before. */
-  function runOriginal(why) {
+  function runOriginal(why) { flog("FALLBACK: " + why);
     if (why) console.warn('[SMLN] starting Sandustry unmodded: ' + why)
     try {
       require(mainFile)
@@ -158,7 +165,7 @@ function boot(opts = {}) {
       if (!result || result.success === false) {
         throw new Error((result && result.message) || 'startManager() reported failure')
       }
-      attachWindow(loader)
+      flog("ATTACHING WINDOW"); attachWindow(loader)
       return { ok: true }
     })
     .catch((e) => {

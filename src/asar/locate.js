@@ -122,7 +122,7 @@ function candidates() {
 function inspect(dir, source) {
   try {
     const resources = path.join(dir, 'resources')
-    const asar = path.join(resources, 'app.asar')
+    const asarName = fs.existsSync(path.join(resources, 'game.asar')) ? 'game.asar' : 'app.asar'; const asar = path.join(resources, asarName)
     // Inside Electron the asar layer reports the archive as a directory, so
     // existence has to be checked with that translation disabled.
     const previous = process.noAsar

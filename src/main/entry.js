@@ -1500,42 +1500,41 @@ async function initialize(hostAPI) {
 async function startManager() {
   const logger = runtime.logger
   try {
-    const { protocol } = require('electron')
+    const { app, protocol } = require("electron")
     const distDir = runtime.install
       ? runtime.install.distDir
-      : path.join(process.resourcesPath || '', 'app.asar', 'dist')
+      : path.join(process.resourcesPath || "", fs.existsSync(path.join(process.resourcesPath || "", "game.asar")) ? "game.asar" : "app.asar", "dist")
 
-    runtime.interceptor = interceptor.install({
-      protocol,
-      distDir,
-      patchesByFile: runtime.patchesByFile,
-      redirects: runtime.redirects,
-      modAssets: runtime.modAssets,
-      onProblem: ({ error, scope, modId }) => note(error, scope || 'patch', modId),
-      logger: logger.child('interceptor'),
-      preludeFor(rel) {
-        if (rel === BUNDLE) return prelude.build(buildPreludeOpts())
-        if (WORKER_TARGETS.includes(rel)) {
-          const workers = runtime.workerScripts[rel] || []
-          // The worker runtime goes in even with no worker mods: it is what
-          // makes game -> worker messaging reach a mod that registers later.
-          return prelude.buildWorker(workers)
-        }
-        return null
-      },
+    // Регистрируем интерцептор на ready ДО того, как main.js игры повесит свой createWindow
+    app.whenReady().then(() => {
+      try {
+        runtime.interceptor = interceptor.install({
+          protocol,
+          distDir,
+          patchesByFile: runtime.patchesByFile,
+          redirects: runtime.redirects,
+          modAssets: runtime.modAssets,
+          onProblem: ({ error, scope, modId }) => note(error, scope || "patch", modId),
+          logger: logger.child("interceptor"),
+          preludeFor(rel) {
+            if (rel === BUNDLE) return prelude.build(buildPreludeOpts())
+            if (WORKER_TARGETS.includes(rel)) {
+              const workers = runtime.workerScripts[rel] || []
+              return prelude.buildWorker(workers)
+            }
+            return null
+          },
+        })
+      } catch (err) {
+        logger && logger.error("interceptor install failed in whenReady: " + (err && err.message))
+      }
     })
 
-    if (!runtime.interceptor.ok) {
-      note(new SmlnError('E_IO', 'the file interceptor could not be installed'), 'interceptor')
-      logger.error('interceptor unavailable - starting the game unmodded')
-      await runtime.host.startGame({ applyPatches: passthrough, unmodded: true })
-      return { success: true }
-    }
-
+    // Запускаем main.js игры ДО ready, чтобы успел выполниться protocol.registerSchemesAsPrivileged
     await runtime.host.startGame({ applyPatches: passthrough, unmodded: false })
     return { success: true }
   } catch (e) {
-    const err = toSmlnError(e, 'startManager')
+    const err = toSmlnError(e, "startManager")
     logger && logger.error(String(err), e && e.stack)
     return { success: false, message: String(err) }
   }
