@@ -45,7 +45,7 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 | | |
 |---|---|
-| **Game** | Sandustry **0.5.5** |
+| **Game** | Sandustry **0.5.6** |
 | **Branch** | **Vanilla only** — Steam's default `public` branch. The experimental modded branch is **not supported** |
 | **Stores** | Steam, GOG, manual/standalone |
 | **OS** | Windows, Linux or macOS |
@@ -105,7 +105,7 @@ The installer detects your build and picks the right attach point on its own.
 On **Steam** you should see:
 
 ```
-  game      sandustry 0.5.5
+  game      sandustry 0.5.6
   at        C:\Program Files (x86)\Steam\steamapps\common\Sandustry
   platform  steam (certain)  -  resources/steam_appid.txt
   slot      C:\Program Files (x86)\Steam\steamapps\workshop\content\2764460\smln
@@ -123,7 +123,7 @@ On **Steam** you should see:
 On **GOG** or a standalone copy:
 
 ```
-  game      sandustry 0.5.5
+  game      sandustry 0.5.6
   at        C:\GOG Games\Sandustry
   platform  gog (certain)  -  goggame-1234567890.info beside the executable
   attach    resources-app-bootstrap
