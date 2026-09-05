@@ -41,9 +41,10 @@ const fs = require('fs')
 const ORIGINAL_MAIN = 'main.js'
 
 /** Where the untouched game actually lives, from inside `resources/app`. */
-function originalAppRoot() {
-  const resources = process.resourcesPath || path.resolve(__dirname, '..', '..', '..')
-  const target = fs.existsSync(path.join(resources, 'game.asar')) ? 'game.asar' : 'app.asar'; return path.join(resources, target)
+function originalAppRoot(resourcesPath) {
+  const resources = resourcesPath || process.resourcesPath || path.resolve(__dirname, "..", "..", "..")
+  const target = fs.existsSync(path.join(resources, "game.asar")) ? "game.asar" : "app.asar"
+  return path.join(resources, target)
 }
 
 /**
@@ -82,7 +83,7 @@ function hostApiFor(hooks) {
 function plan(opts = {}) {
   const resources = opts.resourcesPath || process.resourcesPath ||
     path.resolve(__dirname, '..', '..', '..')
-  const asar = path.join(resources, 'app.asar')
+  const asar = originalAppRoot(resources)
   const mainFile = path.join(asar, ORIGINAL_MAIN)
   let originalPresent = false
   try {

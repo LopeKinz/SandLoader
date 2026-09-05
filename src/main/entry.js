@@ -1505,7 +1505,7 @@ async function startManager() {
       ? runtime.install.distDir
       : path.join(process.resourcesPath || "", fs.existsSync(path.join(process.resourcesPath || "", "game.asar")) ? "game.asar" : "app.asar", "dist")
 
-    // Регистрируем интерцептор на ready ДО того, как main.js игры повесит свой createWindow
+    // Register the interceptor on app ready before the game main.js opens a window
     app.whenReady().then(() => {
       try {
         runtime.interceptor = interceptor.install({
@@ -1525,12 +1525,18 @@ async function startManager() {
             return null
           },
         })
+
+        if (!runtime.interceptor || !runtime.interceptor.ok) {
+          note(new SmlnError("E_IO", "the file interceptor could not be installed"), "interceptor")
+          logger && logger.error("interceptor unavailable - running unmodded")
+        }
       } catch (err) {
+        note(new SmlnError("E_IO", "the file interceptor could not be installed: " + (err && err.message)), "interceptor")
         logger && logger.error("interceptor install failed in whenReady: " + (err && err.message))
       }
     })
 
-    // Запускаем main.js игры ДО ready, чтобы успел выполниться protocol.registerSchemesAsPrivileged
+    // Start the game before ready to satisfy protocol.registerSchemesAsPrivileged
     await runtime.host.startGame({ applyPatches: passthrough, unmodded: false })
     return { success: true }
   } catch (e) {
