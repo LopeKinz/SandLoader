@@ -121,37 +121,46 @@ function candidates() {
  */
 function inspect(dir, source) {
   try {
-    const resources = path.join(dir, 'resources')
-    const asar = path.join(resources, 'app.asar')
-    // Inside Electron the asar layer reports the archive as a directory, so
-    // existence has to be checked with that translation disabled.
-    const previous = process.noAsar
-    process.noAsar = true
-    let present
-    try { present = fs.existsSync(asar) } finally { process.noAsar = previous }
-    if (!present || !reader.looksLikeAsar(asar)) return null
-
-    const archive = reader.open(asar)
-    try {
-      if (!archive.has('package.json')) return null
-      const pkg = archive.readJson('package.json')
-      // The decisive check: it must say it is Sandustry.
-      if (!pkg || String(pkg.name).toLowerCase() !== 'sandustry') return null
-      if (!archive.has('dist/index.html')) return null
-
-      return {
-        root: dir,
-        resources,
-        asar,
-        // Renderer assets resolve relative to the archive, not to resources/.
-        distDir: path.join(asar, 'dist'),
-        version: String(pkg.version || 'unknown'),
-        name: String(pkg.name),
-        source,
+    const resources = path.join(dir, "resources")
+    for (const name of ["game.asar", "app.asar"]) {
+      const asar = path.join(resources, name)
+      const previous = process.noAsar
+      process.noAsar = true
+      let present
+      try {
+        present = fs.existsSync(asar)
+      } finally {
+        process.noAsar = previous
       }
-    } finally {
-      archive.close()
+      if (!present || !reader.looksLikeAsar(asar)) continue
+
+      let archive
+      try {
+        archive = reader.open(asar)
+      } catch (_) {
+        continue
+      }
+
+      try {
+        if (!archive.has("package.json")) continue
+        const pkg = archive.readJson("package.json")
+        if (!pkg || String(pkg.name).toLowerCase() !== "sandustry") continue
+        if (!archive.has("dist/index.html")) continue
+
+        return {
+          root: dir,
+          resources,
+          asar,
+          distDir: path.join(asar, "dist"),
+          version: String(pkg.version || "unknown"),
+          name: String(pkg.name),
+          source,
+        }
+      } finally {
+        archive.close()
+      }
     }
+    return null
   } catch (_) {
     return null
   }
