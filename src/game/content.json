@@ -2,7 +2,7 @@
  "__meta": {
   "note": "Content reference tables. Data only - no behaviour depends on this file being present.",
   "source": "community data dump (trim.data-dump), cross-checked against the installed bundle",
-  "verifiedAgainst": "0.5.5",
+  "verifiedAgainst": "0.5.6",
   "generated": "2026-08-19",
   "excluded": [
    "tech",
