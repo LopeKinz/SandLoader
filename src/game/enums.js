@@ -245,5 +245,5 @@ module.exports = {
   StructureByName: invert(StructureType),
   ToolByName: invert(ToolType),
   /** Bundle facts SMLN was verified against; drift is reported, never fatal. */
-  VERIFIED: { gameVersion: '0.5.5', appId: 2764460 },
+  VERIFIED: { gameVersion: '0.5.6', appId: 2764460 },
 }

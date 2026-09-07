@@ -1,0 +1,86 @@
+name: Feature request
+description: Suggest an improvement or new capability for SandLoader
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please describe the problem first, then the solution you have in mind.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find the same request.
+          required: true
+        - label: This request is about SandLoader itself, its modding APIs, installer, UI, compatibility layer, or tooling.
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Mod loading / lifecycle
+        - SandLoader modding API
+        - Fluxloader compatibility
+        - Mod manager / UI
+        - Installer / platform support
+        - Console / developer tools
+        - Security / permissions
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or limitation
+      description: What is difficult, missing, or currently impossible?
+      placeholder: I am trying to..., but currently...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like SandLoader to provide.
+      placeholder: SandLoader should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage
+      description: If relevant, show how this would look to a player or mod developer.
+      placeholder: Example API call, manifest entry, UI flow, or user scenario.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention any workarounds or alternative designs you considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: Could this affect existing SandLoader mods, Fluxloader mods, saves, platforms, or older Sandustry versions?
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add links, screenshots, mockups, related issues, or implementation notes.
+    validations:
+      required: false

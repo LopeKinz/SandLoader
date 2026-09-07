@@ -1,0 +1,151 @@
+name: Issue auto-label
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Classify issue
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const title = issue.title || '';
+
+            const section = (heading) => {
+              const marker = `### ${heading}`;
+              const start = body.indexOf(marker);
+              if (start === -1) return '';
+
+              const rest = body.slice(start + marker.length).replace(/^\s*\n/, '');
+              const nextHeading = rest.search(/\n### /);
+              return (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).trim();
+            };
+
+            const labelDefinitions = {
+              'bug': { color: 'd73a4a', description: 'Something is not working' },
+              'feature': { color: 'a2eeef', description: 'New feature or improvement request' },
+              'mod-compatibility': { color: 'fbca04', description: 'Mod compatibility problem' },
+
+              'windows': { color: '0078d4', description: 'Windows-specific issue' },
+              'linux': { color: 'f9d0c4', description: 'Linux-specific issue' },
+              'macos': { color: 'cfd3d7', description: 'macOS-specific issue' },
+
+              'steam': { color: '1b2838', description: 'Steam distribution' },
+              'gog': { color: '86328a', description: 'GOG distribution' },
+              'standalone': { color: '6f42c1', description: 'Manual or standalone distribution' },
+              'microsoft-store': { color: '00a4ef', description: 'Microsoft Store distribution' },
+              'game-pass': { color: '107c10', description: 'Game Pass distribution' },
+
+              'sandloader-mod': { color: '0052cc', description: 'SandLoader-native mod' },
+              'fluxloader': { color: '5319e7', description: 'Fluxloader compatibility' },
+              'workshop': { color: '0366d6', description: 'Steam Workshop mod' },
+
+              'mod-loading': { color: 'bfdadc', description: 'Mod loading or lifecycle' },
+              'api': { color: '0e8a16', description: 'SandLoader modding API' },
+              'ui': { color: 'c5def5', description: 'Mod manager or user interface' },
+              'installer': { color: 'e99695', description: 'Installer or platform support' },
+              'devtools': { color: '7057ff', description: 'Console or developer tooling' },
+              'security': { color: 'b60205', description: 'Security or permissions' },
+              'documentation': { color: '0075ca', description: 'Documentation' },
+            };
+
+            const managed = new Set(Object.keys(labelDefinitions));
+            const desired = new Set();
+
+            const modType = section('Mod type');
+            const area = section('Area');
+
+            // Issue type
+            if (modType) {
+              desired.add('mod-compatibility');
+            } else if (area) {
+              desired.add('feature');
+            } else if (title.startsWith('[Bug]:')) {
+              desired.add('bug');
+            }
+
+            // Operating system
+            const osLabels = {
+              'Windows': 'windows',
+              'Linux': 'linux',
+              'macOS': 'macos',
+            };
+            const os = section('Operating system');
+            if (osLabels[os]) desired.add(osLabels[os]);
+
+            // Store / distribution
+            const storeLabels = {
+              'Steam': 'steam',
+              'GOG': 'gog',
+              'Manual / standalone': 'standalone',
+              'Microsoft Store': 'microsoft-store',
+              'Game Pass': 'game-pass',
+            };
+            const store = section('Game store / distribution');
+            if (storeLabels[store]) desired.add(storeLabels[store]);
+
+            // Mod compatibility subtype
+            const modTypeLabels = {
+              'SandLoader mod': 'sandloader-mod',
+              'Fluxloader mod': 'fluxloader',
+              'Steam Workshop mod': 'workshop',
+            };
+            if (modTypeLabels[modType]) desired.add(modTypeLabels[modType]);
+
+            // Feature request area
+            const areaLabels = {
+              'Mod loading / lifecycle': 'mod-loading',
+              'SandLoader modding API': 'api',
+              'Fluxloader compatibility': 'fluxloader',
+              'Mod manager / UI': 'ui',
+              'Installer / platform support': 'installer',
+              'Console / developer tools': 'devtools',
+              'Security / permissions': 'security',
+              'Documentation': 'documentation',
+            };
+            if (areaLabels[area]) desired.add(areaLabels[area]);
+
+            // Ensure every required label exists before assigning it.
+            for (const name of desired) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                const definition = labelDefinitions[name];
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: definition.color,
+                  description: definition.description,
+                });
+              }
+            }
+
+            // Preserve labels that are not managed by this workflow. This also
+            // removes stale managed labels when a user edits an Issue Form answer.
+            const existing = issue.labels.map((label) =>
+              typeof label === 'string' ? label : label.name
+            );
+            const preserved = existing.filter((name) => !managed.has(name));
+            const labels = [...new Set([...preserved, ...desired])];
+
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels,
+            });

@@ -1,0 +1,8 @@
+{
+  "id": "gas-pipes",
+  "name": "Gas Pipes",
+  "version": "1.4.0",
+  "priority": 100,
+  "main": "main.js",
+  "renderer": "renderer.js"
+}
