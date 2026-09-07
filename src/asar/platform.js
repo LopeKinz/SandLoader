@@ -263,7 +263,7 @@ function strategyFor(platform, host) {
     return {
       id: STRATEGIES.UNSUPPORTED,
       supported: false,
-      reason: `${(p.shadow && p.shadow.paths.slot) || 'the app.asar slot'} is a directory that ` +
+      reason: `${(p.shadow && p.shadow.paths && p.shadow.paths.slot) || 'the app.asar slot'} is a directory that ` +
         'SandLoader did not create. Something else is attached here, and overwriting it would ' +
         'break whatever that is. Remove it first if you are sure it is no longer needed.',
       reversible: true,
