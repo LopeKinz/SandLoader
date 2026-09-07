@@ -8,7 +8,8 @@
     "install-loader": "node install.js",
     "status": "node install.js --status",
     "uninstall": "node install.js --uninstall",
-    "test": "node tools/selftest.js"
+    "test": "node tools/selftest.js",
+    "test:e2e": "node tools/e2e-attach.js --run"
   },
   "engines": {
     "node": ">=18"
