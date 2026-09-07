@@ -2125,6 +2125,116 @@ check('install type is detected and the attach strategy is honest', () => {
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+check('shadow paths keep the .asar suffix Electron needs for .unpacked', () => {
+  const shadow = require('../src/asar/shadow')
+  const p = shadow.derive('/res', 'app')
+  assert(p.slot === path.join('/res', 'app.asar'), 'slot is not the name Electron looks at first')
+  assert(p.parked === path.join('/res', 'app.smln-original.asar'), 'parked original lost its .asar suffix')
+  assert(p.parkedUnpacked === p.parked + '.unpacked', 'unpacked sibling must be <parked>.unpacked')
+  assert(p.liveUnpacked === path.join('/res', 'app.asar.unpacked'), 'live unpacked path is wrong')
+  const g = shadow.derive('/res', 'game')
+  assert(g.parked === path.join('/res', 'game.smln-original.asar'), 'game.asar builds are not derived')
+  return 'app and game bases both derive correctly'
+})
+
+check('shadow state is read off the disk, not assumed', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-shadow-'))
+  const seen = {}
+  try {
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    seen.clean = shadow.inspect(dir, 'app').state
+
+    fs.renameSync(path.join(dir, 'app.asar'), path.join(dir, 'app.smln-original.asar'))
+    seen.parkedOnly = shadow.inspect(dir, 'app').state
+
+    fs.mkdirSync(path.join(dir, 'app.asar'))
+    seen.foreign = shadow.inspect(dir, 'app').state
+
+    fs.writeFileSync(path.join(dir, 'app.asar', shadow.RECEIPT), '{}')
+    seen.attached = shadow.inspect(dir, 'app').state
+
+    fs.rmSync(path.join(dir, 'app.smln-original.asar'))
+    seen.broken = shadow.inspect(dir, 'app').state
+
+    fs.rmSync(path.join(dir, 'app.asar'), { recursive: true, force: true })
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    fs.writeFileSync(path.join(dir, 'app.smln-original.asar'), 'ARCHIVE')
+    seen.orphaned = shadow.inspect(dir, 'app').state
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  assert(seen.clean === 'clean', 'untouched install read as ' + seen.clean)
+  assert(seen.parkedOnly === 'parked-only', 'half-applied install read as ' + seen.parkedOnly)
+  assert(seen.foreign === 'foreign', 'a directory without our receipt read as ' + seen.foreign)
+  assert(seen.attached === 'attached', 'a complete attach read as ' + seen.attached)
+  assert(seen.broken === 'broken', 'attach with the original gone read as ' + seen.broken)
+  assert(seen.orphaned === 'orphaned', 'restored archive beside our original read as ' + seen.orphaned)
+  return 'all six states distinguished'
+})
+
+check('applying the shadow attach moves both paths and lands the files', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-apply-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    fs.mkdirSync(path.join(dir, 'app.asar.unpacked'))
+    fs.writeFileSync(path.join(dir, 'app.asar.unpacked', 'native.node'), 'NATIVE')
+
+    const out = shadow.apply(dir, 'app', { 'package.json': '{}', [shadow.RECEIPT]: '{"v":1}' })
+    assert(out.ok, 'apply reported failure: ' + (out.error && out.error.message))
+    assert(fs.readFileSync(path.join(dir, 'app.smln-original.asar'), 'utf8') === 'ARCHIVE',
+      'the original archive did not move')
+    assert(fs.readFileSync(path.join(dir, 'app.smln-original.asar.unpacked', 'native.node'), 'utf8') === 'NATIVE',
+      'the unpacked natives did not move with it')
+    assert(fs.statSync(path.join(dir, 'app.asar')).isDirectory(), 'the slot is not a directory')
+    assert(fs.existsSync(path.join(dir, 'app.asar', shadow.RECEIPT)), 'the receipt was not written')
+    assert(shadow.inspect(dir, 'app').state === 'attached', 'state after apply is not attached')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'archive, natives and three files all in place'
+})
+
+check('a failed apply leaves the install exactly as it found it', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-rollback-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    fs.mkdirSync(path.join(dir, 'app.asar.unpacked'))
+
+    // A file whose name is an invalid path component makes the last step throw
+    // after both renames have already happened - the worst moment to fail.
+    const out = shadow.apply(dir, 'app', { 'sub/dir/nope.json': '{}' })
+    assert(!out.ok, 'apply reported success despite an unwritable file')
+    assert(fs.readFileSync(path.join(dir, 'app.asar'), 'utf8') === 'ARCHIVE',
+      'the original archive was not put back')
+    assert(fs.statSync(path.join(dir, 'app.asar.unpacked')).isDirectory(),
+      'the unpacked directory was not put back')
+    assert(!fs.existsSync(path.join(dir, 'app.smln-original.asar')),
+      'a parked original was left behind')
+    assert(shadow.inspect(dir, 'app').state === 'clean', 'state after rollback is not clean')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'both renames undone, nothing left behind'
+})
+
+check('apply refuses to start unless the install is clean', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-guard-'))
+  try {
+    fs.mkdirSync(path.join(dir, 'app.asar'))
+    const out = shadow.apply(dir, 'app', { 'package.json': '{}' })
+    assert(!out.ok, 'apply ran against a slot that already held a directory')
+    assert(/foreign/.test(String(out.error && out.error.message)),
+      'the refusal did not name the state it found: ' + (out.error && out.error.message))
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'a non-clean install is refused, and the state is named'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')
