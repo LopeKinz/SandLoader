@@ -2235,6 +2235,48 @@ check('apply refuses to start unless the install is clean', () => {
   return 'a non-clean install is refused, and the state is named'
 })
 
+check('reverting puts the install back byte for byte', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-revert-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    fs.mkdirSync(path.join(dir, 'app.asar.unpacked'))
+    fs.writeFileSync(path.join(dir, 'app.asar.unpacked', 'native.node'), 'NATIVE')
+
+    assert(shadow.apply(dir, 'app', { [shadow.RECEIPT]: '{}' }).ok, 'setup apply failed')
+    const out = shadow.revert(dir, 'app')
+    assert(out.ok, 'revert reported failure: ' + (out.error && out.error.message))
+
+    assert(fs.readFileSync(path.join(dir, 'app.asar'), 'utf8') === 'ARCHIVE', 'archive not restored')
+    assert(fs.readFileSync(path.join(dir, 'app.asar.unpacked', 'native.node'), 'utf8') === 'NATIVE',
+      'natives not restored')
+    assert(fs.readdirSync(dir).sort().join(',') === 'app.asar,app.asar.unpacked',
+      'leftovers in resources: ' + fs.readdirSync(dir).join(','))
+    assert(shadow.inspect(dir, 'app').state === 'clean', 'state after revert is not clean')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'archive, natives and directory listing all restored'
+})
+
+check('revert will not delete a directory SandLoader did not create', () => {
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-revert-guard-'))
+  try {
+    fs.mkdirSync(path.join(dir, 'app.asar'))
+    fs.writeFileSync(path.join(dir, 'app.asar', 'someone-elses.js'), 'MINE')
+    fs.writeFileSync(path.join(dir, 'app.smln-original.asar'), 'ARCHIVE')
+
+    const out = shadow.revert(dir, 'app')
+    assert(!out.ok, 'revert removed a directory with no receipt')
+    assert(fs.existsSync(path.join(dir, 'app.asar', 'someone-elses.js')),
+      "another tool's file was deleted")
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'a receiptless directory is left alone'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')

@@ -140,4 +140,36 @@ function apply(resources, base, files) {
   }
 }
 
-module.exports = { derive, inspect, apply, SUFFIX, RECEIPT }
+/**
+ * Put the install back. The receipt is the permission slip: without it the
+ * directory in the slot belongs to something else and is not ours to delete.
+ *
+ * The original is checked before the directory is removed, so the window in
+ * which the slot holds neither is as short as two syscalls.
+ *
+ * @param {string} resources
+ * @param {string} base
+ * @returns {{ok:boolean, error?:Error}}
+ */
+function revert(resources, base) {
+  const { state, paths } = inspect(resources, base)
+
+  if (state === 'foreign') {
+    return { ok: false, error: new Error(paths.slot + ' has no SandLoader receipt - refusing to delete it') }
+  }
+  if (state === 'clean') return { ok: true }
+  if (state === 'broken') {
+    return { ok: false, error: new Error('the original archive is gone; run "node install.js --repair"') }
+  }
+
+  try {
+    if (isDir(paths.slot)) fs.rmSync(paths.slot, { recursive: true, force: true })
+    if (exists(paths.parked)) fs.renameSync(paths.parked, paths.slot)
+    if (exists(paths.parkedUnpacked)) fs.renameSync(paths.parkedUnpacked, paths.liveUnpacked)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e }
+  }
+}
+
+module.exports = { derive, inspect, apply, revert, SUFFIX, RECEIPT }
