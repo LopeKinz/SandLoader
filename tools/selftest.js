@@ -2088,9 +2088,18 @@ check('install type is detected and the attach strategy is honest', () => {
   if (install) {
     const p = platformMod.detect(install)
     assert(p.kind === 'steam', 'the real install was detected as ' + p.kind)
-    const s = platformMod.strategyFor(p)
-    assert(s.id === 'steam-workshop-slot', 'Steam strategy changed to ' + s.id)
-    assert(s.writes.length === 0, 'the Steam path wants to write into the game directory')
+    // Which attach is right depends on the build, not on the store: the slot
+    // existed up to 0.5.5 and is gone in 0.5.6. Assert the strategy the host
+    // probe implies, so this check keeps telling the truth across updates.
+    const host = require('../src/asar/hostabi').probe(install)
+    const s = platformMod.strategyFor(p, host)
+    if (host.loaderSlot) {
+      assert(s.id === 'steam-workshop-slot', 'a host with the slot got ' + s.id)
+      assert(s.writes.length === 0, 'the Steam path wants to write into the game directory')
+    } else {
+      assert(s.id === 'asar-shadow-directory', 'a host without the slot got ' + s.id)
+      assert(s.writes.length === 3, 'the shadow attach touches ' + s.writes.length + ' paths')
+    }
   }
 
   const dir = tmpdir('platform')
@@ -2107,13 +2116,13 @@ check('install type is detected and the attach strategy is honest', () => {
     }
 
     const manual = platformMod.detect(mk('manual', { 'resources/app.asar': 'x' }))
-    const manualStrategy = platformMod.strategyFor(manual)
+    const manualStrategy = platformMod.strategyFor(manual, { loaderSlot: false })
     assert(manual.kind === 'manual', 'a plain install was detected as ' + manual.kind)
-    assert(manualStrategy.id === 'resources-app-bootstrap', 'non-Steam strategy: ' + manualStrategy.id)
-    assert(manualStrategy.writes.length === 3, 'the bootstrap writes ' + manualStrategy.writes.length + ' files')
+    assert(manualStrategy.id === 'asar-shadow-directory', 'non-Steam strategy: ' + manualStrategy.id)
+    assert(manualStrategy.writes.length === 3, 'the shadow attach touches ' + manualStrategy.writes.length + ' paths')
 
     const store = platformMod.detect(mk('store', { 'resources/app.asar': 'x', 'AppxManifest.xml': '<x/>' }))
-    const storeStrategy = platformMod.strategyFor(store)
+    const storeStrategy = platformMod.strategyFor(store, { loaderSlot: false })
     assert(store.kind === 'msstore', 'MS Store was detected as ' + store.kind)
     assert(storeStrategy.supported === false, 'MS Store was advertised as supported')
     assert(/WindowsApps/.test(storeStrategy.reason), 'the refusal does not explain itself')
@@ -2275,6 +2284,45 @@ check('revert will not delete a directory SandLoader did not create', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
   return 'a receiptless directory is left alone'
+})
+
+check('a Steam host that still offers the slot keeps the zero-touch attach', () => {
+  const platform = require('../src/asar/platform')
+  const plat = { kind: 'steam', resources: '/res', writableResources: true, shadow: { state: 'clean' } }
+  const strat = platform.strategyFor(plat, { loaderSlot: true })
+  assert(strat.id === platform.STRATEGIES.WORKSHOP_SLOT, 'got ' + strat.id + ' for a host with the slot')
+  assert(strat.writes.length === 0, 'the workshop slot must write nothing into the game directory')
+  return 'workshop slot still preferred where it exists'
+})
+
+check('a host without the slot gets the shadow attach, on every platform', () => {
+  const platform = require('../src/asar/platform')
+  for (const kind of ['steam', 'gog', 'manual']) {
+    const plat = { kind, resources: '/res', writableResources: true, base: 'app', shadow: { state: 'clean' } }
+    const strat = platform.strategyFor(plat, { loaderSlot: false })
+    assert(strat.id === platform.STRATEGIES.SHADOW_ASAR, kind + ' got ' + strat.id)
+    assert(strat.supported, kind + ' was reported unsupported')
+    assert(!strat.reason.includes('before'), 'the reason still claims the old search order')
+  }
+  return 'steam, gog and manual all fall through to the shadow attach'
+})
+
+check('the dead resources-app-bootstrap strategy is gone', () => {
+  const platform = require('../src/asar/platform')
+  assert(!('APP_BOOTSTRAP' in platform.STRATEGIES), 'APP_BOOTSTRAP is still exported')
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'asar', 'platform.js'), 'utf8')
+  assert(!/searching[\s\S]{0,80}'app',\s*'app\.asar'/.test(src),
+    'the module header still documents the reversed search order')
+  return 'strategy and its false premise both removed'
+})
+
+check('MS Store stays unsupported and non-writable installs still refuse', () => {
+  const platform = require('../src/asar/platform')
+  const store = platform.strategyFor({ kind: 'msstore', resources: '/res' }, { loaderSlot: false })
+  assert(store.id === platform.STRATEGIES.UNSUPPORTED, 'msstore became attachable')
+  const ro = platform.strategyFor({ kind: 'manual', resources: '/res', writableResources: false }, { loaderSlot: false })
+  assert(ro.id === platform.STRATEGIES.UNSUPPORTED, 'a read-only install became attachable')
+  return 'both refusals intact'
 })
 
 // --------------------------------------------------------------- the prelude

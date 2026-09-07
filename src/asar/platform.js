@@ -2,34 +2,43 @@
 /**
  * Which build of Sandustry is this, and can SandLoader attach to it?
  *
- * On Steam the game loads a mod loader itself: `main.js` scans the Workshop
- * content folder for a `modinfo.json` declaring `modID: "fluxloader"` and
- * requires the bundle next to it. That is the slot SandLoader occupies, and it
- * needs no changes to the installation at all.
+ * THE LOADER SLOT, WHERE IT STILL EXISTS
  *
- * That scan opens with `if (PLATFORM_NAME !== 'steam') return null;` - verified
- * in the shipped main.js. On every non-Steam build the slot is never even
- * looked at, which is the whole reason SandLoader has been Steam-only.
+ * Up to Sandustry 0.5.5 the game loaded a mod loader itself: `main.js` scanned
+ * the Workshop content folder for a `modinfo.json` declaring
+ * `modID: "fluxloader"` and required the bundle next to it. That is the slot
+ * SandLoader occupies, and it needs no changes to the installation at all - so
+ * it is still preferred wherever it is found. The scan opened with
+ * `if (PLATFORM_NAME !== 'steam') return null;`, which is why that attach was
+ * Steam-only.
  *
- * THE NON-STEAM ATTACH POINT
+ * 0.5.6 removed all of it: no scan, and none of the six calls the host used to
+ * make into a loader. Whether the slot exists is therefore a question to ask
+ * the build, not a property of the store it came from - see src/asar/hostabi.js.
+ *
+ * THE ATTACH POINT WHEN THERE IS NO SLOT
  *
  * Electron resolves its application package by searching, under
- * `process.resourcesPath`, the names `['app', 'app.asar', 'default_app.asar']`
- * in that order. `app` comes first. So creating a *new* `resources/app/`
- * directory takes priority over the untouched `app.asar` beside it - and does
- * so without modifying, overwriting, truncating or deleting a single original
- * file. Uninstalling is deleting the directory we added.
+ * `process.resourcesPath`, the names `app.asar`, `app` and `default_app.asar`
+ * in that order - documented under the `onlyLoadAppFromAsar` fuse, and measured
+ * against this build. `app.asar` comes FIRST. An added `resources/app/`
+ * directory is therefore never reached while an archive sits beside it, which
+ * is why the old `resources-app-bootstrap` strategy never worked and has been
+ * removed rather than repaired.
+ *
+ * With `onlyLoadAppFromAsar` off - it is off in this build - the winning name
+ * does not have to be an archive. So SandLoader renames the original aside and
+ * puts a directory of that name in its place. See src/asar/shadow.js.
  *
  * Being straight about the trade-off, because it is a real one:
  *
- *   - It writes NEW files INSIDE the installation directory. Nothing original
- *     is touched, but the folder is no longer byte-identical to a fresh
- *     install, and a launcher that verifies file *counts* would notice.
+ *   - Two paths are RENAMED. No original file's content is modified, and
+ *     renaming them back is the uninstall - but the directory is no longer
+ *     byte-identical to a fresh install.
+ *   - Steam's "verify integrity of game files" restores the archive and leaves
+ *     our copy orphaned. That is detected and reported, not prevented.
  *   - It needs write permission there. Under Program Files that means running
  *     the installer elevated.
- *   - Afterwards `app.getAppPath()` reports `<resources>/app` rather than
- *     `<resources>/app.asar`. The bootstrap keeps `name` and `version` right,
- *     but code reading the path itself will see the new one.
  *
  * MS Store and Game Pass are NOT supported and cannot be. The package lives
  * under `WindowsApps`, whose ACLs deny writes even to an administrator, and
@@ -42,6 +51,8 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
+const shadow = require('./shadow')
+
 const PLATFORMS = Object.freeze({
   STEAM: 'steam',
   GOG: 'gog',
@@ -53,13 +64,12 @@ const PLATFORMS = Object.freeze({
 
 const STRATEGIES = Object.freeze({
   WORKSHOP_SLOT: 'steam-workshop-slot',
-  APP_BOOTSTRAP: 'resources-app-bootstrap',
+  SHADOW_ASAR: 'asar-shadow-directory',
   UNSUPPORTED: 'unsupported',
 })
 
-/** Files the bootstrap adds, relative to `<resources>/app`. */
-const BOOTSTRAP_FILES = Object.freeze(['package.json', 'smln-bootstrap.js', '.smln-bootstrap.json'])
-const RECEIPT = '.smln-bootstrap.json'
+/** Owned by src/asar/shadow.js; re-exported so callers keep one import. */
+const RECEIPT = shadow.RECEIPT
 
 function exists(p) {
   try { return fs.existsSync(p) } catch (_) { return false }
@@ -96,8 +106,8 @@ function anyMatching(dir, re) {
  * @property {string} root
  * @property {string} resources
  * @property {boolean} writableResources
- * @property {boolean} hasExistingAppDir
- * @property {boolean} ourAppDir       The existing app dir is one we installed.
+ * @property {string} base             Archive base name: 'app' or 'game'.
+ * @property {{state:string, paths:object}} shadow   From src/asar/shadow.js.
  * @property {string|null} platformNameInHost
  */
 
@@ -110,9 +120,11 @@ function detect(install) {
   const resources = (install && install.resources) || path.join(root, 'resources')
   const evidence = []
 
-  const appDir = path.join(resources, 'app')
-  const hasExistingAppDir = exists(appDir)
-  const ourAppDir = hasExistingAppDir && exists(path.join(appDir, RECEIPT))
+  // 'app' for app.asar, 'game' for the game.asar builds locate.js also accepts.
+  const base = install && install.asar
+    ? path.basename(install.asar).replace(/\.asar$/i, '')
+    : 'app'
+  const shadowState = shadow.inspect(resources, base)
 
   let kind = PLATFORMS.UNKNOWN
   let confidence = 'guess'
@@ -178,8 +190,8 @@ function detect(install) {
     root,
     resources,
     writableResources: probeWritable(resources),
-    hasExistingAppDir,
-    ourAppDir,
+    base,
+    shadow: shadowState,
     platformNameInHost,
   }
 }
@@ -194,32 +206,39 @@ function detect(install) {
  * @property {string[]} writes
  */
 
-/** @param {Platform} platform @returns {Strategy} */
-function strategyFor(platform) {
+/**
+ * @param {Platform} platform
+ * @param {{loaderSlot:boolean}} [host] From src/asar/hostabi.js. Absent is
+ *   treated as "no slot", which routes to the attach that does not need one.
+ * @returns {Strategy}
+ */
+function strategyFor(platform, host) {
   const p = platform || {}
-  const appDir = p.resources ? path.join(p.resources, 'app') : ''
+  const loaderSlot = !!(host && host.loaderSlot)
 
-  if (p.kind === PLATFORMS.STEAM) {
-    return {
-      id: STRATEGIES.WORKSHOP_SLOT,
-      supported: true,
-      reason: "the game's own main.js scans the Steam Workshop for a loader and requires it; " +
-        'SandLoader occupies that slot and changes nothing on disk',
-      reversible: true,
-      requiresElevation: false,
-      writes: [],
-    }
-  }
-
+  // MS Store first: it is the one that must never be mistaken for writable.
   if (p.kind === PLATFORMS.MSSTORE || p.kind === PLATFORMS.GAMEPASS) {
     return {
       id: STRATEGIES.UNSUPPORTED,
       supported: false,
       reason: 'Microsoft Store and Game Pass builds install under WindowsApps, which denies writes ' +
         'even to an administrator and verifies the package signature. There is no file SandLoader ' +
-        'is allowed to add, and the game never scans for a loader on this platform - so there is no ' +
-        'non-destructive way in. Modifying the package would break the signature and is not an option.',
+        'is allowed to add or rename, so there is no way in. Modifying the package would break the ' +
+        'signature and is not an option.',
       reversible: false,
+      requiresElevation: false,
+      writes: [],
+    }
+  }
+
+  // The slot changes nothing on disk, so it wins wherever it still exists.
+  if (p.kind === PLATFORMS.STEAM && loaderSlot) {
+    return {
+      id: STRATEGIES.WORKSHOP_SLOT,
+      supported: true,
+      reason: "the game's own main.js scans the Steam Workshop for a loader and requires it; " +
+        'SandLoader occupies that slot and changes nothing on disk',
+      reversible: true,
       requiresElevation: false,
       writes: [],
     }
@@ -237,29 +256,30 @@ function strategyFor(platform) {
     }
   }
 
-  if (p.hasExistingAppDir && !p.ourAppDir) {
+  const state = (p.shadow && p.shadow.state) || 'clean'
+  if (state === 'foreign') {
     return {
       id: STRATEGIES.UNSUPPORTED,
       supported: false,
-      reason: `${appDir} already exists and was not created by SandLoader. ` +
-        'Refusing to touch it - something else is already attached here, and overwriting it ' +
-        'would break whatever that is.',
+      reason: `${(p.shadow && p.shadow.paths.slot) || 'the app.asar slot'} is a directory that ` +
+        'SandLoader did not create. Something else is attached here, and overwriting it would ' +
+        'break whatever that is. Remove it first if you are sure it is no longer needed.',
       reversible: true,
       requiresElevation: false,
       writes: [],
     }
   }
 
+  const paths = (p.shadow && p.shadow.paths) || shadow.derive(p.resources || '', p.base || 'app')
   return {
-    id: STRATEGIES.APP_BOOTSTRAP,
+    id: STRATEGIES.SHADOW_ASAR,
     supported: true,
-    reason: "Electron searches resources/ for 'app' before 'app.asar', so an added app/ directory " +
-      'loads first. No original file is modified; uninstalling deletes the directory again.',
+    reason: 'Electron searches resources/ for app.asar first, and this build does not require it ' +
+      'to be an archive. The original is renamed aside and a directory takes its place; renaming ' +
+      "it back is the uninstall. No original file's content is modified.",
     reversible: true,
-    // Program Files needs elevation, but writableResources already proved we
-    // can write, so by the time we get here the question is settled.
     requiresElevation: false,
-    writes: BOOTSTRAP_FILES.map((f) => path.join(appDir, f)),
+    writes: [paths.slot, paths.parked, paths.parkedUnpacked],
   }
 }
 
@@ -277,8 +297,8 @@ function describe(platform, strategy) {
     lines.push('Would create :')
     for (const w of s.writes) lines.push(`               ${w}`)
   }
-  if (p.hasExistingAppDir) {
-    lines.push(`Existing app/: ${p.ourAppDir ? 'installed by SandLoader' : 'present, NOT ours'}`)
+  if (p.shadow && p.shadow.state !== 'clean') {
+    lines.push(`Attach state : ${p.shadow.state}`)
   }
   lines.push(`Writable     : ${p.writableResources ? 'yes' : 'no'}`)
   return lines.join('\n')
@@ -286,6 +306,6 @@ function describe(platform, strategy) {
 
 module.exports = {
   detect, strategyFor, describe,
-  PLATFORMS, STRATEGIES, BOOTSTRAP_FILES, RECEIPT,
+  PLATFORMS, STRATEGIES, RECEIPT,
   probeWritable,
 }
