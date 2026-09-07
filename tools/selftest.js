@@ -2387,6 +2387,35 @@ check('no stray debug logging survives in the bootstrap', () => {
   return 'appendFileSync debug trace removed'
 })
 
+check('the generated stub hands the bootstrap its own directory', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
+  assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),
+    'the stub does not pass appDir, so the bootstrap cannot find its receipt')
+  return 'stub passes appDir'
+})
+
+check('the receipt records the archive the bootstrap has to chain into', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
+  assert(/originalArchive/.test(src), 'receiptSource does not record originalArchive')
+  return 'originalArchive present in the receipt'
+})
+
+check('install.js offers a repair path and has dropped the dead strategy', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
+  assert(/--repair/.test(src), 'no --repair flag is dispatched')
+  assert(/STRATEGIES\.SHADOW_ASAR/.test(src), 'install.js still branches on the removed strategy')
+  assert(!/APP_BOOTSTRAP/.test(src), 'install.js still references APP_BOOTSTRAP')
+  return 'repair wired, dead strategy gone'
+})
+
+check('the installer refuses to rename files the running game holds open', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
+  assert(/function gameIsRunning/.test(src), 'install.js has no running-game precondition')
+  const body = src.split('function installShadow')[1] || ''
+  assert(/gameIsRunning\(\)/.test(body), 'installShadow does not check it before touching anything')
+  return 'running game blocks the attach'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')
