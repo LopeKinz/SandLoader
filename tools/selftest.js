@@ -122,6 +122,26 @@ check('host still hands us startGame + paths', () => {
   return 'ok'
 })
 
+check('the loader-slot probe recognises a host that offers the slot', () => {
+  const hostabi = require('../src/asar/hostabi')
+  const withSlot = `
+    if (modID === "fluxloader") { require(path.join(dir, "fluxloader.bundle.js")) }
+    loader.initialize(api); loader.startManager(); loader.getAPI();
+    loader.setGameWindow(w); loader.onGameStarted(); loader.closeGame();
+  `
+  assert(hostabi.hasLoaderSlot(withSlot) === true, 'a host with the full ABI was not recognised')
+  return 'full ABI recognised'
+})
+
+check('the loader-slot probe rejects a host that dropped the slot', () => {
+  const hostabi = require('../src/asar/hostabi')
+  const noSlot = 'const MODDING_ENABLED = false; function createWindow() {}'
+  assert(hostabi.hasLoaderSlot(noSlot) === false, '0.5.6-shaped main.js was treated as offering the slot')
+  const partial = 'if (modID === "fluxloader") { } // but no startManager'
+  assert(hostabi.hasLoaderSlot(partial) === false, 'a partial ABI must not count as a usable slot')
+  return 'missing and partial ABI both rejected'
+})
+
 // -------------------------------------------------------------- bundle hooks
 let bundle = null
 check('read renderer bundle', () => {
