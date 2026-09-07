@@ -48,6 +48,7 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 | **Game** | Sandustry **0.5.6** |
 | **Branch** | **Vanilla only** — Steam's default `public` branch. The experimental modded branch is **not supported** |
 | **Stores** | Steam, GOG, manual/standalone |
+| **Attach** | The Workshop loader slot where the build still offers one (up to 0.5.5); otherwise a shadow directory at `resources/app.asar`, with the original renamed aside |
 | **OS** | Windows, Linux or macOS |
 | **Node.js** | **18 or newer**, only to run the installer — [nodejs.org](https://nodejs.org) |
 
@@ -117,7 +118,7 @@ On **Steam** you should see:
   steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 
   Installed. Start Sandustry and press ^ (or F1) to open the console.
-  Nothing in the game directory was modified.
+  No file's content was modified; two paths were renamed.
 ```
 
 On **GOG** or a standalone copy:
@@ -791,6 +792,21 @@ offering a workaround.
 ## Limitations and what's not built yet
 
 An honest list:
+
+- **Sandustry 0.5.6 removed the loader slot.** Up to 0.5.5 the game's own
+  `main.js` scanned the Steam Workshop for a loader and drove it through six
+  calls. On 0.5.6 none of that is left, so SandLoader attaches by taking over
+  the `app.asar` name instead: the original archive is renamed to
+  `app.smln-original.asar`, its `.unpacked` sibling moves with it, and a
+  three-file directory takes their place. No file's content is modified and
+  renaming the two paths back is the uninstall — but this is a rename, not the
+  zero-touch install the Workshop slot was. Steam's *Verify integrity of game
+  files* undoes it; `node install.js --repair` puts the pieces back.
+- **The game has its own modding system now, switched off.** 0.5.6 ships
+  Workshop discovery, patch sets, a local `mods` folder and a protocol
+  interceptor behind `const MODDING_ENABLED = false`. Nothing SandLoader does
+  turns it on, and if a later build enables it that deserves designing for
+  properly rather than bolting on.
 
 - **Recipes.** Sandustry 0.5.5 has no recipe registry at all — `recipes`
   appears nowhere in the build's API object, and `api.structures.recipes`

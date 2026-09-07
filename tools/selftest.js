@@ -2416,6 +2416,17 @@ check('the installer refuses to rename files the running game holds open', () =>
   return 'running game blocks the attach'
 })
 
+check('the README no longer promises an attach that does not exist', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8')
+  assert(!/Nothing in the game directory was modified/.test(readme),
+    'the README still promises nothing in the game directory changes')
+  assert(/0\.5\.6/.test(readme), 'the README has not caught up to 0.5.6')
+  assert(/renamed/i.test(readme), 'the README does not say that two paths are renamed')
+  assert(/MODDING_ENABLED/.test(readme),
+    "the README does not record the game's own disabled modding pipeline")
+  return 'promise, version and limitations all updated'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')
