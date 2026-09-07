@@ -2427,6 +2427,49 @@ check('the README no longer promises an attach that does not exist', () => {
   return 'promise, version and limitations all updated'
 })
 
+check('the install stays findable while SandLoader is attached to it', () => {
+  // Regression: with the attach in place, resources/app.asar is our directory,
+  // so every archive check rejected it and locate() returned "not found" - which
+  // made the loader invisible to its own uninstaller. Caught by tools/e2e-attach.js.
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-locate-'))
+  try {
+    const slot = path.join(dir, 'app.asar')
+    const parked = path.join(dir, 'app.smln-original.asar')
+    fs.mkdirSync(slot)
+    fs.writeFileSync(parked, 'ARCHIVE')
+    fs.writeFileSync(path.join(slot, shadow.RECEIPT), JSON.stringify({ originalArchive: parked }))
+    assert(locate.resolveThroughShadow(slot) === parked,
+      'the receipt was not followed to the parked original')
+
+    // A plain archive is passed straight through, untouched.
+    assert(locate.resolveThroughShadow(parked) === parked, 'a real archive was redirected')
+
+    // Somebody else's directory is not ours to follow.
+    const foreign = path.join(dir, 'other.asar')
+    fs.mkdirSync(foreign)
+    assert(locate.resolveThroughShadow(foreign) === null, 'a receiptless directory was followed anyway')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'attached, untouched and foreign all resolved correctly'
+})
+
+check('the archive base survives the rename the attach performs', () => {
+  const platformMod2 = require('../src/asar/platform')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-base-'))
+  try {
+    fs.mkdirSync(path.join(dir, 'resources'))
+    const parked = path.join(dir, 'resources', 'app.smln-original.asar')
+    fs.writeFileSync(parked, 'ARCHIVE')
+    const p = platformMod2.detect({ root: dir, resources: path.join(dir, 'resources'), asar: parked })
+    assert(p.base === 'app', 'base derived as "' + p.base + '" from the parked original')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'app.smln-original.asar still yields base "app"'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')

@@ -19,6 +19,7 @@ const path = require('path')
 const os = require('os')
 
 const reader = require('./reader')
+const shadow = require('./shadow')
 const { SmlnError } = require('../core/errors')
 
 const APP_ID = 2764460
@@ -116,6 +117,33 @@ function candidates() {
 }
 
 /**
+ * See through a shadow attach.
+ *
+ * While SandLoader is attached, the name Electron loads - `app.asar` - is our
+ * directory, not an archive, so every archive check below would reject the
+ * install and the loader would become unfindable by its own uninstaller. The
+ * receipt inside that directory records where the real archive went; follow it.
+ *
+ * Returns the path to inspect, or null when the directory is not ours.
+ *
+ * @param {string} candidate @returns {string|null}
+ */
+function resolveThroughShadow(candidate) {
+  let isDir = false
+  try { isDir = fs.statSync(candidate).isDirectory() } catch (_) { return candidate }
+  if (!isDir) return candidate
+
+  try {
+    const receipt = JSON.parse(fs.readFileSync(path.join(candidate, shadow.RECEIPT), 'utf8'))
+    const original = receipt && receipt.originalArchive
+    return typeof original === 'string' && original ? original : null
+  } catch (_) {
+    // A directory with that name which is not ours: nothing to follow.
+    return null
+  }
+}
+
+/**
  * Validate one directory. Returns null when it is not a Sandustry install.
  * @param {string} dir @param {string} source @returns {GameInstall|null}
  */
@@ -123,7 +151,8 @@ function inspect(dir, source) {
   try {
     const resources = path.join(dir, "resources")
     for (const name of ["game.asar", "app.asar"]) {
-      const asar = path.join(resources, name)
+      const asar = resolveThroughShadow(path.join(resources, name))
+      if (!asar) continue
       const previous = process.noAsar
       process.noAsar = true
       let present
@@ -200,4 +229,7 @@ function workshopDir() {
   return null
 }
 
-module.exports = { locate, tryLocate, inspect, candidates, steamLibraries, workshopDir, APP_ID }
+module.exports = {
+  locate, tryLocate, inspect, candidates, steamLibraries, workshopDir,
+  resolveThroughShadow, APP_ID,
+}

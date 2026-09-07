@@ -121,8 +121,10 @@ function detect(install) {
   const evidence = []
 
   // 'app' for app.asar, 'game' for the game.asar builds locate.js also accepts.
+  // While attached, locate() reports the parked original - strip both the
+  // extension and the suffix shadow.js added, so the base stays 'app'/'game'.
   const base = install && install.asar
-    ? path.basename(install.asar).replace(/\.asar$/i, '')
+    ? path.basename(install.asar).replace(/\.asar$/i, '').replace(/\.smln-original$/i, '')
     : 'app'
   const shadowState = shadow.inspect(resources, base)
 
