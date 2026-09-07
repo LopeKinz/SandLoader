@@ -1056,6 +1056,49 @@ check('mod manager lists mods and persists a toggle', () => {
   return '2 rows, toggle emits rpc'
 })
 
+check('a mod row carries its security class in the margin', () => {
+  // The badge text is the precise statement, but it sits mid-row among other
+  // chips. The tier is also the row's left edge, so "this mod can do anything
+  // your account can" is legible while scanning the list - before reading a
+  // single name.
+  const { S, dom } = bootConsole({
+    mods: [
+      { id: 'plain', name: 'Plain', version: '1', enabled: true, capability: { badge: 'SANDBOXED' } },
+      { id: 'net', name: 'Networked', version: '1', enabled: true, capability: { badge: 'NETWORK' } },
+      { id: 'nat', name: 'Native Tool', version: '1', enabled: false, capability: { badge: 'NATIVE' } },
+    ],
+  })
+  S.modsUI.toggle(true)
+  const panel = dom.document.getElementById('smln-mods')
+  const rows = []
+  ;(function walk(n) {
+    for (const c of n.childNodes || []) {
+      if ((c.className || '').split(/\s+/).includes('row')) rows.push(c)
+      walk(c)
+    }
+  })(panel)
+  assert(rows.length === 3, 'expected 3 rows, got ' + rows.length)
+
+  const cls = rows.map((r) => r.className)
+  assert(!/native|elevated/.test(cls[0]), 'a sandboxed mod was flagged: ' + cls[0])
+  assert(/elevated/.test(cls[1]), 'a network mod has no elevated edge: ' + cls[1])
+  assert(/native/.test(cls[2]), 'a native mod has no native edge: ' + cls[2])
+  assert(/off/.test(cls[2]), 'a disabled mod is not marked as off: ' + cls[2])
+
+  // The edge is a modifier, not a replacement - the badge must still be there.
+  const text = []
+  ;(function walk(n) {
+    if (n.textContent) text.push(n.textContent)
+    for (const c of n.childNodes || []) walk(c)
+  })(rows[2])
+  assert(text.some((x) => /NATIVE/i.test(x)), 'the native badge text is gone: ' + text.join('|'))
+
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'modsui.js'), 'utf8')
+  assert(/#smln-mods \.row\.native\{border-left-color:#f87171/.test(src),
+    'the native row edge is not styled red')
+  return 'tier reads from the margin; badge text kept'
+})
+
 check('mod state round-trips through the main process', () => {
   const os2 = require('os')
   const dir = fs.mkdtempSync(path.join(os2.tmpdir(), 'smln-state-'))
@@ -2228,6 +2271,50 @@ check('the console chrome reports context and classifies its output', () => {
   return 'header context, severity classes, gutter glyphs'
 })
 
+check('the completion rail never covers the console output', () => {
+  // The suggestion list used to be `position:absolute;bottom:100%` - a popup
+  // floating over the log, hiding the very output you were reading to decide
+  // what to type. It is now a sibling column: it takes width from the output
+  // instead of covering it, so no line is ever occluded.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'console.js'), 'utf8')
+  const rail = src.slice(src.indexOf("'#smln-sugg{"), src.indexOf("].join('')"))
+  assert(!/#smln-sugg\{[^']*position:absolute/.test(rail),
+    'the completion rail is absolutely positioned again - it will overlay the output')
+  assert(!/#smln-sugg\{[^']*bottom:100%/.test(rail),
+    'the completion rail is anchored over the log again')
+
+  const { S, dom } = bootConsole()
+  S.console.toggle(true)
+  const body = dom.document.getElementById('smln-body')
+  assert(body, 'the console has no body row to lay output and rail out in')
+  const kids = (body.childNodes || []).map((n) => n.id)
+  assert(kids.indexOf('smln-out') >= 0 && kids.indexOf('smln-sugg') >= 0,
+    'output and rail are not siblings: ' + kids.join(','))
+
+  // With suggestions showing, every printed line must still be in the tree.
+  S.console.print('a line worth reading', 'n')
+  S.console.suggest('spa', 3)
+  const sugg = dom.document.getElementById('smln-sugg')
+  const rows = []
+  ;(function walk(n) {
+    for (const c of n.childNodes || []) {
+      if ((c.className || '').split(/\s+/).includes('s')) rows.push(c)
+      walk(c)
+    }
+  })(sugg)
+  assert(rows.length, 'the rail showed nothing for a known command prefix')
+
+  const out = dom.document.getElementById('smln-out')
+  const texts = []
+  ;(function walk(n) {
+    if (n.textContent) texts.push(n.textContent)
+    for (const c of n.childNodes || []) walk(c)
+  })(out)
+  assert(texts.some((x) => /a line worth reading/.test(x)),
+    'the output line vanished while the rail was open')
+  return 'rail is a sibling column; output stays whole while completing'
+})
+
 check('permissions can be granted and withdrawn from the details panel', () => {
   const { createDom } = require('./dom-harness')
   const dom = createDom()
@@ -2627,6 +2714,34 @@ check('mod content is registered with the simulation workers', () => {
   assert(strs && strs[1].uolkxReactorCore, 'the structure never reached the worker payload')
 
   return '4 registry messages posted, carrying the mod content'
+})
+
+check('SMLN.register automatically flushes renderer content to workers', () => {
+  const { S } = bootConsole()
+  const posted = []
+  const FH = {
+    elements: { register(st, def) { st.sandkit.mods.elements[def.id] = def; return { elementType: 91 } } },
+  }
+  const st = {
+    store: { structures: [], meta: { time: 0 } },
+    environment: {
+      config: { cellSize: 4 },
+      multithreading: { simulation: { postAll: (state, msg) => posted.push(msg) } },
+    },
+    sandkit: { mods: { elements: {}, structures: {}, terrains: {}, matters: {}, misc: {} } },
+  }
+  S.__capture(FH, st, 'game:ready')
+
+  return S.register.as('creator-selftest').element({ id: 'creator-element' }).then(() =>
+    new Promise((resolve, reject) => setTimeout(() => {
+      try {
+        const message = posted.find((entry) => entry[0] === enums.WorkerMessage.RegisterModElements)
+        assert(message, 'no automatic RegisterModElements message was posted')
+        assert(message[1]['creator-element'], 'the automatic worker payload omitted the renderer element')
+        resolve('renderer registration reached the simulation workers')
+      } catch (e) { reject(e) }
+    }, 80))
+  )
 })
 
 check('mixed-convention namespaces keep their real argument order', () => {

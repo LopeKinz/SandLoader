@@ -75,60 +75,90 @@
     "font-family:'SMLN Play',system-ui,sans-serif;font-size:14px;line-height:1.55;color:#e2e8f0}",
     '#smln-mods.open{display:flex}',
 
-    '#smln-mods .panel{width:min(820px,94vw);max-height:82vh;display:flex;flex-direction:column;',
+    '#smln-mods .panel{width:min(880px,94vw);max-height:84vh;display:flex;flex-direction:column;',
     'background:rgba(8,12,17,.97);border:1px solid rgba(100,116,139,.68);',
-    'border-radius:0 8px 0 8px;box-shadow:0 4px 12px rgba(0,0,0,.28)}',
+    'border-radius:0 8px 0 8px;box-shadow:0 4px 12px rgba(0,0,0,.28);overflow:hidden}',
 
-    '#smln-mods header{display:flex;align-items:baseline;justify-content:space-between;',
-    'padding:18px 22px;border-bottom:1px solid rgba(100,116,139,.34)}',
-    '#smln-mods h2{margin:0;font-size:17px;font-weight:700;letter-spacing:.14em;',
-    'text-transform:uppercase;color:#ffe700}',
-    '#smln-mods .count{color:#94a3b8;font-size:12px}',
+    // --- masthead
+    '#smln-mods header{display:flex;align-items:flex-end;justify-content:space-between;',
+    'gap:16px;padding:20px 24px 14px;border-bottom:1px solid rgba(100,116,139,.34)}',
+    '#smln-mods h2{margin:0;font-size:18px;font-weight:700;letter-spacing:.16em;',
+    'text-transform:uppercase;color:#ffe700;line-height:1}',
+    '#smln-mods .count{color:#94a3b8;font-size:11px;letter-spacing:.09em;',
+    'text-transform:uppercase;padding-bottom:2px}',
     '#smln-mods .count .bad{color:#f87171}',
 
-    '#smln-mods .list{overflow-y:auto;padding:4px 0}',
-    '#smln-mods .row{display:flex;align-items:center;gap:11px;padding:12px 22px;',
-    'border-bottom:1px solid rgba(100,116,139,.18)}',
+    '#smln-mods .list{overflow-y:auto;padding:0}',
+    '#smln-mods .list::-webkit-scrollbar{width:10px}',
+    '#smln-mods .list::-webkit-scrollbar-track{background:transparent}',
+    '#smln-mods .list::-webkit-scrollbar-thumb{background:rgba(100,116,139,.35);',
+    'border-radius:5px;border:3px solid transparent;background-clip:content-box}',
+
+    // --- a mod row.
+    //
+    // The security class is the row's left edge, not a badge adrift in the
+    // middle of it. A native mod can do anything your account can, and that
+    // has to be legible from the margin while scanning the list - before you
+    // read a single name. The badge text stays as the precise statement; the
+    // edge is what carries it at a glance.
+    '#smln-mods .row{display:flex;align-items:center;gap:12px;padding:13px 24px 13px 21px;',
+    'border-bottom:1px solid rgba(100,116,139,.16);border-left:3px solid rgba(100,116,139,.32)}',
     '#smln-mods .row:last-child{border-bottom:0}',
-    '#smln-mods .row.failed{background:rgba(248,113,113,.07)}',
+    '#smln-mods .row:hover{background:rgba(148,163,184,.04)}',
+    '#smln-mods .row.elevated{border-left-color:rgba(255,231,0,.6)}',
+    '#smln-mods .row.native{border-left-color:#f87171}',
+    '#smln-mods .row.off{opacity:.62}',
+    '#smln-mods .row.failed{background:rgba(248,113,113,.07);border-left-color:#f87171}',
+
     '#smln-mods .meta{flex:1;min-width:0}',
-    '#smln-mods .nm{color:#f1f5f9}',
+    '#smln-mods .nm{color:#f1f5f9;font-size:14px}',
+    '#smln-mods .nm .ver{color:#64748b;font-size:11.5px;',
+    "font-family:'Cascadia Mono',Consolas,monospace}",
     '#smln-mods .nm .state{color:#f87171;font-size:12px}',
     '#smln-mods .nm .state.warn{color:#ffe700}',
-    '#smln-mods .id{color:#64748b;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '#smln-mods .id{color:#5b6b80;font-size:11.5px;margin-top:1px;',
+    "font-family:'Cascadia Mono',Consolas,monospace;",
+    'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
 
-    '#smln-mods .tag{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;',
+    '#smln-mods .tag{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;padding:3px 8px;',
     'border:1px solid rgba(100,116,139,.55);color:#94a3b8;border-radius:0 4px 0 4px;flex:none}',
     '#smln-mods .tag.flux{border-color:rgba(122,162,255,.5);color:#7aa2ff}',
     '#smln-mods .tag.ws{border-color:rgba(102,192,244,.55);color:#66c0f4}',
     '#smln-mods .act.steam{border-color:rgba(102,192,244,.5);color:#66c0f4}',
     '#smln-mods .act.steam:hover{background:rgba(102,192,244,.12)}',
-    '#smln-mods .badge{font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;',
+    '#smln-mods .badge{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;padding:3px 8px;',
     'border:1px solid rgba(100,116,139,.55);color:#94a3b8;border-radius:0 4px 0 4px;flex:none}',
     '#smln-mods .badge.elev{border-color:rgba(255,231,0,.55);color:#ffe700}',
     '#smln-mods .badge.native{border-color:#f87171;color:#f87171;background:rgba(248,113,113,.1)}',
 
-    '#smln-mods .toggle{cursor:pointer;border:1px solid rgba(255,231,0,.45);background:rgba(255,231,0,.05);',
-    'color:#ffe700;font:inherit;font-size:12px;padding:6px 14px;border-radius:0 4px 0 4px;min-width:88px;flex:none}',
-    '#smln-mods .toggle:hover{background:rgba(255,231,0,.12)}',
+    // The toggle is the row's only filled control, so the eye finds the thing
+    // it came to change without hunting among the secondary actions.
+    '#smln-mods .toggle{cursor:pointer;border:1px solid rgba(255,231,0,.45);',
+    'background:rgba(255,231,0,.08);',
+    'color:#ffe700;font:inherit;font-size:12px;letter-spacing:.05em;padding:6px 14px;',
+    'border-radius:0 4px 0 4px;min-width:92px;flex:none;transition:background .12s ease-out}',
+    '#smln-mods .toggle:hover{background:rgba(255,231,0,.16)}',
     '#smln-mods .toggle.off{border-color:rgba(100,116,139,.45);color:#94a3b8;background:transparent}',
+    '#smln-mods .toggle.off:hover{background:rgba(148,163,184,.1)}',
 
-    '#smln-mods .empty{padding:36px 22px;text-align:center;color:#64748b}',
-    '#smln-mods footer{padding:14px 22px;border-top:1px solid rgba(100,116,139,.34);',
+    '#smln-mods .empty{padding:44px 24px;text-align:center;color:#64748b;line-height:1.7}',
+    '#smln-mods footer{padding:13px 24px;border-top:1px solid rgba(100,116,139,.34);',
+    'background:rgba(2,6,10,.5);',
     'display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}',
-    '#smln-mods .note{color:#64748b;font-size:12px;flex:1;min-width:120px}',
+    '#smln-mods .note{color:#64748b;font-size:11.5px;flex:1;min-width:120px}',
     '#smln-mods .note.warn{color:#ffe700}',
     '#smln-mods .close{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
-    'color:#e2e8f0;font:inherit;padding:7px 20px;border-radius:0 4px 0 4px}',
+    'color:#e2e8f0;font:inherit;font-size:12px;padding:7px 20px;border-radius:0 4px 0 4px}',
     '#smln-mods .close:hover{background:rgba(148,163,184,.12)}',
 
-    '#smln-mods .actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}',
+    '#smln-mods .actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
     '#smln-mods .act{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
     'color:#e2e8f0;font:inherit;font-size:12px;padding:6px 13px;border-radius:0 4px 0 4px;flex:none}',
     '#smln-mods .act:hover{background:rgba(148,163,184,.12)}',
     '#smln-mods .act[disabled]{opacity:.45;cursor:default}',
-    '#smln-mods .act.primary{border-color:rgba(255,231,0,.45);color:#ffe700;background:rgba(255,231,0,.05)}',
-    '#smln-mods .act.primary:hover{background:rgba(255,231,0,.12)}',
+    '#smln-mods .act.primary{border-color:rgba(255,231,0,.45);color:#ffe700;',
+    'background:rgba(255,231,0,.08)}',
+    '#smln-mods .act.primary:hover{background:rgba(255,231,0,.16)}',
     '#smln-mods .act.alert{border-color:rgba(248,113,113,.55);color:#f87171}',
     '#smln-mods .del{cursor:pointer;border:1px solid rgba(248,113,113,.4);background:transparent;',
     'color:#f87171;font:inherit;font-size:12px;padding:6px 11px;border-radius:0 4px 0 4px;flex:none}',
@@ -136,7 +166,7 @@
     '#smln-mods .del.confirm{background:rgba(248,113,113,.18);border-color:#f87171}',
     '#smln-mods select{background:rgba(2,6,10,.85);border:1px solid rgba(100,116,139,.55);',
     'color:#e2e8f0;font:inherit;font-size:12px;padding:5px 8px;border-radius:0 4px 0 4px}',
-    '#smln-mods .status{font-size:12px;color:#94a3b8;padding:0 22px 10px;min-height:1.4em}',
+    '#smln-mods .status{font-size:12px;color:#94a3b8;padding:0 24px 10px;min-height:1.4em}',
     '#smln-mods .status.err{color:#f87171}',
     '#smln-mods .status.good{color:#4ade80}',
   ].join('')
@@ -758,16 +788,35 @@
     updateNote()
   }
 
+  /** The security tier as a row modifier, so it reads from the left margin. */
+  function rowTier(badge) {
+    if (badge === 'NATIVE') return ' native'
+    if (badge === 'ELEVATED' || badge === 'NETWORK' || badge === 'FILESYSTEM') return ' elevated'
+    return ''
+  }
+
   function rowFor(m) {
     var cap = m.capability || {}
     var row = document.createElement('div')
-    row.className = 'row' + (m.failed ? ' failed' : '')
+    // The class carries three facts the eye reads before any text: how much
+    // the mod is trusted with, whether it is on, and whether it broke.
+    row.className = 'row' + rowTier(cap.badge) +
+      (enabledState[m.id] === false ? ' off' : '') +
+      (m.failed ? ' failed' : '')
 
     var meta = document.createElement('div')
     meta.className = 'meta'
     var nm = document.createElement('div')
     nm.className = 'nm'
-    nm.textContent = (m.name || m.id) + '  ' + (m.version || '')
+    nm.textContent = (m.name || m.id) + '  '
+    if (m.version) {
+      // Set apart from the name: a version is a number you compare, not part
+      // of what the mod is called.
+      var ver = document.createElement('span')
+      ver.className = 'ver'
+      ver.textContent = m.version
+      nm.appendChild(ver)
+    }
     if (m.pending || m.failed || m.needsApproval) {
       var state = document.createElement('span')
       state.className = 'state' + (m.needsApproval && !m.failed ? ' warn' : '')

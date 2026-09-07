@@ -94,44 +94,69 @@
     '#smln-splash.gone{opacity:0;pointer-events:none}',
 
     // Sandustry dialog panel: slate border, rounded top-right + bottom-left.
-    '#smln-splash .panel{width:min(560px,92vw);padding:26px 30px 20px;',
+    '#smln-splash .panel{width:min(560px,92vw);',
     'background:rgba(8,12,17,.94);border:1px solid rgba(100,116,139,.68);',
-    'border-radius:0 8px 0 8px;box-shadow:0 4px 12px rgba(0,0,0,.28)}',
+    'border-radius:0 8px 0 8px;box-shadow:0 4px 12px rgba(0,0,0,.28);overflow:hidden}',
 
-    '#smln-splash .head{display:flex;align-items:baseline;justify-content:space-between;gap:14px}',
-    '#smln-splash .mark{font-size:26px;font-weight:700;letter-spacing:.16em;',
-    'text-transform:uppercase;color:#ffe700;line-height:1.1}',
-    '#smln-splash .ver{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#64748b}',
+    // --- masthead
+    '#smln-splash .head{display:flex;align-items:flex-end;justify-content:space-between;',
+    'gap:14px;padding:24px 26px 16px}',
+    '#smln-splash .mark{font-size:27px;font-weight:700;letter-spacing:.17em;',
+    'text-transform:uppercase;color:#ffe700;line-height:1;',
+    // The wordmark settles in as the panel opens - the one piece of motion
+    // that is about the loader itself rather than about the report.
+    'animation:smln-settle .5s cubic-bezier(.2,.8,.3,1) both}',
+    '@keyframes smln-settle{from{opacity:0;transform:translateY(6px);letter-spacing:.34em}',
+    'to{opacity:1;transform:none;letter-spacing:.17em}}',
+    '#smln-splash .ver{font-size:10px;letter-spacing:.2em;text-transform:uppercase;',
+    'color:#64748b;padding-bottom:3px}',
     '#smln-splash .game{font-size:12px;color:#94a3b8;margin-top:3px}',
     '#smln-splash .game b{color:#cbd5e1;font-weight:400}',
     '#smln-splash .drift{color:#ffe700}',
 
-    '#smln-splash .bar{margin:16px 0 12px;height:3px;background:rgba(255,231,0,.14);overflow:hidden}',
+    // --- progress: a hairline seam between masthead and report.
+    '#smln-splash .bar{height:2px;background:rgba(255,231,0,.13);overflow:hidden;position:relative}',
     '#smln-splash .bar i{display:block;height:100%;width:0;background:#ffe700;',
     'transition:width .28s ease-out}',
     '#smln-splash .bar.idle i{width:34%;animation:smln-sweep 1.15s ease-in-out infinite;transition:none}',
     '@keyframes smln-sweep{0%{transform:translateX(-110%)}100%{transform:translateX(360%)}}',
 
-    // The feed: one line per thing the loader did, revealed in order.
-    '#smln-splash .feed{max-height:34vh;overflow:hidden;font-size:12.5px;line-height:1.75}',
-    '#smln-splash .line{display:flex;gap:9px;align-items:baseline;opacity:0;',
+    // --- the feed: one stratum per thing the loader did.
+    //
+    // Every line hangs off a single vertical rail down the left margin, and
+    // its state is the colour of that rail. Scanning the margin alone tells
+    // you whether the boot was clean - you do not have to read the text to
+    // find the one red line in twelve.
+    '#smln-splash .feed{max-height:34vh;overflow:hidden;padding:10px 26px 4px;',
+    'font-size:12.5px;line-height:1.62}',
+    '#smln-splash .line{display:flex;gap:10px;align-items:baseline;opacity:0;',
+    'padding:1.5px 0 1.5px 11px;border-left:2px solid rgba(100,116,139,.3);',
     'transform:translateY(3px);transition:opacity .22s ease-out,transform .22s ease-out}',
     '#smln-splash .line.in{opacity:1;transform:none}',
+    '#smln-splash .line.ok{border-left-color:rgba(74,222,128,.55)}',
+    '#smln-splash .line.warn{border-left-color:#ffe700}',
+    '#smln-splash .line.bad{border-left-color:#f87171;background:rgba(248,113,113,.07)}',
     '#smln-splash .line .g{color:#4ade80;width:1em;flex:none;text-align:center}',
     '#smln-splash .line .w{color:#ffe700;width:1em;flex:none;text-align:center}',
     '#smln-splash .line .b{color:#f87171;width:1em;flex:none;text-align:center}',
     '#smln-splash .line .d{color:#475569;width:1em;flex:none;text-align:center}',
     '#smln-splash .line .txt{flex:1;min-width:0;color:#cbd5e1;overflow:hidden;',
     'text-overflow:ellipsis;white-space:nowrap}',
-    '#smln-splash .line .tag{font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;',
+    '#smln-splash .line.bad .txt{color:#fca5a5}',
+    '#smln-splash .line .tag{font-size:9px;letter-spacing:.13em;text-transform:uppercase;',
     'padding:1px 6px;border:1px solid rgba(100,116,139,.5);color:#94a3b8;',
     'border-radius:0 3px 0 3px;flex:none}',
     '#smln-splash .line .tag.flux{border-color:rgba(122,162,255,.5);color:#7aa2ff}',
-    '#smln-splash .line .tag.native{border-color:#f87171;color:#f87171}',
+    '#smln-splash .line .tag.native{border-color:#f87171;color:#f87171;background:rgba(248,113,113,.1)}',
     '#smln-splash .line .tag.elev{border-color:rgba(255,231,0,.5);color:#ffe700}',
-    '#smln-splash .line .num{color:#64748b;flex:none;font-size:11.5px}',
+    // Counts are tabular and monospaced so they form a column you can read
+    // down, instead of drifting with the width of the text beside them.
+    '#smln-splash .line .num{color:#64748b;flex:none;font-size:11px;',
+    "font-family:'Cascadia Mono',Consolas,monospace;font-variant-numeric:tabular-nums;",
+    'min-width:2.4em;text-align:right}',
 
-    '#smln-splash .status{margin-top:12px;padding-top:11px;font-size:12px;color:#94a3b8;',
+    '#smln-splash .status{padding:11px 26px 15px;font-size:11px;color:#94a3b8;',
+    'letter-spacing:.06em;background:rgba(2,6,10,.5);',
     'border-top:1px solid rgba(100,116,139,.28);display:flex;justify-content:space-between;gap:12px}',
     '#smln-splash .status .bad{color:#f87171}',
     '#smln-splash .status .warnc{color:#ffe700}',
@@ -144,7 +169,10 @@
 
   function render(entry) {
     var row = global.document.createElement('div')
-    row.className = 'line'
+    // The state is on the row, not only on the glyph: it colours the rail in
+    // the left margin, which is what makes the feed scannable at a glance.
+    var kind = entry.mark === 'ok' ? 'ok' : entry.mark === 'warn' ? 'warn' : entry.mark === 'bad' ? 'bad' : 'dot'
+    row.className = 'line ' + kind
 
     var m = global.document.createElement('span')
     m.className = entry.mark === 'ok' ? 'g' : entry.mark === 'warn' ? 'w' : entry.mark === 'bad' ? 'b' : 'd'
@@ -174,7 +202,7 @@
     els.feed.appendChild(row)
     // Keep the newest lines visible without a scrollbar appearing mid-boot.
     while (els.feed.childNodes.length > 12) els.feed.removeChild(els.feed.firstChild)
-    global.setTimeout(function () { row.className = 'line in' }, 10)
+    global.setTimeout(function () { row.className = 'line ' + kind + ' in' }, 10)
     return row
   }
 

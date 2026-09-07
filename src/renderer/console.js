@@ -858,6 +858,10 @@
     var index = tokens.length - 1
 
     var candidates = []
+    // What the rail is completing right now. The old popup showed a bare list
+    // of words with no indication of which argument they were for, so an
+    // unfamiliar command's second argument was a guessing game.
+    var label = 'command'
     if (index === 0) {
       candidates = Object.keys(commands).sort().map(function (n) {
         return { value: n, hint: commands[n].summary }
@@ -866,6 +870,7 @@
       var cmd = commands[tokens[0]]
       if (cmd && cmd.args && cmd.args[index - 1]) {
         var spec = cmd.args[index - 1]
+        label = spec.name || 'value'
         var values = []
         try { values = spec.values ? spec.values() : [] } catch (_) { values = [] }
         candidates = values.map(function (v) {
@@ -887,7 +892,13 @@
       })
     }
     if (!lower) filtered = candidates.filter(function (c) { return c.value })
-    return { items: filtered.slice(0, 12), typing: typing, tokenStart: caret - typing.length }
+    return {
+      items: filtered.slice(0, 12),
+      typing: typing,
+      tokenStart: caret - typing.length,
+      label: label,
+      total: filtered.length,
+    }
   }
 
   // -------------------------------------------------------------------- UI
@@ -895,7 +906,7 @@
   var ui = {}
   var history = []
   var historyIndex = -1
-  var sugg = { items: [], selected: 0, typing: '', tokenStart: 0 }
+  var sugg = { items: [], selected: 0, typing: '', tokenStart: 0, label: '', total: 0 }
   var open = false
 
   /*
@@ -943,8 +954,19 @@
     'border-radius:0 4px 0 4px;flex:none}',
     '#smln-head .x:hover{background:rgba(148,163,184,.14);color:#e2e8f0}',
 
+    // --- body: output and the completion rail, side by side.
+    //
+    // The rail used to be `position:absolute;bottom:100%`, floating over the
+    // log. That put the suggestion list on top of the very output you were
+    // reading to decide what to type next - and the longer the list, the more
+    // of the answer it hid. Here it is a sibling of the output in a flex row,
+    // so it *takes* width instead of *covering* height. Nothing is ever
+    // occluded: the log simply narrows while you are completing, and the rail
+    // may run the full height of the console without hiding a single line.
+    '#smln-body{flex:1;min-height:0;display:flex;align-items:stretch}',
+
     // --- output
-    '#smln-out{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0;',
+    '#smln-out{flex:1;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:8px 0;',
     'white-space:pre-wrap;word-break:break-word}',
     '#smln-out .ln{display:flex;gap:10px;padding:1px 14px;align-items:baseline}',
     '#smln-out .ln:hover{background:rgba(148,163,184,.05)}',
@@ -975,27 +997,41 @@
     'font:inherit;caret-color:#ffe700;position:relative}',
     '#smln-input::placeholder{color:#475569}',
 
-    // --- suggestions
-    '#smln-sugg{position:absolute;bottom:100%;left:14px;right:14px;max-width:640px;',
-    'background:rgba(6,10,15,.99);border:1px solid rgba(100,116,139,.55);border-bottom:0;',
-    'border-radius:0 6px 0 0;max-height:44vh;overflow-y:auto;display:none;',
-    'box-shadow:0 -6px 18px rgba(0,0,0,.42)}',
-    '#smln-sugg .s{padding:4px 12px;display:flex;gap:16px;align-items:baseline;cursor:pointer}',
+    // --- the completion rail
+    //
+    // A column, not a popup: in normal flow, hidden with `display:none` and
+    // shown as a flex column. It carries its own header so the list says what
+    // it is completing - the argument name, not just a bare list of words.
+    '#smln-sugg{flex:none;display:none;flex-direction:column;min-height:0;',
+    'width:clamp(200px,30%,320px);background:rgba(6,10,15,.72);',
+    'border-left:1px solid rgba(100,116,139,.42)}',
+    '#smln-sugg.on{display:flex}',
+    '#smln-sugg .cap{flex:none;display:flex;justify-content:space-between;gap:10px;',
+    "padding:7px 12px 6px;font-family:'SMLN Play',system-ui,sans-serif;font-size:9.5px;",
+    'letter-spacing:.15em;text-transform:uppercase;color:#64748b;',
+    'border-bottom:1px solid rgba(100,116,139,.25)}',
+    '#smln-sugg .cap b{color:#ffe700;font-weight:400}',
+    '#smln-sugg .rows{flex:1;min-height:0;overflow-y:auto;padding:3px 0}',
+    '#smln-sugg .s{padding:4px 12px 4px 9px;display:flex;gap:10px;align-items:baseline;',
+    'cursor:pointer;border-left:3px solid transparent}',
     '#smln-sugg .s:hover{background:rgba(148,163,184,.1)}',
     '#smln-sugg .s .sw{flex:none;width:9px;height:9px;border-radius:2px;',
     'border:1px solid rgba(148,163,184,.4);align-self:center}',
     '#smln-sugg .s .v{flex:none;color:#e2e8f0}',
-    '#smln-sugg .s .m{flex:1;min-width:0;text-align:right;color:#64748b;font-size:11.5px;',
+    // The hint wraps under the value rather than being pushed off the right
+    // edge: in a narrow column an ellipsised hint is no hint at all.
+    '#smln-sugg .s .m{flex:1;min-width:0;text-align:right;color:#64748b;font-size:11px;',
     'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '#smln-sugg .s.sel{background:rgba(255,231,0,.14);box-shadow:inset 2px 0 0 #ffe700}',
+    '#smln-sugg .s.sel{background:rgba(255,231,0,.14);border-left-color:#ffe700}',
     '#smln-sugg .s.sel .v{color:#ffe700}',
     '#smln-sugg .s.sel .m{color:#94a3b8}',
     '#smln-sugg .s .hit{color:#ffe700}',
-    '#smln-sugg .foot{position:sticky;bottom:0;display:flex;justify-content:space-between;',
-    "gap:12px;padding:4px 12px;font-family:'SMLN Play',system-ui,sans-serif;font-size:10px;",
-    'color:#475569;background:rgba(6,10,15,.99);border-top:1px solid rgba(100,116,139,.25)}',
-    '#smln-sugg::-webkit-scrollbar{width:8px}',
-    '#smln-sugg::-webkit-scrollbar-thumb{background:rgba(100,116,139,.4);border-radius:4px}',
+    '#smln-sugg .foot{flex:none;display:flex;justify-content:space-between;gap:10px;',
+    "padding:5px 12px;font-family:'SMLN Play',system-ui,sans-serif;font-size:10px;",
+    'color:#475569;border-top:1px solid rgba(100,116,139,.25)}',
+    '#smln-sugg::-webkit-scrollbar,#smln-sugg .rows::-webkit-scrollbar{width:8px}',
+    '#smln-sugg .rows::-webkit-scrollbar-thumb{background:rgba(100,116,139,.4);border-radius:4px}',
+
   ].join('')
 
   /** Glyph shown in the gutter for each line class. */
@@ -1039,10 +1075,16 @@
     close.textContent = 'Close'
     close.addEventListener('click', function () { toggle(false) })
 
-    var out = el('div', 'smln-out', root)
-    var row = el('div', 'smln-inputrow', root)
-    var sg = el('div', 'smln-sugg', row)
+    // Output and the completion rail are siblings in a flex row, so the rail
+    // narrows the log rather than covering it.
+    var body = el('div', 'smln-body', root)
+    var out = el('div', 'smln-out', body)
+    var sg = el('div', 'smln-sugg', body)
+    var sgCap = el('div', null, sg, 'cap')
+    var sgRows = el('div', null, sg, 'rows')
+    var sgFoot = el('div', null, sg, 'foot')
 
+    var row = el('div', 'smln-inputrow', root)
     var prompt = el('span', 'smln-prompt', row)
     prompt.textContent = '>'
     var wrap = el('div', 'smln-inputwrap', row)
@@ -1059,6 +1101,9 @@
     ui.output = out
     ui.input = input
     ui.sugg = sg
+    ui.suggRows = sgRows
+    ui.suggCap = sgCap
+    ui.suggFoot = sgFoot
     ui.ghost = ghost
     ui.meta = meta
     ui.grip = root.firstChild
@@ -1156,6 +1201,8 @@
     sugg.items = r.items
     sugg.typing = r.typing
     sugg.tokenStart = r.tokenStart
+    sugg.label = r.label
+    sugg.total = r.total
     if (sugg.selected >= sugg.items.length) sugg.selected = 0
     renderSuggestions()
     renderGhost()
@@ -1178,9 +1225,31 @@
   }
 
   function renderSuggestions() {
-    if (!sugg.items.length) { ui.sugg.style.display = 'none'; return }
-    ui.sugg.style.display = 'block'
-    while (ui.sugg.firstChild) ui.sugg.removeChild(ui.sugg.firstChild)
+    if (!ui.sugg) return
+    // `display` lives in the stylesheet via the `on` class, so the rail's
+    // flex-column layout is not overwritten by an inline `display:block`.
+    if (!sugg.items.length) {
+      ui.sugg.className = ''
+      if (ui.sugg.style) ui.sugg.style.display = 'none'
+      return
+    }
+    ui.sugg.className = 'on'
+    if (ui.sugg.style) ui.sugg.style.display = ''
+
+    var rows = ui.suggRows || ui.sugg
+    while (rows.firstChild) rows.removeChild(rows.firstChild)
+
+    // The caption names the argument being completed, so the column reads as
+    // an answer to "what goes here?" rather than an unlabelled word list.
+    if (ui.suggCap) {
+      while (ui.suggCap.firstChild) ui.suggCap.removeChild(ui.suggCap.firstChild)
+      var capLeft = document.createElement('span')
+      capLeft.textContent = sugg.label || 'command'
+      var capRight = document.createElement('b')
+      capRight.textContent = String(sugg.total || sugg.items.length)
+      ui.suggCap.appendChild(capLeft)
+      ui.suggCap.appendChild(capRight)
+    }
 
     var selected = null
     sugg.items.forEach(function (c, i) {
@@ -1208,6 +1277,8 @@
       var hint = document.createElement('span')
       hint.className = 'm'
       hint.textContent = c.hint || ''
+      // The full hint is often longer than a narrow column; keep it reachable.
+      if (c.hint) row.title = c.value + '  -  ' + c.hint
 
       if (c.color) {
         var dot = document.createElement('span')
@@ -1219,18 +1290,19 @@
       }
       row.appendChild(name)
       row.appendChild(hint)
-      ui.sugg.appendChild(row)
+      rows.appendChild(row)
     })
 
-    var foot = document.createElement('div')
-    foot.className = 'foot'
-    var left = document.createElement('span')
-    left.textContent = (sugg.selected + 1) + ' / ' + sugg.items.length
-    var right = document.createElement('span')
-    right.textContent = 'Tab accept    ↑↓ move    Enter run'
-    foot.appendChild(left)
-    foot.appendChild(right)
-    ui.sugg.appendChild(foot)
+    var foot = ui.suggFoot
+    if (foot) {
+      while (foot.firstChild) foot.removeChild(foot.firstChild)
+      var left = document.createElement('span')
+      left.textContent = (sugg.selected + 1) + ' / ' + sugg.items.length
+      var right = document.createElement('span')
+      right.textContent = 'Tab accept   ↑↓ move'
+      foot.appendChild(left)
+      foot.appendChild(right)
+    }
 
     if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: 'nearest' })
   }
