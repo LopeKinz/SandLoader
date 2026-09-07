@@ -12,3 +12,6 @@ mods/*
 # Fetched by install.js, not part of the source tree.
 vendor/
 Fluxloader mods/
+
+# Subagent-driven-development scratch: ledger, briefs, review packages.
+.superpowers/
