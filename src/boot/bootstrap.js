@@ -1,16 +1,12 @@
-try {
-  const { app } = require('electron');
-  if (app && app.commandLine) app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
-} catch (_) {}
 'use strict'
 /**
- * The non-Steam bootstrap.
+ * The bootstrap that runs when the host offers no loader slot.
  *
- * `install.js` writes a three-file `resources/app/` directory next to the
- * untouched `app.asar`; Electron prefers `app` over `app.asar` when resolving
- * the application package, so the stub in there runs first and requires this
- * module. See src/asar/platform.js for why that is the attach point and what
- * the trade-offs are.
+ * `install.js` renames the original archive aside and writes a three-file
+ * directory into the name Electron looks at first - `resources/app.asar`. The
+ * stub in there runs as the application package and requires this module,
+ * which hands control straight back to the real game. See src/asar/shadow.js
+ * for the mechanism and why the search order makes it work.
  *
  * What happens here is the same sequence the Steam host performs, in the same
  * order, because SandLoader's ABI was written against it:
@@ -38,12 +34,39 @@ try {
 const path = require('path')
 const fs = require('fs')
 
+// Must be appended before the app is ready; the simulation workers need it.
+try {
+  const { app } = require('electron')
+  if (app && app.commandLine) app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
+} catch (_) { /* not inside Electron - the self-test loads this in plain Node */ }
+
 const ORIGINAL_MAIN = 'main.js'
 
-/** Where the untouched game actually lives, from inside `resources/app`. */
-function originalAppRoot(resourcesPath) {
-  const resources = resourcesPath || process.resourcesPath || path.resolve(__dirname, "..", "..", "..")
-  const target = fs.existsSync(path.join(resources, "game.asar")) ? "game.asar" : "app.asar"
+/** Owned by src/asar/shadow.js; the stub's directory carries one of these. */
+const RECEIPT = require('../asar/shadow').RECEIPT
+
+/**
+ * Where the untouched game actually lives.
+ *
+ * Under a shadow attach the archive no longer answers to `app.asar` - that name
+ * belongs to the directory this file is running from - so the receipt written
+ * beside the stub records the real path. Reading it beats guessing a third
+ * filename, and it is what makes this resolvable in plain Node.
+ *
+ * @param {{appDir?:string, resourcesPath?:string}} [opts]
+ */
+function originalAppRoot(opts = {}) {
+  if (opts.appDir) {
+    try {
+      const receipt = JSON.parse(fs.readFileSync(path.join(opts.appDir, RECEIPT), 'utf8'))
+      if (receipt && typeof receipt.originalArchive === 'string' && receipt.originalArchive) {
+        return receipt.originalArchive
+      }
+    } catch (_) { /* fall through to the untouched-install layout */ }
+  }
+  const resources = opts.resourcesPath || process.resourcesPath ||
+    path.resolve(__dirname, '..', '..', '..')
+  const target = fs.existsSync(path.join(resources, 'game.asar')) ? 'game.asar' : 'app.asar'
   return path.join(resources, target)
 }
 
@@ -83,7 +106,7 @@ function hostApiFor(hooks) {
 function plan(opts = {}) {
   const resources = opts.resourcesPath || process.resourcesPath ||
     path.resolve(__dirname, '..', '..', '..')
-  const asar = originalAppRoot(resources)
+  const asar = originalAppRoot(opts)
   const mainFile = path.join(asar, ORIGINAL_MAIN)
   let originalPresent = false
   try {
@@ -110,18 +133,16 @@ function plan(opts = {}) {
 }
 
 /**
- * Run the bootstrap. Called by the generated stub in `resources/app`.
- * @param {{loader?:any}} [opts]
+ * Run the bootstrap. Called by the generated stub, which passes its own
+ * directory so the receipt beside it can be read.
+ * @param {{appDir?:string, loader?:any}} [opts]
  */
 function boot(opts = {}) {
-  const logFile = path.resolve(__dirname, "../../smln_debug.log");
-  const flog = (m) => fs.appendFileSync(logFile, new Date().toISOString() + " " + m + "\n");
-  flog("=== BOOT STARTED ===");
-  const asar = originalAppRoot()
+  const asar = originalAppRoot(opts)
   const mainFile = path.join(asar, ORIGINAL_MAIN)
 
   /** Hand control to the untouched game, whatever happened before. */
-  function runOriginal(why) { flog("FALLBACK: " + why);
+  function runOriginal(why) {
     if (why) console.warn('[SMLN] starting Sandustry unmodded: ' + why)
     try {
       require(mainFile)
@@ -166,7 +187,7 @@ function boot(opts = {}) {
       if (!result || result.success === false) {
         throw new Error((result && result.message) || 'startManager() reported failure')
       }
-      flog("ATTACHING WINDOW"); attachWindow(loader)
+      attachWindow(loader)
       return { ok: true }
     })
     .catch((e) => {

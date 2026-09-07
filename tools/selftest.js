@@ -2325,6 +2325,68 @@ check('MS Store stays unsupported and non-writable installs still refuse', () =>
   return 'both refusals intact'
 })
 
+check('the bootstrap reads the original archive out of its receipt', () => {
+  const boot = require('../src/boot/bootstrap')
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-boot-'))
+  try {
+    const appDir = path.join(dir, 'app.asar')
+    fs.mkdirSync(appDir)
+    fs.writeFileSync(path.join(appDir, shadow.RECEIPT),
+      JSON.stringify({ originalArchive: path.join(dir, 'app.smln-original.asar') }))
+    const got = boot.originalAppRoot({ appDir, resourcesPath: dir })
+    assert(got === path.join(dir, 'app.smln-original.asar'),
+      'guessed ' + got + ' instead of reading the receipt')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'receipt beats guessing'
+})
+
+check('without a receipt the bootstrap still finds the untouched archive', () => {
+  const boot = require('../src/boot/bootstrap')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-boot-legacy-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'game.asar'), 'ARCHIVE')
+    assert(boot.originalAppRoot({ resourcesPath: dir }) === path.join(dir, 'game.asar'),
+      'the game.asar build was not found')
+    fs.rmSync(path.join(dir, 'game.asar'))
+    fs.writeFileSync(path.join(dir, 'app.asar'), 'ARCHIVE')
+    assert(boot.originalAppRoot({ resourcesPath: dir }) === path.join(dir, 'app.asar'),
+      'the app.asar build was not found')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'game.asar and app.asar both resolved'
+})
+
+check('the bootstrap plan reports the archive it would chain into', () => {
+  const boot = require('../src/boot/bootstrap')
+  const shadow = require('../src/asar/shadow')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-plan-'))
+  try {
+    const appDir = path.join(dir, 'app.asar')
+    fs.mkdirSync(appDir)
+    const original = path.join(dir, 'app.smln-original.asar')
+    fs.writeFileSync(original, 'ARCHIVE')
+    fs.writeFileSync(path.join(appDir, shadow.RECEIPT), JSON.stringify({ originalArchive: original }))
+    const p = boot.plan({ appDir, resourcesPath: dir })
+    assert(p.asar === original, 'plan chose ' + p.asar)
+    assert(p.originalPresent === true, 'plan did not see the parked original')
+    assert(p.steps.length >= 5, 'the documented boot order went missing')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'plan resolves through the receipt too'
+})
+
+check('no stray debug logging survives in the bootstrap', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'boot', 'bootstrap.js'), 'utf8')
+  assert(!/smln_debug\.log/.test(src), 'the bootstrap still writes smln_debug.log on every start')
+  assert(!/\bflog\(/.test(src), 'the flog() debug helper is still there')
+  return 'appendFileSync debug trace removed'
+})
+
 // --------------------------------------------------------------- the prelude
 check('the full renderer stack installs, and the splash reports what loaded', () => {
   const { createDom } = require('./dom-harness')
