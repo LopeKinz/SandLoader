@@ -2774,35 +2774,36 @@ check('a map mod blueprint set becomes a .custommap the game could read', () => 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-map-'))
   try {
     // A 2x2 PNG, written by hand so the test needs no image library. The IHDR
-    // carries the dimensions the validator reads.
-    const png = makeTinyPng(2, 2)
-    const other = makeTinyPng(2, 2)
-    fs.writeFileSync(path.join(dir, 'terrain.png'), png)
-    fs.writeFileSync(path.join(dir, 'wall.png'), other)
+    // carries the dimensions the validator reads. All six layers are
+    // mandatory, so the happy path needs all six, same size.
+    const blueprints = {}
+    for (const layer of maps.LAYERS) {
+      const file = path.join(dir, layer + '.png')
+      fs.writeFileSync(file, makeTinyPng(2, 2))
+      blueprints[layer] = file
+    }
 
     const r = maps.assemble({
       modId: 'demo.maps',
       name: 'Demo World',
       seed: 'abc',
       params: { width: 2, height: 2 },
-      blueprints: {
-        terrain: path.join(dir, 'terrain.png'),
-        wall: path.join(dir, 'wall.png'),
-      },
+      blueprints,
     })
     assert(r.ok, 'assemble failed: ' + r.reason)
     assert(r.id === 'smln.demo.maps', 'unexpected id: ' + r.id)
     assert(r.file === 'smln.demo.maps.custommap', 'unexpected file: ' + r.file)
-    assert(/^data:image\/png;base64,/.test(r.doc.terrain), 'terrain is not a data URL')
-    assert(/^data:image\/png;base64,/.test(r.doc.wall), 'wall is not a data URL')
-    assert(r.doc.lights === null, 'an absent layer must be null, not undefined')
+    assert(/^data:image\/png;base64,/.test(r.doc.terrain.dataUrl) &&
+      r.doc.terrain.width === 2 && r.doc.terrain.height === 2,
+      'terrain is not {width, height, dataUrl}')
+    assert(/^data:image\/png;base64,/.test(r.doc.wall.dataUrl), 'wall is not a data URL')
     assert(r.doc.seed === 'abc' && r.doc.params.width === 2, 'seed and params did not travel')
     assert(typeof r.doc.createdAt === 'string' && r.doc.version, 'metadata is missing')
     assert(r.doc.name === 'Demo World', 'the name did not travel')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
-  return 'six fields, data URLs, metadata and a collision-proof id'
+  return 'six fields, per-layer dimensions, metadata and a collision-proof id'
 })
 
 check('a blueprint set the game would reject is refused with a reason', () => {
@@ -2812,22 +2813,45 @@ check('a blueprint set the game would reject is refused with a reason', () => {
     fs.writeFileSync(path.join(dir, 'terrain.png'), makeTinyPng(4, 4))
     fs.writeFileSync(path.join(dir, 'wall.png'), makeTinyPng(2, 2))
     fs.writeFileSync(path.join(dir, 'junk.png'), Buffer.from('not a png at all'))
+    // The other four layers, valid and matching terrain's size, so each case
+    // below misbehaves in exactly the one way it is testing.
+    const rest = {}
+    for (const layer of ['lights', 'lightsMeta', 'sensors', 'authorization']) {
+      const file = path.join(dir, layer + '.png')
+      fs.writeFileSync(file, makeTinyPng(4, 4))
+      rest[layer] = file
+    }
 
-    const noTerrain = maps.assemble({ modId: 'm', blueprints: { wall: path.join(dir, 'wall.png') } })
+    const noTerrain = maps.assemble({ modId: 'm', blueprints: { ...rest, wall: path.join(dir, 'wall.png') } })
     assert(!noTerrain.ok && /terrain/i.test(noTerrain.reason),
       'a map with no terrain was accepted: ' + JSON.stringify(noTerrain))
 
-    const mismatched = maps.assemble({
+    // All six are mandatory - the game's loader throws on any missing one
+    // rather than skipping it, so a partial set is refused, never padded.
+    const partial = maps.assemble({
       modId: 'm',
       blueprints: { terrain: path.join(dir, 'terrain.png'), wall: path.join(dir, 'wall.png') },
+    })
+    assert(!partial.ok && /lights/i.test(partial.reason) && /sensors/i.test(partial.reason),
+      'a map missing layers was accepted, or did not name them: ' + JSON.stringify(partial))
+
+    const mismatched = maps.assemble({
+      modId: 'm',
+      blueprints: { ...rest, terrain: path.join(dir, 'terrain.png'), wall: path.join(dir, 'wall.png') },
     })
     assert(!mismatched.ok && /dimension|size/i.test(mismatched.reason),
       'layers of different sizes were accepted: ' + JSON.stringify(mismatched))
 
-    const notPng = maps.assemble({ modId: 'm', blueprints: { terrain: path.join(dir, 'junk.png') } })
+    const notPng = maps.assemble({
+      modId: 'm',
+      blueprints: { ...rest, terrain: path.join(dir, 'junk.png'), wall: path.join(dir, 'wall.png') },
+    })
     assert(!notPng.ok && /png/i.test(notPng.reason), 'a non-PNG was accepted')
 
-    const missing = maps.assemble({ modId: 'm', blueprints: { terrain: path.join(dir, 'nope.png') } })
+    const missing = maps.assemble({
+      modId: 'm',
+      blueprints: { ...rest, terrain: path.join(dir, 'nope.png'), wall: path.join(dir, 'wall.png') },
+    })
     assert(!missing.ok, 'a missing file was accepted')
 
     assert(maps.pngSize(Buffer.from('nope')) === null, 'pngSize accepted rubbish')
@@ -2835,7 +2859,7 @@ check('a blueprint set the game would reject is refused with a reason', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
-  return 'missing terrain, mismatched sizes, non-PNG and missing file all refused'
+  return 'missing layers (all six, or just some), mismatched sizes, non-PNG and missing file all refused'
 })
 
 check('the loader answers the file-patching question the game asks', () => {
@@ -5655,8 +5679,15 @@ check('installing maps writes ours and never removes the player\'s', () => {
   fs.mkdirSync(mapsDir, { recursive: true })
   fs.mkdirSync(bp, { recursive: true })
   try {
-    fs.writeFileSync(path.join(bp, 'terrain.png'), makeTinyPng(2, 2))
-    const spec = (modId) => ({ modId, blueprints: { terrain: path.join(bp, 'terrain.png') } })
+    const terrainPng = path.join(bp, 'terrain.png')
+    fs.writeFileSync(terrainPng, makeTinyPng(2, 2))
+    // All six layers are mandatory; the same PNG stands in for all of them,
+    // since sync() only cares that they exist and share one size.
+    const spec = (modId) => {
+      const blueprints = {}
+      for (const layer of maps.LAYERS) blueprints[layer] = terrainPng
+      return { modId, blueprints }
+    }
 
     // Files that are not ours, including one deliberately close to our prefix.
     fs.writeFileSync(path.join(mapsDir, 'my-world.custommap'), '{}')
@@ -5665,8 +5696,9 @@ check('installing maps writes ours and never removes the player\'s', () => {
     const first = maps.sync(mapsDir, [spec('alpha'), spec('beta')])
     assert(first.installed.length === 2, 'expected two installs, got ' + first.installed.length)
     assert(fs.existsSync(path.join(mapsDir, 'smln.alpha.custommap')), 'alpha was not written')
-    const written = JSON.parse(fs.readFileSync(path.join(mapsDir, 'smln.beta.custommap'), 'utf8'))
-    assert(/^data:image\/png;base64,/.test(written.terrain), 'the written file has no terrain layer')
+    const writtenLines = fs.readFileSync(path.join(mapsDir, 'smln.beta.custommap'), 'utf8').split('\n')
+    const written = JSON.parse(writtenLines[1])
+    assert(/^data:image\/png;base64,/.test(written.terrain.dataUrl), 'the written file has no terrain layer')
 
     // beta is gone now: its map goes, alpha stays, the player's files stay.
     const second = maps.sync(mapsDir, [spec('alpha')])
@@ -5702,13 +5734,41 @@ check('sync creates the maps folder when the game has not yet', () => {
     const mapsDir = path.join(root, 'custom_maps')
     const bp = path.join(root, 'terrain.png')
     fs.writeFileSync(bp, makeTinyPng(2, 2))
-    const out = maps.sync(mapsDir, [{ modId: 'alpha', blueprints: { terrain: bp } }])
+    const blueprints = {}
+    for (const layer of maps.LAYERS) blueprints[layer] = bp
+    const out = maps.sync(mapsDir, [{ modId: 'alpha', blueprints }])
     assert(out.installed.length === 1, 'nothing installed into a fresh folder')
     assert(fs.existsSync(path.join(mapsDir, 'smln.alpha.custommap')), 'the file is missing')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
   return 'a missing custom_maps folder is created rather than an error'
+})
+
+check('a written .custommap is the two-line format the game reads', () => {
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-mapformat-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  const bp = path.join(root, 'terrain.png')
+  try {
+    fs.writeFileSync(bp, makeTinyPng(2, 2))
+    const blueprints = {}
+    for (const layer of maps.LAYERS) blueprints[layer] = bp
+    maps.sync(mapsDir, [{ modId: 'demo', seed: 'xyz', blueprints }])
+
+    const lines = fs.readFileSync(path.join(mapsDir, 'smln.demo.custommap'), 'utf8').split('\n')
+    assert(lines.length === 2, 'expected exactly two lines, got ' + lines.length)
+
+    const metadata = JSON.parse(lines[0])
+    assert(metadata.id === 'smln.demo' && metadata.seed === 'xyz', "line 0 is not the map's metadata")
+    assert(!('terrain' in metadata), 'line 0 carries layer data - the whole point of the split is that it does not')
+
+    const doc = JSON.parse(lines[1])
+    assert(doc.terrain && doc.terrain.dataUrl, 'line 1 is not the full document')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'metadata on line one, full document on line two, exactly like the game writes it'
 })
 
 if (archive) archive.close()

@@ -46,7 +46,7 @@ function pngSize(buffer) {
  *
  * @param {{modId:string, name?:string, seed?:string, params?:object,
  *          blueprints:Record<string,string>}} mapSpec
- * @returns {{ok:true, id:string, file:string, doc:object}|{ok:false, reason:string}}
+ * @returns {{ok:true, id:string, file:string, doc:object, fileText:string}|{ok:false, reason:string}}
  */
 function assemble(mapSpec) {
   const spec = mapSpec || {}
@@ -54,14 +54,19 @@ function assemble(mapSpec) {
   if (!modId) return { ok: false, reason: 'the map has no mod id' }
   const blueprints = spec.blueprints || {}
 
-  // Without terrain there is no world; the rest may be blank.
-  if (!blueprints.terrain) return { ok: false, reason: 'no "terrain" blueprint - a map needs one' }
+  // The game's own loader awaits all six at once and has no undefined-guard,
+  // so a missing layer does not degrade - the whole map fails to load. A
+  // blank stand-in would be guessing what an invented layer means to the
+  // game, so a partial set is refused instead of padded.
+  const missing = LAYERS.filter((layer) => !blueprints[layer])
+  if (missing.length) {
+    return { ok: false, reason: `a map needs all six layers; missing: ${missing.join(', ')}` }
+  }
 
   const doc = {}
   let size = null
   for (const layer of LAYERS) {
     const file = blueprints[layer]
-    if (!file) { doc[layer] = null; continue }
 
     let buffer
     try {
@@ -81,7 +86,10 @@ function assemble(mapSpec) {
       }
     }
 
-    doc[layer] = 'data:image/png;base64,' + buffer.toString('base64')
+    // The game sizes its canvas from width/height before drawing the image,
+    // not from the PNG itself, so the dimensions have to travel alongside
+    // the pixels rather than only inside them.
+    doc[layer] = { width: dims.width, height: dims.height, dataUrl: 'data:image/png;base64,' + buffer.toString('base64') }
   }
 
   // The id doubles as the file name and as what the game shows and boots with,
@@ -98,7 +106,14 @@ function assemble(mapSpec) {
   doc.version = 1
   doc.createdAt = new Date().toISOString()
 
-  return { ok: true, id, file: id + EXT, doc }
+  // The game's own save routine writes metadata on the first line and the
+  // full document on the second, and its two readers split on that exact
+  // boundary - so a single-JSON file loads far enough to appear in the
+  // browser, then fails the moment it is opened.
+  const metadata = { id: doc.id, name: doc.name, seed: doc.seed, createdAt: doc.createdAt, version: doc.version, params: doc.params }
+  const fileText = JSON.stringify(metadata) + '\n' + JSON.stringify(doc)
+
+  return { ok: true, id, file: id + EXT, doc, fileText }
 }
 
 /** Is this a file this module wrote? Nothing else may ever be deleted. */
@@ -136,7 +151,7 @@ function sync(mapsDir, specs) {
       continue
     }
     try {
-      fs.writeFileSync(path.join(mapsDir, built.file), JSON.stringify(built.doc))
+      fs.writeFileSync(path.join(mapsDir, built.file), built.fileText)
       keep[built.file] = true
       installed.push(built.file)
     } catch (e) {
