@@ -5647,6 +5647,70 @@ check('a mod that registers content gets it captured, with a working matter tabl
     `${captured.length} recipe(s) captured and ${reported.length} reported`
 })
 
+check('installing maps writes ours and never removes the player\'s', () => {
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-mapsync-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  const bp = path.join(root, 'bp')
+  fs.mkdirSync(mapsDir, { recursive: true })
+  fs.mkdirSync(bp, { recursive: true })
+  try {
+    fs.writeFileSync(path.join(bp, 'terrain.png'), makeTinyPng(2, 2))
+    const spec = (modId) => ({ modId, blueprints: { terrain: path.join(bp, 'terrain.png') } })
+
+    // Files that are not ours, including one deliberately close to our prefix.
+    fs.writeFileSync(path.join(mapsDir, 'my-world.custommap'), '{}')
+    fs.writeFileSync(path.join(mapsDir, 'smlnx.not-ours.custommap'), '{}')
+
+    const first = maps.sync(mapsDir, [spec('alpha'), spec('beta')])
+    assert(first.installed.length === 2, 'expected two installs, got ' + first.installed.length)
+    assert(fs.existsSync(path.join(mapsDir, 'smln.alpha.custommap')), 'alpha was not written')
+    const written = JSON.parse(fs.readFileSync(path.join(mapsDir, 'smln.beta.custommap'), 'utf8'))
+    assert(/^data:image\/png;base64,/.test(written.terrain), 'the written file has no terrain layer')
+
+    // beta is gone now: its map goes, alpha stays, the player's files stay.
+    const second = maps.sync(mapsDir, [spec('alpha')])
+    assert(second.removed.length === 1 && /beta/.test(second.removed[0]),
+      'beta was not pruned: ' + JSON.stringify(second.removed))
+    assert(fs.existsSync(path.join(mapsDir, 'smln.alpha.custommap')), 'alpha was pruned too')
+    assert(fs.existsSync(path.join(mapsDir, 'my-world.custommap')), "the player's map was deleted")
+    assert(fs.existsSync(path.join(mapsDir, 'smlnx.not-ours.custommap')),
+      'a file that merely looks like ours was deleted')
+
+    // A bad spec is reported and does not stop the good one.
+    const third = maps.sync(mapsDir, [spec('alpha'), { modId: 'broken', blueprints: {} }])
+    assert(third.failed.length === 1 && third.failed[0].modId === 'broken',
+      'the broken map was not reported: ' + JSON.stringify(third.failed))
+    assert(third.installed.length === 1, 'the good map did not install alongside the bad one')
+
+    // With nothing enabled, everything of ours goes and nothing else does.
+    const fourth = maps.sync(mapsDir, [])
+    assert(fourth.removed.length === 1, 'the last of ours was not pruned')
+    const left = fs.readdirSync(mapsDir).sort()
+    assert(left.join(',') === 'my-world.custommap,smlnx.not-ours.custommap',
+      'the folder was left as: ' + left.join(','))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'installed, pruned by owner, and the player\'s files untouched throughout'
+})
+
+check('sync creates the maps folder when the game has not yet', () => {
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-mapdir-'))
+  try {
+    const mapsDir = path.join(root, 'custom_maps')
+    const bp = path.join(root, 'terrain.png')
+    fs.writeFileSync(bp, makeTinyPng(2, 2))
+    const out = maps.sync(mapsDir, [{ modId: 'alpha', blueprints: { terrain: bp } }])
+    assert(out.installed.length === 1, 'nothing installed into a fresh folder')
+    assert(fs.existsSync(path.join(mapsDir, 'smln.alpha.custommap')), 'the file is missing')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'a missing custom_maps folder is created rather than an error'
+})
+
 if (archive) archive.close()
 
 // Wait for the async checks before reporting, or their results land after the

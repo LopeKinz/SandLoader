@@ -20,9 +20,6 @@ const path = require('path')
 /** The six fields the renderer reads, in the order it reads them. */
 const LAYERS = ['terrain', 'lights', 'lightsMeta', 'sensors', 'authorization', 'wall']
 
-/** Without terrain there is no world; the rest may be blank. */
-const REQUIRED_LAYERS = ['terrain']
-
 /** Everything this module writes starts here, and only these may be removed. */
 const PREFIX = 'smln.'
 const EXT = '.custommap'
@@ -57,11 +54,8 @@ function assemble(mapSpec) {
   if (!modId) return { ok: false, reason: 'the map has no mod id' }
   const blueprints = spec.blueprints || {}
 
-  for (const required of REQUIRED_LAYERS) {
-    if (!blueprints[required]) {
-      return { ok: false, reason: `no "${required}" blueprint - a map needs one` }
-    }
-  }
+  // Without terrain there is no world; the rest may be blank.
+  if (!blueprints.terrain) return { ok: false, reason: 'no "terrain" blueprint - a map needs one' }
 
   const doc = {}
   let size = null
@@ -107,4 +101,60 @@ function assemble(mapSpec) {
   return { ok: true, id, file: id + EXT, doc }
 }
 
-module.exports = { assemble, pngSize, LAYERS, REQUIRED_LAYERS, PREFIX, EXT }
+/** Is this a file this module wrote? Nothing else may ever be deleted. */
+function ours(fileName) {
+  return fileName.indexOf(PREFIX) === 0 && fileName.slice(-EXT.length) === EXT
+}
+
+/**
+ * Bring the folder in line with the map mods that are enabled right now.
+ *
+ * Writes each one's map, and removes the maps of mods that are no longer here.
+ * The player's own files are not ours to touch, so the only things considered
+ * for removal are names this module could have produced - checked by prefix and
+ * extension, not by guessing.
+ *
+ * @param {string} mapsDir  `<userData>/custom_maps`
+ * @param {Array<object>} specs  one mapSpec per enabled map mod
+ */
+function sync(mapsDir, specs) {
+  const installed = []
+  const removed = []
+  const failed = []
+  const keep = Object.create(null)
+
+  try {
+    fs.mkdirSync(mapsDir, { recursive: true })
+  } catch (e) {
+    return { installed, removed, failed: [{ modId: null, reason: 'could not create ' + mapsDir + ': ' + e.message }] }
+  }
+
+  for (const spec of specs || []) {
+    const built = assemble(spec)
+    if (!built.ok) {
+      failed.push({ modId: (spec && spec.modId) || null, reason: built.reason })
+      continue
+    }
+    try {
+      fs.writeFileSync(path.join(mapsDir, built.file), JSON.stringify(built.doc))
+      keep[built.file] = true
+      installed.push(built.file)
+    } catch (e) {
+      failed.push({ modId: spec.modId, reason: 'could not write ' + built.file + ': ' + e.message })
+    }
+  }
+
+  let entries = []
+  try { entries = fs.readdirSync(mapsDir) } catch (_e) { entries = [] }
+  for (const name of entries) {
+    if (!ours(name) || keep[name]) continue
+    try {
+      fs.rmSync(path.join(mapsDir, name), { force: true })
+      removed.push(name)
+    } catch (_e) { /* a map we cannot remove is not worth failing the load over */ }
+  }
+
+  return { installed, removed, failed }
+}
+
+module.exports = { assemble, sync, pngSize, LAYERS, PREFIX, EXT }
