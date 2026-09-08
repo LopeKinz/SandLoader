@@ -54,6 +54,18 @@
  *     file will not create a document that small.
  *   - **The six layers must stay the same size as each other**, so every
  *     transform runs on all six with the same arguments, as one undo step.
+ *
+ * ## A terrain colour is a storage key, not an appearance
+ *
+ * The corollary of all four, and the reason `render()` is not a plain redraw
+ * of the layer canvases: 153,0,0 is how the format spells "open air", so a
+ * blank document is a layer full of dark red bytes and drawing those bytes
+ * puts a wall on screen where the map has nothing. The view derives what it
+ * draws - air becomes an absence, and the stage's checkerboard shows through -
+ * while the layer keeps the bytes the game has to read back. Nothing about
+ * what is saved changes, and no material's real appearance is invented here,
+ * because this file does not know any of them; the palette side says so in
+ * one line rather than pretending the swatches are pictures.
  */
 ;(function installSmlnMapEditor(global) {
   var SMLN = global.__SMLN__
@@ -345,6 +357,8 @@
     '#smln-mapedit .current .who b{display:block;font-size:12px;font-weight:700;color:#f1f5f9}',
     '#smln-mapedit .current .who span{display:block;color:#64748b;font-size:10.5px;',
     "font-family:'Cascadia Mono',Consolas,monospace;letter-spacing:.04em}",
+    '#smln-mapedit .paletteKey{flex:none;padding:9px 14px 1px;color:#94a3b8;font-size:11px;',
+    'line-height:1.45}',
     '#smln-mapedit .swatches{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 12px}',
     '#smln-mapedit .kind{color:#94a3b8;font-size:10px;letter-spacing:.1em;text-transform:uppercase;',
     'margin:12px 6px 5px;padding-bottom:3px;border-bottom:1px solid rgba(100,116,139,.24)}',
@@ -526,6 +540,103 @@
   function cssOf(entry) {
     var c = entry && entry.rgb
     return c ? 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')' : 'transparent'
+  }
+
+  /**
+   * The stored colours that are nothing at all in the loaded world.
+   *
+   * A terrain colour is a storage key, not an appearance. 153,0,0 is how the
+   * format spells "open air", so a document with nothing painted on it is a
+   * layer full of dark red bytes - and drawing those bytes puts a wall on the
+   * screen where the map has nothing. The view draws these as an absence
+   * instead, and the stage's checkerboard shows through; the layer keeps the
+   * bytes, because those are what the game reads back.
+   *
+   * Read off the table, never listed here, and narrowed by `cellType` rather
+   * than by `kind` alone. The fog rows share the `empty` bucket because open
+   * air is what they *end up* as, but on load they are collidable obstacles -
+   * one of them says "looks like black rock" in its own label - so drawing
+   * them as an absence would be this file inventing an appearance for them,
+   * which is exactly the trap the palette module exists to close. CellType 0
+   * is the table's own way of saying a cell is Empty from the first frame.
+   */
+  var AIR = null
+  var ANY_AIR = false
+  function airKeys() {
+    if (AIR) return AIR
+    AIR = Object.create(null)
+    var rows = (palette && palette.TERRAIN) || null
+    for (var i = 0; rows && i < rows.length; i++) {
+      var e = rows[i]
+      if (e.kind !== 'empty' || e.cellType !== 0 || !e.rgb) continue
+      AIR[(e.rgb[0] << 16) | (e.rgb[1] << 8) | e.rgb[2]] = true
+      ANY_AIR = true
+    }
+    return AIR
+  }
+
+  /**
+   * The terrain layer as it should be seen: the same pixels, with every air
+   * colour turned into an absence.
+   *
+   * A cache, not a per-frame pass. The view redraws on every mouse move and a
+   * large map is millions of pixels, so the conversion runs only over the
+   * rectangles the tools already reported dirty. A stroke costs its own
+   * footprint; a zoomed-out redraw costs the one drawImage it always cost.
+   */
+  var shown = { canvas: null, all: true, rects: [] }
+
+  /** Mark a rectangle of the terrain layer as needing re-derivation, or all of it. */
+  function shownDirty(rect) {
+    if (!rect) { shown.all = true; shown.rects = []; return }
+    if (!shown.all) shown.rects.push(rect)
+  }
+
+  function refreshShown(x, y, w, h) {
+    var x0 = Math.max(0, Math.floor(x))
+    var y0 = Math.max(0, Math.floor(y))
+    var x1 = Math.min(doc.width, Math.ceil(x + w))
+    var y1 = Math.min(doc.height, Math.ceil(y + h))
+    if (x1 <= x0 || y1 <= y0) return
+    var air = airKeys()
+    var image = ctxOf(doc.layers.terrain).getImageData(x0, y0, x1 - x0, y1 - y0)
+    var d = image.data
+    for (var i = 0; i < d.length; i += 4) {
+      // A see-through pixel is already nothing on screen, and the validator
+      // has its own thing to say about one being in the terrain layer.
+      if (d[i + 3] === 0) continue
+      if (air[(d[i] << 16) | (d[i + 1] << 8) | d[i + 2]]) d[i + 3] = 0
+    }
+    ctxOf(shown.canvas).putImageData(image, x0, y0)
+  }
+
+  /** What render() draws for the terrain layer. */
+  function shownTerrain() {
+    airKeys()
+    // With no table there is no colour anyone can prove is air, so the layer
+    // is drawn as it is stored rather than guessed at.
+    if (!ANY_AIR) return doc.layers.terrain
+    if (!shown.canvas) {
+      shown.canvas = newCanvas(doc.width, doc.height)
+      // Named so nothing can mistake it for one of the six the map is made of.
+      shown.canvas.className = 'shown'
+      shown.all = true
+    }
+    if (shown.canvas.width !== doc.width || shown.canvas.height !== doc.height) {
+      shown.canvas.width = doc.width
+      shown.canvas.height = doc.height
+      shown.all = true
+    }
+    if (shown.all) {
+      refreshShown(0, 0, doc.width, doc.height)
+    } else {
+      for (var i = 0; i < shown.rects.length; i++) {
+        refreshShown(shown.rects[i].x, shown.rects[i].y, shown.rects[i].w, shown.rects[i].h)
+      }
+    }
+    shown.all = false
+    shown.rects = []
+    return shown.canvas
   }
 
   // --------------------------------------------------------------- overlay
@@ -760,6 +871,18 @@
     current.appendChild(who)
     side.appendChild(current)
 
+    // Said once, plainly, and nowhere else. A colour here is the code the map
+    // format stores, not the material's appearance - the indestructible one is
+    // bright red and the diggable one is pure black - and the view deliberately
+    // does not show what the world will look like either. One line is the whole
+    // remedy: this file does not know any material's real appearance and must
+    // not invent one.
+    var codes = document.createElement('div')
+    codes.className = 'paletteKey'
+    codes.textContent = tx('editor.paletteCodes',
+      'These squares are the codes the map format stores, not how the world will look.')
+    side.appendChild(codes)
+
     var swatches = document.createElement('div')
     swatches.className = 'swatches'
     side.appendChild(swatches)
@@ -826,7 +949,7 @@
     title.textContent = tx('editor.problems', 'What this map will do')
     top.appendChild(title)
     button(top, tx('editor.hide', 'Hide'), null, function () {
-      issues.classList.toggle('open', false)
+      keepingCentre(function () { issues.classList.toggle('open', false) })
       refreshTools()
     })
     var body = document.createElement('div')
@@ -926,6 +1049,29 @@
     refreshTools()
   }
 
+  /**
+   * Run something that changes how wide the stage is, and keep whatever was in
+   * the middle of the view in the middle of it.
+   *
+   * Opening the problems panel takes 320 pixels off the stage. Left alone, the
+   * view keeps an offset measured against the old width, so the map slides out
+   * of frame at the moment the author asked a question about it - which reads
+   * as the editor having lost the map. The same arithmetic as zoomBy, for the
+   * same reason.
+   */
+  function keepingCentre(change) {
+    if (!overlay || !doc) { change(); return }
+    var before = stageSize()
+    var cx = (before.width / 2 - view.x) / view.zoom
+    var cy = (before.height / 2 - view.y) / view.zoom
+    change()
+    var after = stageSize()
+    if (after.width === before.width && after.height === before.height) return
+    view.x = Math.round(after.width / 2 - cx * view.zoom)
+    view.y = Math.round(after.height / 2 - cy * view.zoom)
+    render()
+  }
+
   function fitView() {
     if (!doc) return
     var size = stageSize()
@@ -971,7 +1117,9 @@
     for (var i = 0; i < LAYERS.length; i++) {
       var layer = LAYERS[i]
       if (!visible[layer]) continue
-      ctx.drawImage(doc.layers[layer], 0, 0, doc.width, doc.height, view.x, view.y, dw, dh)
+      // Terrain is drawn from what its colours mean, not from what they spell.
+      var source = layer === 'terrain' ? shownTerrain() : doc.layers[layer]
+      ctx.drawImage(source, 0, 0, doc.width, doc.height, view.x, view.y, dw, dh)
     }
 
     // The world's edge, so an empty map is still a rectangle you can see.
@@ -1166,6 +1314,8 @@
     var abs = { x: x0 + rect.x, y: y0 + rect.y, w: rect.w, h: rect.h }
     captureBefore(abs.x, abs.y, abs.x + abs.w - 1, abs.y + abs.h - 1)
     ctx.putImageData(buf, x0, y0)
+    // The tool's own rectangle again, so what is redrawn is what was written.
+    if (layer === 'terrain') shownDirty(abs)
     doc.dirty = true
     return abs
   }
@@ -1307,11 +1457,16 @@
       doc.width = step.size.width
       doc.height = step.size.height
       selection = null
+      shownDirty(null)
       fitView()
     }
     for (var j = 0; j < step.tiles.length; j++) {
       var tile = step.tiles[j]
-      ctxOf(doc.layers[tile.layer || step.layer]).putImageData(tile.image, tile.x, tile.y)
+      var name = tile.layer || step.layer
+      ctxOf(doc.layers[name]).putImageData(tile.image, tile.x, tile.y)
+      if (name === 'terrain') {
+        shownDirty({ x: tile.x, y: tile.y, w: tile.image.width, h: tile.image.height })
+      }
     }
     doc.dirty = true
   }
@@ -1396,6 +1551,7 @@
     doc.dirty = true
     selection = null
     report = null
+    shownDirty(null)
     commit(before)
     fitView()
     render()
@@ -1639,7 +1795,9 @@
       tx('editor.warningsHeading',
         'Warnings - the map still saves and still plays'))
 
-    if (openPanel) overlay._issues.classList.toggle('open', true)
+    if (openPanel) {
+      keepingCentre(function () { overlay._issues.classList.toggle('open', true) })
+    }
     refreshTools()
   }
 
@@ -1892,6 +2050,7 @@
     selection = null
     report = null
     escapeArmed = false
+    shownDirty(null)
     ink = palette ? palette.DEFAULT_SOLID || null : null
     if (overlay) {
       overlay._issues.classList.toggle('open', false)

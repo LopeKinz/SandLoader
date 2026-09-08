@@ -7497,8 +7497,44 @@ check('the editor is offered every palette colour except the ones that break a m
   const offered = palette.paintable()
   const broken = palette.TERRAIN.filter((e) => e.kind === 'broken')
   assert(broken.length > 0, 'no broken rows are recorded at all')
-  assert(offered.length === palette.TERRAIN.length - broken.length,
-    'paintable() dropped ' + (palette.TERRAIN.length - offered.length) + ' rows but only ' + broken.length + ' are broken')
+
+  // Two filters, and each has to be exactly itself. Nothing may be withheld
+  // except a broken row and a row whose outcome is already on offer: every
+  // distinct non-broken label appears once, and every offered row is a real
+  // table row rather than something paintable() built.
+  const safe = palette.TERRAIN.filter((e) => e.kind !== 'broken')
+  const labels = new Set(safe.map((e) => e.label))
+  assert(offered.length === labels.size,
+    'paintable() offers ' + offered.length + ' rows for ' + labels.size + ' distinct outcomes')
+  const shown = new Set()
+  for (const e of offered) {
+    assert(palette.TERRAIN.includes(e), 'paintable() invented a row: ' + JSON.stringify(e))
+    assert(!shown.has(e.label), 'two offered rows share a label: "' + e.label + '"')
+    shown.add(e.label)
+  }
+  for (const label of labels) {
+    assert(shown.has(label), 'no colour is offered for "' + label + '"')
+  }
+  // The rows it withheld are still recognised, which is the whole trade: the
+  // picker gets shorter, the reader of somebody else's map does not get blinder.
+  for (const e of safe) {
+    assert(palette.byRgb(e.rgb[0], e.rgb[1], e.rgb[2]) === e,
+      'a de-duplicated colour is no longer recognised: ' + e.hex)
+    assert(shown.has(e.label), e.hex + ' resolves to an outcome nothing offers')
+  }
+  // The seven the format spells more than one way, by name, because collapsing
+  // them is the point and a table that stopped duplicating would make this
+  // check vacuous.
+  const doubled = ['#99ffff', '#4400ff', '#333333', '#9966ff', '#eed975',
+    '#fedc00', '#141414', '#add8e6']
+  for (const hex of doubled) {
+    const dup = palette.byHex(hex)
+    assert(dup, hex + ' is gone from the table, so a map containing it is unreadable')
+    assert(!offered.includes(dup), hex + ' is offered beside the colour it duplicates')
+    assert(offered.some((e) => e.label === dup.label),
+      hex + ' was dropped without its outcome staying on offer')
+  }
+
   for (const e of offered) assert(e.kind !== 'broken', 'a broken colour is on offer: ' + e.hex)
   for (const e of broken) {
     assert(!offered.includes(e), 'a broken colour is on offer: ' + e.hex)
@@ -7509,7 +7545,8 @@ check('the editor is offered every palette colour except the ones that break a m
   // The colour that throws on load, by name, because blacklisting it is the point.
   const thrower = palette.byRgb(240, 220, 120)
   assert(thrower && thrower.kind === 'broken', '240,220,120 is not recorded as broken')
-  return offered.length + ' offered, ' + broken.length + ' withheld'
+  return offered.length + ' offered for ' + labels.size + ' outcomes, ' + broken.length +
+    ' broken and ' + (safe.length - offered.length) + ' duplicate withheld but still recognised'
 })
 
 check('the palette classification counts match the bundle investigation', () => {
@@ -7679,7 +7716,17 @@ function mapUiHasClass(el, cls) {
  */
 function mapUiLayers(dom, width, height) {
   return dom.document._all.filter((e) => e.tagName === 'CANVAS' &&
-    e.className !== 'view' && e.width === width && e.height === height)
+    !e.className && e.width === width && e.height === height)
+}
+
+/**
+ * The canvas the editor derives from the terrain layer for the view: the same
+ * pixels with the air colours turned into an absence. Never one of the six,
+ * never saved, and marked with a class of its own so neither this helper nor
+ * anything else can confuse it with the map.
+ */
+function mapUiShown(dom) {
+  return dom.document._all.find((e) => e.tagName === 'CANVAS' && e.className === 'shown') || null
 }
 
 function mapUiPixel(canvas, x, y) {
@@ -8244,6 +8291,15 @@ check('the spawn marker is drawn over the map at every zoom, and never into it',
     const nodes = mapUiNodes(overlay)
     const view = mapUiByClass(nodes, 'view')[0]
     const layers = mapUiLayers(dom, MAPUI_W, MAPUI_H)
+    const harness = require('./dom-harness')
+
+    // Flood the map with something first. A blank document is air from edge to
+    // edge, and the view draws air as an absence, so an untouched map is not
+    // drawn at all - which is correct, and leaves this check nothing to measure
+    // the marker against. One fill gives it back a drawn rectangle.
+    mapUiByText(nodes, 'Fill').dispatch('click', { type: 'click' })
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', mapUiCentre(harness)))
+    dom.window.emit('mouseup', {})
 
     // The marker's own translucency is what picks it out of the map behind it:
     // nothing an author can paint is anything but fully opaque.
@@ -8279,4 +8335,208 @@ check('the spawn marker is drawn over the map at every zoom, and never into it',
     }
     return 'marked at ' + spawn.x + ', ' + spawn.y + ' at both zooms, and in no layer'
   })
+})
+
+// ------------------------------------------- the view draws meaning, not keys
+// A terrain colour is a storage key. 153,0,0 is how the format spells "open
+// air", so a document with nothing painted on it is a layer full of dark red
+// bytes - and an editor that drew those bytes showed a mapmaker a solid red
+// wall and called it a new map. These prove the two halves that have to hold
+// at once: the view shows an absence, and the file still holds the colour.
+
+check('a new map draws as empty space and still saves the air colour', () => {
+  const harness = require('./dom-harness')
+  const pal = require('../src/game/terrain-palette')
+  const air = pal.DEFAULT_EMPTY.rgb
+  const { S, dom } = bootEditor()
+  let saved = null
+  S.callMain = (action, payload) => {
+    if (action === 'saveCustomMap') saved = payload
+    return Promise.resolve({ ok: true, id: 'blank', file: 'blank.custommap' })
+  }
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Blank' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const view = mapUiByClass(nodes, 'view')[0]
+    const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+
+    // The layer is what the game reads, and it is air from edge to edge.
+    const stored = terrain._data().pixels
+    for (let i = 0; i < stored.length; i += 4) {
+      assert(stored[i] === air[0] && stored[i + 1] === air[1] && stored[i + 2] === air[2] &&
+        stored[i + 3] === 255, 'the blank terrain layer is not the palette air colour at byte ' + i)
+    }
+
+    // The view is what the author reads, and it shows nothing. The only thing
+    // drawn on it is the spawn marker, which is translucent on purpose; an
+    // opaque pixel anywhere would be the map being painted onto the screen.
+    const seen = view._data().pixels
+    let opaque = 0
+    for (let i = 0; i < seen.length; i += 4) {
+      if (seen[i + 3] === 255) opaque++
+      assert(!(seen[i + 3] > 0 && seen[i] === air[0] && seen[i + 1] === air[1] &&
+        seen[i + 2] === air[2]), 'the air colour itself was drawn to the view at byte ' + i)
+    }
+    assert(opaque === 0, opaque + ' view pixels are opaque, so a blank map is still drawn as a wall')
+
+    // And the canvas it derives that from is the layer with the air taken out,
+    // never the layer itself.
+    const shown = mapUiShown(dom)
+    assert(shown, 'the editor draws the terrain layer straight to the view')
+    assert(shown !== terrain, 'the derived canvas is the terrain layer itself')
+    assert(shown.width === MAPUI_W && shown.height === MAPUI_H,
+      'the derived canvas is ' + shown.width + 'x' + shown.height)
+    const derived = shown._data().pixels
+    for (let i = 3; i < derived.length; i += 4) {
+      assert(derived[i] === 0, 'an air cell is still drawn at byte ' + (i - 3))
+    }
+
+    mapUiByClass(nodes, 'save')[0].dispatch('click', { type: 'click' })
+    return new Promise((resolve) => setTimeout(resolve, 0))
+  }).then(() => {
+    assert(saved && saved.layers && saved.layers.terrain, 'the blank map was never saved')
+    const png = harness.decodePng(
+      Buffer.from(saved.layers.terrain.dataUrl.split(',')[1], 'base64'))
+    for (let i = 0; i < png.data.length; i += 4) {
+      assert(png.data[i] === air[0] && png.data[i + 1] === air[1] &&
+        png.data[i + 2] === air[2] && png.data[i + 3] === 255,
+      'the saved terrain is not the air colour at byte ' + i + ': ' +
+        [png.data[i], png.data[i + 1], png.data[i + 2], png.data[i + 3]].join(','))
+    }
+    return 'nothing drawn, nothing opaque, and ' + air.join(',') + ' at full opacity in the file'
+  })
+})
+
+check('painting and then erasing puts the view back to showing nothing', () => {
+  const harness = require('./dom-harness')
+  const pal = require('../src/game/terrain-palette')
+  const air = pal.DEFAULT_EMPTY.rgb
+  const dirt = pal.DEFAULT_SOLID.rgb
+  const { S, dom } = bootEditor()
+
+  const opaqueCount = (canvas) => {
+    const d = canvas._data()
+    let n = 0
+    for (let i = 3; i < d.pixels.length; i += 4) if (d.pixels[i] === 255) n++
+    return n
+  }
+
+  /** Where the brush landed, found in the layer rather than by redoing geometry. */
+  const firstInked = (canvas) => {
+    const d = canvas._data()
+    for (let y = 0; y < d.height; y++) {
+      for (let x = 0; x < d.width; x++) {
+        const i = (y * d.width + x) * 4
+        if (d.pixels[i] !== air[0] || d.pixels[i + 1] !== air[1] || d.pixels[i + 2] !== air[2]) {
+          return { x, y }
+        }
+      }
+    }
+    return null
+  }
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'There and back' })
+    .then(() => {
+      const overlay = dom.document.getElementById('smln-mapedit')
+      const nodes = mapUiNodes(overlay)
+      const view = mapUiByClass(nodes, 'view')[0]
+      const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+      const centre = mapUiCentre(harness)
+      assert(opaqueCount(view) === 0,
+        'the view was already drawing something before anything was painted')
+
+      view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+      dom.window.emit('mouseup', {})
+
+      const at = firstInked(terrain)
+      assert(at, 'the brush painted nothing, so there is nothing to erase')
+      assert(mapUiPixel(terrain, at.x, at.y).join(',') === dirt.concat(255).join(','),
+        'the brush wrote ' + mapUiPixel(terrain, at.x, at.y) + ' rather than the palette default')
+      const painted = opaqueCount(view)
+      assert(painted > 0, 'a painted cell is not drawn to the view at all')
+      assert(mapUiPixel(mapUiShown(dom), at.x, at.y)[3] === 255,
+        'the painted cell is see-through in the derived canvas')
+
+      mapUiByText(nodes, 'Eraser').dispatch('click', { type: 'click' })
+      view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+      dom.window.emit('mouseup', {})
+
+      // The buffer keeps the colour; the view goes back to showing nothing.
+      assert(mapUiPixel(terrain, at.x, at.y).join(',') === air.concat(255).join(','),
+        'the eraser wrote ' + mapUiPixel(terrain, at.x, at.y) + ' instead of the air colour')
+      assert(mapUiPixel(mapUiShown(dom), at.x, at.y)[3] === 0,
+        'the erased cell is still drawn in the derived canvas')
+      assert(opaqueCount(view) === 0,
+        opaqueCount(view) + ' view pixels are still opaque after erasing')
+
+      // Undo brings the paint back on screen as well as in the buffer - the
+      // derived canvas has to follow history, not only strokes.
+      mapUiByText(nodes, 'Undo').dispatch('click', { type: 'click' })
+      assert(mapUiPixel(terrain, at.x, at.y).join(',') === dirt.concat(255).join(','),
+        'undoing the erase did not put the colour back')
+      assert(opaqueCount(view) === painted,
+        'undoing the erase left the view showing ' + opaqueCount(view) + ' of ' + painted + ' cells')
+      return 'painted ' + painted + ' view pixels, erased back to none, and undo restored them'
+    })
+})
+
+check('the view is re-derived only over the rectangle a tool reported dirty', () => {
+  // The derived canvas exists so a large map does not pay for a full pass on
+  // every mouse move. That is only true if a stroke touches its own rectangle
+  // and nothing else, so this leaves a mark where the editor already believes
+  // it knows the answer, and checks the mark survives.
+  const harness = require('./dom-harness')
+  const pal = require('../src/game/terrain-palette')
+  const air = pal.DEFAULT_EMPTY.rgb
+  const { S, dom } = bootEditor()
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Dirty rect' })
+    .then(() => {
+      const overlay = dom.document.getElementById('smln-mapedit')
+      const nodes = mapUiNodes(overlay)
+      const view = mapUiByClass(nodes, 'view')[0]
+      const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+      const shown = mapUiShown(dom)
+      assert(shown, 'there is no derived canvas to keep clean')
+
+      const ctx = shown.getContext('2d')
+      const mark = ctx.createImageData(1, 1)
+      mark.data[0] = 1; mark.data[1] = 2; mark.data[2] = 3; mark.data[3] = 255
+      const stamp = () => ctx.putImageData(mark, 1, 1)
+      stamp()
+
+      view.dispatch('mousedown', harness.mouseEvent('mousedown', mapUiCentre(harness)))
+      dom.window.emit('mouseup', {})
+
+      assert(mapUiPixel(shown, 1, 1).join(',') === '1,2,3,255',
+        'a dab redrew the far corner of the derived canvas, so no dirty rectangle is honoured')
+      assert(mapUiPixel(terrain, 1, 1).join(',') === air.concat(255).join(','),
+        'the mark leaked into the terrain layer, so this check proves nothing about the view')
+
+      // The dab's own cell did get redone, or "only that rect" would be true
+      // of an editor that redrew nothing at all.
+      const d = terrain._data()
+      let at = null
+      for (let y = 0; y < d.height && !at; y++) {
+        for (let x = 0; x < d.width; x++) {
+          const i = (y * d.width + x) * 4
+          if (d.pixels[i] !== air[0] || d.pixels[i + 1] !== air[1] || d.pixels[i + 2] !== air[2]) {
+            at = { x, y }
+            break
+          }
+        }
+      }
+      assert(at && mapUiPixel(shown, at.x, at.y)[3] === 255,
+        'the cell the dab wrote was not re-derived')
+
+      // And the mark is erasable: a transform invalidates the whole canvas, so
+      // the survival above is a dirty rectangle being honoured rather than a
+      // canvas nothing ever writes to.
+      stamp()
+      mapUiByText(nodes, 'Mirror ⇄').dispatch('click', { type: 'click' })
+      assert(mapUiPixel(shown, 1, 1).join(',') !== '1,2,3,255',
+        'a transform left the derived canvas stale, so the map on screen is not the map')
+      return 'a dab left the far corner untouched; a transform rebuilt all of it'
+    })
 })

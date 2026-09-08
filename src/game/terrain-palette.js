@@ -361,12 +361,34 @@ function byRgb(r, g, b) {
 }
 
 /**
- * The entries the editor may offer. Everything except `broken`, which is kept
- * in `TERRAIN` only so a map that already contains one can be flagged.
+ * The entries the editor may offer: one row per distinct outcome.
+ *
+ * Two filters, and they are not the same filter.
+ *
+ *  - `broken` is dropped because the game refuses those colours outright.
+ *  - A row whose label repeats one already offered is dropped because several
+ *    of these colours resolve to the identical material. Seven labels appear
+ *    twice or three times - the format simply spells those materials more than
+ *    one way - and a picker showing "Dune sand" twice asks an author to choose
+ *    between two things that are not different. The label is the promise a row
+ *    makes about what the player gets, so identical labels are identical
+ *    outcomes, and that is the property being deduplicated.
+ *
+ * This narrows only what is *offered*. `TERRAIN` keeps every row, so `byHex`,
+ * `byRgb` and the validator still recognise all of them in a map somebody else
+ * made - and the survivor's own note names the colour it stands in for.
+ *
+ * The row kept is the first in `TERRAIN`, which is the one the game's own
+ * resolver reaches first for that material.
  * @returns {TerrainEntry[]}
  */
 function paintable() {
-  return TERRAIN.filter((e) => e.kind !== 'broken')
+  const offered = new Set()
+  return TERRAIN.filter((e) => {
+    if (e.kind === 'broken' || offered.has(e.label)) return false
+    offered.add(e.label)
+    return true
+  })
 }
 
 /** Dirt: the solid that the starting shovel can dig from the first minute. */
