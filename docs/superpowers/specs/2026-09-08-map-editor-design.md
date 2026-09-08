@@ -20,11 +20,20 @@ that assembles cleanly and then plays badly.
 
 ### The trap this must not repeat
 
-A test map was generated with `102,102,102` for stone and `34,34,34` for
-bedrock. Both are documented palette entries. The world came out hollow - a
-backdrop and a floor, nothing to dig. `102,102,102` is `{bg: Stone, fg: Fog}`,
-a background wall plus a gas; `34,34,34` resolves to `Empty` without a mod
-registering that terrain.
+A test map was generated with 102,102,102 for stone and 34,34,34 for bedrock.
+Both are documented palette entries. The world came out hollow - a backdrop
+and a floor, nothing to dig. Both of the obvious explanations were wrong, and
+the real ones are worse:
+
+- 102,102,102 does not become a background wall. The resolver reads only .fg,
+  so the cell is plain Fog - which is collidable terrain, not a gas. Fog is the
+  game sealed-pocket material: destroying any one fog cell starts an unbounded
+  flood fill across the whole connected mass, and Fog has no element type to
+  leave behind, so the entire region turns to Empty at the first pick swing.
+- 34,34,34 does not silently become Empty. It resolves to the built-in bedrock,
+  which the game registers itself from its own baked-in content. It is solid
+  and collidable and carries excavationRequirements of indestructible, so it
+  can never be mined - a floor, permanently.
 
 Nothing warned about this. The preview drew the PNG, not what the PNG means,
 and the PNG was perfectly correct. **An editor that offers raw colours would
@@ -138,12 +147,21 @@ Procedural generation - sub-project 2. Editing a map while it is being played.
 Nothing here reads or copies `mods/uolkx.map-studio`, a third-party mod with no
 licence; every fact about the game is taken from the shipped bundle.
 
-## Pending facts
+## Facts, now settled
 
-Two investigations are running against the bundle, and this spec is not final
-until both land:
+Both investigations landed and both changed the design.
 
-1. What the five non-terrain layers mean pixel by pixel, and whether five blank
-   ones give a playable world. "Create from nothing" depends on the answer.
-2. The definitive colour table, classified by what the player gets, derived
-   from the code that decides collision rather than from names.
+1. Five blank non-terrain layers give a sane world. They are deny-lists and
+   decoration; authorization zone 0 falls back to permitting everything, and
+   the shipped campaign map itself loads with no wall layer at all. So
+   creating a map from nothing is sound, and the editor synthesises them.
+2. The colour table is settled: 32 solid, 9 empty, 7 fluid or gas, 2 broken,
+   and no pass-through background type exists at all. Every non-Empty cell
+   collides. 170,170,170 is the safest solid rock, though it needs a drill;
+   0,0,0 (Dirt) is the one diggable from the first minute. 153,0,0 is the only
+   air colour with no side effect. Alpha 0 is not air - it yields Fog - so
+   every terrain pixel must be opaque.
+
+One consequence for the spawn rule in this spec: a player spawned inside solid
+terrain is pushed upward until clear, not suffocated. So the editor marks the
+spawn and warns, and does not refuse to save.
