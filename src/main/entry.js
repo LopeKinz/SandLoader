@@ -677,6 +677,36 @@ async function handleRpc(msg) {
       }
     }
 
+    case 'importCustomMap': {
+      const { dialog } = require('electron')
+      const picked = await dialog.showOpenDialog(runtime.gameWindow || undefined, {
+        title: 'Import custom map',
+        properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'Sandustry map', extensions: ['custommap'] }],
+      })
+      if (picked.canceled || !picked.filePaths.length) return { ok: false, cancelled: true }
+
+      const hp = runtime.host && runtime.host.paths
+      if (!hp || !hp.userData) return { ok: false, error: 'the maps folder is unknown on this install' }
+      const mapsDir = path.join(hp.userData, 'custom_maps')
+
+      // Per file, never per pick: one unreadable file must not cost the player
+      // the others they selected in the same dialog.
+      const imported = []
+      const failed = []
+      for (const file of picked.filePaths) {
+        const result = customMaps.importFile(mapsDir, file)
+        if (result.ok) {
+          imported.push({ id: result.id, name: result.name })
+          logger.info(`imported custom map "${result.name}" as ${result.file}`)
+        } else {
+          failed.push({ file: path.basename(file), reason: result.reason })
+          logger.warn(`custom map ${path.basename(file)} refused: ${result.reason}`)
+        }
+      }
+      return { ok: imported.length > 0, imported, failed }
+    }
+
     case 'openModsFolder': {
       const dir = p.dir || modRoots(runtime.host && runtime.host.paths)[0]
       ensureDir(dir)

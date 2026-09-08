@@ -140,7 +140,7 @@
     'linear-gradient(45deg,transparent 75%,#151a21 75%),',
     'linear-gradient(-45deg,transparent 75%,#151a21 75%);',
     'background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}',
-    '#smln-maps .canvas img{max-width:100%;max-height:100%;display:block;',
+    '#smln-maps .canvas img{width:100%;height:100%;object-fit:contain;display:block;',
     // The signature move: this PNG is a literal one-pixel-per-cell
     // cross-section of the world, so smoothing it would blur cells together
     // instead of showing them.
@@ -171,10 +171,11 @@
 
     '#smln-maps footer{padding:13px 24px;border-top:1px solid rgba(100,116,139,.34);',
     'background:rgba(2,6,10,.5);display:flex;justify-content:space-between;align-items:center;gap:16px}',
-    '#smln-maps .note{color:#f87171;font-size:11.5px}',
-    '#smln-maps .close{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
+    '#smln-maps footer .note{color:#f87171;font-size:11.5px;flex:1;min-width:0}',
+    '#smln-maps .close,#smln-maps .import{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
     'color:#e2e8f0;font:inherit;font-size:12px;padding:7px 20px;border-radius:0 4px 0 4px}',
-    '#smln-maps .close:hover{background:rgba(148,163,184,.12)}',
+    '#smln-maps .close:hover,#smln-maps .import:hover{background:rgba(148,163,184,.12)}',
+    '#smln-maps .import[disabled]{opacity:.45;cursor:default;background:transparent}',
   ].join('')
 
   // --------------------------------------------------------------- overlay
@@ -216,7 +217,12 @@
     close.className = 'close'
     close.textContent = tx('maps.close', 'Close')
     close.addEventListener('click', function () { toggle(false) })
+    var importBtn = document.createElement('button')
+    importBtn.className = 'import'
+    importBtn.textContent = tx('maps.import', 'Import map...')
+    importBtn.addEventListener('click', function () { importMaps(importBtn) })
     footer.appendChild(note)
+    footer.appendChild(importBtn)
     footer.appendChild(close)
 
     panel.appendChild(header)
@@ -557,6 +563,40 @@
         : function (fn) { global.setTimeout(fn, 0) }
       raf(function () { raf(function () { loc.reload && loc.reload() }) })
     })
+  }
+
+/**
+   * Take a `.custommap` from anywhere on disk into the folder the game reads.
+   *
+   * The picker and the copy both live in the main process: the renderer has no
+   * file dialog, and `custom-map-save` would round-trip several megabytes of
+   * data URL through IPC to write a file main can simply copy.
+   */
+  function importMaps(button) {
+    if (!SMLN || typeof SMLN.callMain !== 'function') {
+      say(tx('maps.importUnavailable', 'importing needs the loader bridge'))
+      return
+    }
+    button.disabled = true
+    Promise.resolve(SMLN.callMain('importCustomMap', {})).then(function (r) {
+      if (!r || r.cancelled) return
+      var failed = (r && r.failed) || []
+      var imported = (r && r.imported) || []
+      if (imported.length) {
+        // Show what just arrived rather than leaving the old selection in place.
+        selectedId = imported[imported.length - 1].id
+        loadList()
+      }
+      if (failed.length) {
+        say(failed.length === 1
+          ? failed[0].file + ': ' + failed[0].reason
+          : tx('maps.importFailed', failed.length + ' file(s) could not be imported', { count: failed.length }))
+      } else if (imported.length) {
+        say(tx('maps.imported', imported.length + ' map(s) imported', { count: imported.length }))
+      }
+    }).catch(function (e) {
+      say((e && e.message) || 'the import failed')
+    }).then(function () { button.disabled = false })
   }
 
   // --------------------------------------------------------------- toggle

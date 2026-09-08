@@ -172,4 +172,97 @@ function sync(mapsDir, specs) {
   return { installed, removed, failed }
 }
 
-module.exports = { assemble, sync, pngSize, LAYERS, PREFIX, EXT }
+/**
+ * Read a `.custommap` far enough to know the game can open it.
+ *
+ * The two-line split and the per-layer shape are the two things that make a
+ * file load or fail, and neither is visible from the file name - so a picked
+ * file is checked here rather than discovered broken at world start.
+ *
+ * @returns {{ok:true, meta:object, doc:object}|{ok:false, reason:string}}
+ */
+function inspect(fileText) {
+  if (typeof fileText !== 'string' || !fileText.trim()) return { ok: false, reason: 'the file is empty' }
+  const cut = fileText.indexOf('\n')
+  if (cut === -1) return { ok: false, reason: 'a map file has two lines: metadata, then the document' }
+
+  let meta
+  let doc
+  try {
+    meta = JSON.parse(fileText.slice(0, cut))
+    doc = JSON.parse(fileText.slice(cut + 1))
+  } catch (e) {
+    return { ok: false, reason: 'this is not a map file: ' + e.message }
+  }
+  if (!meta || typeof meta !== 'object' || !doc || typeof doc !== 'object') {
+    return { ok: false, reason: 'this is not a map file' }
+  }
+
+  const missing = LAYERS.filter((layer) => {
+    const l = doc[layer]
+    return !l || typeof l !== 'object' || typeof l.dataUrl !== 'string' || !l.width || !l.height
+  })
+  if (missing.length) {
+    return { ok: false, reason: 'a map needs all six layers; missing or malformed: ' + missing.join(', ') }
+  }
+
+  return { ok: true, meta, doc }
+}
+
+/**
+ * Install a `.custommap` the player picked from disk.
+ *
+ * Two things are deliberate. An imported map never carries PREFIX, because
+ * that prefix marks a file SandLoader wrote for a mod and may prune - an
+ * imported map must outlive a mod it never came from. And the id inside the
+ * file is rewritten to match the file name, because the game opens a map by
+ * asking for `<id>.custommap`: a file whose name and id disagree lists
+ * perfectly and then fails the moment it is started.
+ *
+ * @param {string} mapsDir  `<userData>/custom_maps`
+ * @param {string} srcPath  the file the player picked
+ * @returns {{ok:true, id:string, name:string, file:string}|{ok:false, reason:string}}
+ */
+function importFile(mapsDir, srcPath) {
+  let fileText
+  try {
+    fileText = fs.readFileSync(srcPath, 'utf8')
+  } catch (e) {
+    return { ok: false, reason: 'could not read that file: ' + e.message }
+  }
+
+  const seen = inspect(fileText)
+  if (!seen.ok) return seen
+
+  const base = path.basename(String(srcPath))
+  const stem = base.slice(-EXT.length) === EXT ? base.slice(0, -EXT.length) : base
+  let safe = stem.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').replace(/[-.]+$/, '')
+  while (safe.indexOf(PREFIX) === 0) safe = safe.slice(PREFIX.length)
+  if (!safe) safe = 'imported-map'
+
+  try {
+    fs.mkdirSync(mapsDir, { recursive: true })
+  } catch (e) {
+    return { ok: false, reason: 'could not open the maps folder: ' + e.message }
+  }
+
+  let id = safe
+  for (let n = 2; fs.existsSync(path.join(mapsDir, id + EXT)); n++) id = safe + '-' + n
+
+  const meta = { ...seen.meta, id }
+  const doc = { ...seen.doc, id }
+  const name = typeof meta.name === 'string' && meta.name ? meta.name : id
+  meta.name = name
+  doc.name = name
+
+  const file = id + EXT
+  try {
+    fs.writeFileSync(path.join(mapsDir, file), JSON.stringify(meta) + '\n' + JSON.stringify(doc))
+  } catch (e) {
+    return { ok: false, reason: 'could not write into the maps folder: ' + e.message }
+  }
+
+  return { ok: true, id, name, file }
+}
+
+module.exports = { assemble, sync, importFile, inspect, pngSize, LAYERS, PREFIX, EXT }
