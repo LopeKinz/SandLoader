@@ -18,6 +18,7 @@
  *   sandkit-adapter  normalises the legacy/v1 game API before official mods
  *   webpack-bridge   a handle on the game's own module registry
  *   react-bridge     hands mods the game's own React instance from webpack
+ *   story-sdk        adds .story to each facade; needs forMod and webpack
  *   sandkit-shims    implements v1 calls this build has no equivalent for
  *   official-runtime delays official entries until that adapter is ready
  *   settingsui/permui defined before modsui.js, which opens them
@@ -61,6 +62,11 @@ const PARTS = [
   // each mod's sandkit object.
   'webpack-bridge.js',
   'react-bridge.js',
+  // After capabilities.js (it wraps SMLN.forMod to add `.story` to every mod
+  // facade) and after webpack-bridge.js, which is how it reaches the game's
+  // private objective table. Before any mod source, which the build appends
+  // after every part.
+  'story-sdk.js',
   // After sandkit-adapter.js (it fills gaps in the API that file builds) and
   // before api-support.js, so the support report counts a shimmed call as
   // available rather than warning about something that now works.
