@@ -2489,6 +2489,42 @@ check('the getApi anchor covers a registry assigned from an identifier', () => {
   return 'identifier assignment and object literal both patched, getApi callable'
 })
 
+check('the worker capture patch anchors on the simulation worker only', () => {
+  const { workerPatches } = require('../src/patch/core-patches')
+  assert(Array.isArray(workerPatches) && workerPatches.length,
+    'core-patches exports no workerPatches')
+  const patch = workerPatches.find((p) => p.id === 'smln:capture-worker-state')
+  assert(patch, 'the worker capture patch is missing')
+  assert(patch.required === false,
+    'the worker patch must not be required - a shape change may not cost the player the game')
+
+  const sim = archive.readText('dist/js/simulation-worker.js')
+  const out = engine.apply(sim, [patch])
+  assert(out.outcomes[0].status === 'applied',
+    'did not match the simulation worker: ' + (out.outcomes[0].reason || out.outcomes[0].status))
+  assert(out.outcomes[0].matches === 1, 'expected 1 match, got ' + out.outcomes[0].matches)
+  assert(/__SMLN_WORKER__/.test(out.source), 'the patch applied but published nothing')
+  new vm.Script(out.source, { filename: 'simulation-worker.js' })
+
+  // The other two build no full Sandkit. Asserting no match here is what makes
+  // a future build that starts constructing one visible instead of silently
+  // half-supported.
+  for (const other of ['dist/js/utility-worker.js', 'dist/js/manager-worker.js']) {
+    const res = engine.apply(archive.readText(other), [patch])
+    assert(res.outcomes[0].matches === 0,
+      other + ' unexpectedly matched the capture anchor - re-check the design')
+  }
+  return 'one match in the simulation worker, none in the other two, still parses'
+})
+
+check('the worker capture patch is routed to the worker, not the bundle', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'entry.js'), 'utf8')
+  assert(/addPatches\(SIM_WORKER,\s*workerPatches\)/.test(src),
+    'workerPatches are not routed to the simulation worker')
+  assert(/workerPatches/.test(src), 'entry.js does not import workerPatches')
+  return 'routed to SIM_WORKER'
+})
+
 check('the generated stub hands the bootstrap its own directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
   assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),
@@ -5154,8 +5190,16 @@ check('captured recipes reach the game with their element names resolved', () =>
   vm.createContext(sandbox)
   new vm.Script(src, { filename: 'flux-register.js' }).runInContext(sandbox)
 
-  return new Promise((resolve, reject) => setTimeout(() => {
-    try {
+  // Wait for the outcome rather than for a fixed delay: the registration runs
+  // behind the element promises, and a heavy check elsewhere in this suite can
+  // starve a fixed timer long enough to make this look like a failure.
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 4000
+    const tick = () => {
+      if (calls.recipes.length < 2 && calls.logs.length < 2 && Date.now() < deadline) {
+        return setTimeout(tick, 20)
+      }
+      try {
       // The contact never reaches the game: this build has no machine id for
       // one, so it is reported instead of attempted.
       assert(calls.recipes.length === 2,
@@ -5179,8 +5223,10 @@ check('captured recipes reach the game with their element names resolved', () =>
       assert(calls.logs.some((l) => /Ghost|Nonexistent/.test(l)),
         'the unresolvable recipe was not reported: ' + JSON.stringify(calls.logs))
       resolve('press and live-only shaker registered; contact and unresolvable name reported')
-    } catch (e) { reject(e) }
-  }, 120))
+      } catch (e) { reject(e) }
+    }
+    tick()
+  })
 })
 
 check('captured content is exposed to the renderer over IPC', () => {

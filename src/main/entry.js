@@ -53,7 +53,7 @@ const netcap = require('../mods/netcap')
 const sandbox = require('../mods/sandbox')
 const watcher = require('../mods/watcher')
 const interceptor = require('./interceptor')
-const { corePatches } = require('../patch/core-patches')
+const { corePatches, workerPatches } = require('../patch/core-patches')
 const autoheal = require('../patch/autoheal')
 const prelude = require('../renderer/prelude')
 const enums = require('../game/enums')
@@ -1247,6 +1247,8 @@ function assemble() {
 
   // ---- core patches last, so a mod cannot displace them
   addPatches(BUNDLE, corePatches)
+  // The worker builds its own Sandkit; this is what lets a mod reach it.
+  addPatches(SIM_WORKER, workerPatches)
 
   // ---- re-resolve the hooks if the game changed under us
   verifyAnchors()

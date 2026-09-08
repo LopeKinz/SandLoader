@@ -271,4 +271,41 @@ const corePatches = [
   },
 ]
 
-module.exports = { corePatches, GLOBAL, captureCall }
+/**
+ * Patches for the simulation worker.
+ *
+ * Kept separate from corePatches because those are all routed to the renderer
+ * bundle by src/main/entry.js; these go to js/simulation-worker.js.
+ */
+const workerPatches = [
+  {
+    id: 'smln:capture-worker-state',
+    owner: 'smln',
+    description: "Publish the simulation worker's state so worker mods can reach its Sandkit",
+    anchorLiteral: 'workerEventTriggerCounts:{}',
+    /*
+     * The worker builds a complete Sandkit of its own - getApi, the event and
+     * interceptor tables, workerLocal - but the state holding it is
+     * module-local, so an injected script cannot see it. That is the whole of
+     * `ReferenceError: sandkit is not defined`: the API was always there, the
+     * handle was not.
+     *
+     * Anchored on the tail of the Sandkit literal plus the statement that
+     * follows it, because that statement names the state. In the shipped build
+     * it is `ue`; the name is read out of the match, since minified names are
+     * regenerated every release and shapes are not.
+     */
+    find: /(sandkit:\{getApi:\(\)=>[\w$.]+,[^]{0,400}?workerEventTriggerCounts:\{\}\}\}),(\w+)\.session\.mainSensorCache/g,
+    replace: (...args) => {
+      const [, literal, state] = args
+      return `${literal},(globalThis.__SMLN_WORKER__=globalThis.__SMLN_WORKER__||{}).state=${state},` +
+        `${state}.session.mainSensorCache`
+    },
+    expect: 1,
+    // Worker mods losing their API is a bad day; a worker that will not parse
+    // is a game that will not run. This one always yields.
+    required: false,
+  },
+]
+
+module.exports = { corePatches, workerPatches, GLOBAL, captureCall }
