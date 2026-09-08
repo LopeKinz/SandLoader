@@ -308,6 +308,76 @@
     if (!readyPolling) setTimeout(function () { pollReady(Date.now() + READY_TIMEOUT_MS) }, 0)
   }
 
+  /** Every handler this runtime put into the game's tables, so it can take them back. */
+  var workerRegistrations = []
+
+  /*
+   * The game dispatches with `var n = list[i]; try { n.fn(state, payload) }
+   * catch (e) {}` - entries are objects carrying `.fn`. It already swallows
+   * throws, but silently: a mod would break the simulation with no trace of
+   * which one. Wrapping the handler here is what attaches a name to the
+   * failure, and what lets hot reload take the handler back afterwards.
+   */
+  function addWorkerHandler(table, modID, name, fn, kind) {
+    var sk = currentSandkit()
+    if (!sk) {
+      log('warn', 'mod "' + modID + '" asked for a worker ' + kind + ' before the state existed; ' +
+        'wrap the call in whenWorkerReady()')
+      return false
+    }
+    if (typeof fn !== 'function') return false
+    var bucket = sk[table] || (sk[table] = {})
+    var list = bucket[name] || (bucket[name] = [])
+    var entry = {
+      fn: function (state, payload) {
+        try {
+          return fn(state, payload)
+        } catch (e) {
+          log('error', 'worker ' + kind + ' "' + name + '" from mod "' + modID + '" threw: ' +
+            (e && e.message))
+        }
+      },
+    }
+    list.push(entry)
+    workerRegistrations.push({ modID: modID, name: name, kind: kind, table: table, entry: entry })
+    return true
+  }
+
+  function releaseMod(modID) {
+    var kept = []
+    for (var i = 0; i < workerRegistrations.length; i++) {
+      var r = workerRegistrations[i]
+      if (r.modID !== modID) { kept.push(r); continue }
+      var sk = currentSandkit()
+      var list = sk && sk[r.table] ? sk[r.table][r.name] : null
+      if (!list) continue
+      var at = list.indexOf(r.entry)
+      if (at !== -1) list.splice(at, 1)
+    }
+    workerRegistrations = kept
+  }
+
+  var workerApi = {
+    onEvent: function (modID, name, fn) {
+      return addWorkerHandler('workerEvents', modID, name, fn, 'event')
+    },
+    onInterceptor: function (modID, name, fn) {
+      return addWorkerHandler('workerInterceptors', modID, name, fn, 'interceptor')
+    },
+    registrations: function () {
+      var out = []
+      for (var i = 0; i < workerRegistrations.length; i++) {
+        out.push({
+          modID: workerRegistrations[i].modID,
+          name: workerRegistrations[i].name,
+          kind: workerRegistrations[i].kind,
+        })
+      }
+      return out
+    },
+    releaseMod: releaseMod,
+  }
+
   self.__SMLN_WORKER__ = {
     version: VERSION,
     environment: 'worker',
@@ -315,6 +385,7 @@
     sandkit: currentSandkit,
     game: currentApi,
     whenWorkerReady: whenWorkerReady,
+    worker: workerApi,
     onGameMessage: onGameMessage,
     offGameMessage: offGameMessage,
     sendGameMessage: sendGameMessage,

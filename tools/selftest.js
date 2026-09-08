@@ -2567,6 +2567,49 @@ check('the worker runtime hands mods the captured Sandkit', () => {
   })
 })
 
+check('worker event handlers are attributed, isolated and reclaimable', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'worker-runtime.js'), 'utf8')
+  const logs = []
+  const record = (m) => logs.push(String(m))
+  const sandbox = {
+    self: null, setTimeout, clearTimeout, Date,
+    console: { log: record, info: record, warn: record, error: record },
+    addEventListener() {}, removeEventListener() {}, postMessage() {},
+  }
+  sandbox.self = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(src, { filename: 'worker-runtime.js' }).runInContext(sandbox)
+  const SMLN = sandbox.__SMLN_WORKER__
+
+  const sandkit = { getApi: () => ({}), workerEvents: {}, workerInterceptors: {} }
+  SMLN.state = { sandkit }
+
+  const seen = []
+  assert(SMLN.worker.onEvent('good', 'tick', (st, p) => seen.push(p)) === true,
+    'onEvent refused a registration after the capture')
+  assert(SMLN.worker.onEvent('bad', 'tick', () => { throw new Error('boom') }) === true,
+    'onEvent refused the second registration')
+
+  // The game dispatches exactly this way: entries carry .fn, called (state, payload).
+  const list = sandkit.workerEvents.tick
+  assert(Array.isArray(list) && list.length === 2, 'handlers did not reach workerEvents')
+  for (const entry of list) entry.fn(SMLN.state, 'payload')
+  assert(seen.length === 1 && seen[0] === 'payload', 'the good handler did not run')
+  assert(logs.some((l) => /bad/.test(l) && /boom/.test(l)),
+    'the throwing handler was not reported against its mod: ' + JSON.stringify(logs))
+
+  assert(SMLN.worker.registrations().length === 2, 'registrations() does not list both')
+  SMLN.worker.releaseMod('bad')
+  assert(sandkit.workerEvents.tick.length === 1, 'releaseMod did not remove the handler')
+  assert(SMLN.worker.registrations().length === 1, 'registrations() still lists the released mod')
+
+  SMLN.worker.onInterceptor('good', 'place', () => {})
+  assert(Array.isArray(sandkit.workerInterceptors.place) &&
+    sandkit.workerInterceptors.place.length === 1, 'the interceptor did not register')
+  return 'two handlers registered, a throw isolated and attributed, one reclaimed'
+})
+
 check('the generated stub hands the bootstrap its own directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
   assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),
