@@ -6193,6 +6193,586 @@ check('the editor is reachable from the maps browser and knows no colours', () =
   return 'registered, reachable, nearest-neighbour, and one unnamed placeholder colour'
 })
 
+// ----------------------------------------------------- map editor transforms
+// Pure, DOM-free canvas transforms (src/renderer/mapeditor-transform.js) that
+// the map editor uses to resize, crop, mirror and shift a document's six
+// layers together. Required inline, right where it is used, rather than
+// added to the require block above: several other checks are landing in this
+// file at the same time, and this keeps the whole contribution to one edit at
+// the end of the file instead of two edits in two places.
+const mapTransform = require('../src/renderer/mapeditor-transform')
+
+/** An 8x8 buffer whose pixel (x, y) is [x*10, y*10, 1, 255] - distinguishable
+ * enough that a transform's exact output pixel proves which source pixel
+ * (or which fill) ended up where. */
+function makeTransformFixture() {
+  const w = 8, h = 8
+  const data = new Uint8ClampedArray(w * h * 4)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4
+      data[o] = x * 10; data[o + 1] = y * 10; data[o + 2] = 1; data[o + 3] = 255
+    }
+  }
+  return { data, width: w, height: h }
+}
+function transformPixel(buf, x, y) {
+  const o = (y * buf.width + x) * 4
+  return [buf.data[o], buf.data[o + 1], buf.data[o + 2], buf.data[o + 3]]
+}
+function samePixel(a, b) { return a.length === 4 && b.length === 4 && a.every((v, i) => v === b[i]) }
+function pixelStr(p) { return '[' + p.join(',') + ']' }
+function throwsError(fn) {
+  try { fn(); return null } catch (e) { return e.message }
+}
+
+const FILL = [9, 8, 7, 6]
+
+check('resize grows and shrinks anchored to top-left', () => {
+  const buf = makeTransformFixture()
+  const before = Array.from(buf.data)
+
+  const grown = mapTransform.resize(buf, 12, 10, 'top-left', FILL)
+  assert(grown.width === 12 && grown.height === 10, `grown to ${grown.width}x${grown.height}`)
+  assert(samePixel(transformPixel(grown, 0, 0), transformPixel(buf, 0, 0)),
+    'top-left origin should stay put on growth: ' + pixelStr(transformPixel(grown, 0, 0)))
+  assert(samePixel(transformPixel(grown, 7, 7), transformPixel(buf, 7, 7)),
+    'existing content should be untouched: ' + pixelStr(transformPixel(grown, 7, 7)))
+  assert(samePixel(transformPixel(grown, 11, 9), FILL),
+    'new area should be filled: ' + pixelStr(transformPixel(grown, 11, 9)))
+  assert(JSON.stringify(Array.from(buf.data)) === JSON.stringify(before), 'input mutated by resize (grow)')
+
+  const shrunk = mapTransform.resize(buf, 4, 5, 'top-left', FILL)
+  assert(shrunk.width === 4 && shrunk.height === 5, `shrunk to ${shrunk.width}x${shrunk.height}`)
+  assert(samePixel(transformPixel(shrunk, 0, 0), transformPixel(buf, 0, 0)),
+    'top-left origin should stay anchored on shrink')
+  assert(samePixel(transformPixel(shrunk, 3, 4), transformPixel(buf, 3, 4)),
+    'shrink should keep the top-left rect, not some other rect')
+  assert(JSON.stringify(Array.from(buf.data)) === JSON.stringify(before), 'input mutated by resize (shrink)')
+  return 'top-left anchor pins content on both growth and shrink'
+})
+
+check('resize grows and shrinks anchored to center', () => {
+  const buf = makeTransformFixture()
+
+  const grown = mapTransform.resize(buf, 12, 12, 'center', FILL)
+  assert(samePixel(transformPixel(grown, 0, 0), FILL), 'corner should be fill after centered growth')
+  assert(samePixel(transformPixel(grown, 2, 2), transformPixel(buf, 0, 0)),
+    'origin should land 2 cells in after a 4-cell centered grow')
+  assert(samePixel(transformPixel(grown, 9, 9), transformPixel(buf, 7, 7)),
+    'far corner should land at the mirrored offset')
+
+  const shrunk = mapTransform.resize(buf, 4, 4, 'center', FILL)
+  assert(samePixel(transformPixel(shrunk, 0, 0), transformPixel(buf, 2, 2)),
+    'centered shrink should keep the middle rect: ' + pixelStr(transformPixel(shrunk, 0, 0)))
+  assert(samePixel(transformPixel(shrunk, 3, 3), transformPixel(buf, 5, 5)),
+    'centered shrink far corner: ' + pixelStr(transformPixel(shrunk, 3, 3)))
+  return 'center anchor keeps content centred through growth and shrink'
+})
+
+check('resize grows and shrinks anchored to bottom-right', () => {
+  const buf = makeTransformFixture()
+
+  const grown = mapTransform.resize(buf, 12, 10, 'bottom-right', FILL)
+  assert(samePixel(transformPixel(grown, 11, 9), transformPixel(buf, 7, 7)),
+    'bottom-right corner should stay pinned on growth')
+  assert(samePixel(transformPixel(grown, 0, 0), FILL), 'new area should be at the top-left, filled')
+
+  const shrunk = mapTransform.resize(buf, 4, 5, 'bottom-right', FILL)
+  assert(samePixel(transformPixel(shrunk, 3, 4), transformPixel(buf, 7, 7)),
+    'bottom-right corner should stay pinned on shrink')
+  assert(samePixel(transformPixel(shrunk, 0, 0), transformPixel(buf, 4, 3)),
+    'shrink should crop from the top-left, keeping the bottom-right rect')
+  return 'bottom-right anchor pins the far corner through growth and shrink'
+})
+
+check('resize can grow one axis while shrinking the other', () => {
+  const buf = makeTransformFixture()
+  const out = mapTransform.resize(buf, 12, 4, 'top-right', FILL)
+  assert(out.width === 12 && out.height === 4, `expected 12x4, got ${out.width}x${out.height}`)
+  assert(samePixel(transformPixel(out, 4, 0), transformPixel(buf, 0, 0)),
+    'width grew, so top-right keeps the source right-aligned: ' + pixelStr(transformPixel(out, 4, 0)))
+  assert(samePixel(transformPixel(out, 11, 3), transformPixel(buf, 7, 3)),
+    'far edge of the widened, shortened result')
+  assert(samePixel(transformPixel(out, 0, 0), FILL), 'the widened side should be filled')
+  return 'width grew and height shrank in the same call, independently'
+})
+
+check('resize requires fillRgba and rejects zero or negative dimensions', () => {
+  const buf = makeTransformFixture()
+  assert(throwsError(() => mapTransform.resize(buf, 10, 10, 'center')) !== null,
+    'resize without fillRgba should throw')
+  assert(throwsError(() => mapTransform.resize(buf, 10, 10, 'center', [1, 1, 1, 1])) === null,
+    'resize with a valid fillRgba should not throw')
+  const zeroMsg = throwsError(() => mapTransform.resize(buf, 0, 8, 'center', [1, 1, 1, 1]))
+  assert(zeroMsg && zeroMsg.indexOf('0') !== -1, 'zero width should throw naming 0: ' + zeroMsg)
+  const negMsg = throwsError(() => mapTransform.resize(buf, 8, -3, 'center', [1, 1, 1, 1]))
+  assert(negMsg && negMsg.indexOf('-3') !== -1, 'negative height should throw naming -3: ' + negMsg)
+  return 'missing fill, zero size and negative size are all rejected with a value-naming message'
+})
+
+check('crop reads inside, partly outside, and wholly outside the source', () => {
+  const buf = makeTransformFixture()
+  const before = Array.from(buf.data)
+
+  const inside = mapTransform.crop(buf, 2, 2, 3, 3)
+  assert(inside.width === 3 && inside.height === 3, `inside crop is ${inside.width}x${inside.height}`)
+  assert(samePixel(transformPixel(inside, 0, 0), transformPixel(buf, 2, 2)), 'inside crop origin')
+  assert(samePixel(transformPixel(inside, 2, 2), transformPixel(buf, 4, 4)), 'inside crop far corner')
+
+  const partly = mapTransform.crop(buf, -2, -2, 5, 5)
+  assert(samePixel(transformPixel(partly, 0, 0), [0, 0, 0, 0]),
+    'the part outside the source should be transparent black: ' + pixelStr(transformPixel(partly, 0, 0)))
+  assert(samePixel(transformPixel(partly, 2, 2), transformPixel(buf, 0, 0)),
+    'the part inside the source should line up with it')
+  assert(samePixel(transformPixel(partly, 4, 4), transformPixel(buf, 2, 2)), 'partly-outside far corner')
+
+  const outside = mapTransform.crop(buf, 100, 100, 4, 4)
+  for (let y = 0; y < outside.height; y++) {
+    for (let x = 0; x < outside.width; x++) {
+      assert(samePixel(transformPixel(outside, x, y), [0, 0, 0, 0]),
+        `wholly-outside crop should be all transparent black, got ${pixelStr(transformPixel(outside, x, y))} at ${x},${y}`)
+    }
+  }
+
+  assert(JSON.stringify(Array.from(buf.data)) === JSON.stringify(before), 'input mutated by crop')
+  assert(throwsError(() => mapTransform.crop(buf, 0, 0, 0, 5)) !== null, 'crop with zero width should throw')
+  assert(throwsError(() => mapTransform.crop(buf, 0, 0, 5, -1)) !== null, 'crop with negative height should throw')
+  return 'inside, partly-outside and wholly-outside crops all landed correctly, no mutation'
+})
+
+check('mirrorX and mirrorY are each their own inverse', () => {
+  const buf = makeTransformFixture()
+  const before = Array.from(buf.data)
+
+  const flippedX = mapTransform.mirrorX(buf)
+  assert(!samePixel(transformPixel(flippedX, 0, 0), transformPixel(buf, 0, 0)) ||
+    transformPixel(buf, 0, 0)[0] === transformPixel(buf, 7, 0)[0],
+    'a single mirrorX should actually change something on a non-symmetric fixture')
+  assert(samePixel(transformPixel(flippedX, 0, 0), transformPixel(buf, 7, 0)), 'mirrorX should flip columns')
+  const backX = mapTransform.mirrorX(flippedX)
+  assert(JSON.stringify(Array.from(backX.data)) === JSON.stringify(Array.from(buf.data)),
+    'mirrorX twice should be the identity')
+
+  const flippedY = mapTransform.mirrorY(buf)
+  assert(samePixel(transformPixel(flippedY, 0, 0), transformPixel(buf, 0, 7)), 'mirrorY should flip rows')
+  const backY = mapTransform.mirrorY(flippedY)
+  assert(JSON.stringify(Array.from(backY.data)) === JSON.stringify(Array.from(buf.data)),
+    'mirrorY twice should be the identity')
+
+  assert(JSON.stringify(Array.from(buf.data)) === JSON.stringify(before), 'input mutated by mirrorX/mirrorY')
+  return 'mirroring twice on either axis restores the original exactly'
+})
+
+check('shift moves content in both directions and discards what falls off the edge', () => {
+  const buf = makeTransformFixture()
+  const before = Array.from(buf.data)
+
+  const right = mapTransform.shift(buf, 2, 3, FILL)
+  assert(samePixel(transformPixel(right, 2, 3), transformPixel(buf, 0, 0)), 'shift should move the origin')
+  assert(samePixel(transformPixel(right, 7, 7), transformPixel(buf, 5, 4)), 'shift should move the far corner')
+  assert(samePixel(transformPixel(right, 0, 0), FILL), 'vacated space should be filled')
+  assert(JSON.stringify(Array.from(buf.data)) === JSON.stringify(before), 'input mutated by shift')
+
+  const left = mapTransform.shift(buf, -3, -2, FILL)
+  assert(samePixel(transformPixel(left, 0, 0), transformPixel(buf, 3, 2)), 'negative shift should move content back')
+  assert(samePixel(transformPixel(left, 7, 7), FILL), 'space vacated by a negative shift should be filled')
+
+  const overshoot = mapTransform.shift(buf, 100, 100, FILL)
+  let allFill = true
+  for (let y = 0; y < overshoot.height && allFill; y++) {
+    for (let x = 0; x < overshoot.width && allFill; x++) {
+      if (!samePixel(transformPixel(overshoot, x, y), FILL)) allFill = false
+    }
+  }
+  assert(allFill, 'a shift larger than the buffer should leave nothing but fill')
+
+  assert(throwsError(() => mapTransform.shift(buf, 1, 1)) !== null, 'shift without fillRgba should throw')
+  return 'shift moves content both ways, discards overflow, and a large-enough shift is all fill'
+})
+
+// -------------------------------------------------------- mission/story SDK
+/**
+ * The mission SDK in a VM, against fakes of the two tables the real game
+ * carries - never against the live game, which only the controller can start.
+ *
+ * Both fakes are shaped from the measurements in
+ * .superpowers/sdd/missions-investigation.md: the objectives definition table
+ * (`qs`, reached through webpack module 92659, not frozen, extensible) with
+ * the game's own completer transcribed from the bundle, and the story-step
+ * list, which hands back the same array reference on every call. The SDK
+ * reaches both exactly as it does in the game - through SMLN.webpack - so the
+ * bridge is under test too, not stubbed out.
+ */
+function bootStory(opts = {}) {
+  const env = { state: null, logs: [], completions: [] }
+
+  const qs = Object.assign({
+    research_hover: {
+      titleKey: 'objectives|researchHover|title',
+      descriptionKey: 'objectives|researchHover|description',
+      nextObjectives: ['research_flamethrower'],
+      check: (s) => !!s,
+    },
+    find_fluxite: {
+      titleKey: 'objectives|findFluxite|title',
+      descriptionKey: 'objectives|findFluxite|description',
+    },
+  }, opts.extraObjectives || {})
+
+  /** The live active list, wherever the current state keeps it. */
+  function active() {
+    const o = env.state && env.state.store && env.state.store.objectives
+    return (o && o.active) || []
+  }
+
+  // The game's own completer, transcribed from the bundle: it refuses an id
+  // that is not a key of the table, and an id that is not in the active list.
+  function EM(state, id) {
+    const n = active().find((e) => e.id === id)
+    if (!n || n.completed) return false
+    const a = qs[id]
+    if (!a) return false
+    n.completed = true
+    n.completedAt = Date.now()
+    for (const next of a.nextObjectives || []) {
+      if (!active().some((e) => e.id === next)) active().push({ id: next, completed: false })
+    }
+    return true
+  }
+
+  const objectivesModule = {
+    qs,
+    EM,
+    Ku: 5000,
+    bS: (state) => {
+      for (const r of active().slice()) {
+        const o = qs[r.id]
+        if (!r.completed && o && o.check && o.check(state)) EM(state, r.id)
+      }
+    },
+    Rp: (state, id) => {
+      if (qs[id] && !active().some((e) => e.id === id)) active().push({ id, completed: false })
+    },
+    J_: (state, id) => {
+      const i = active().findIndex((e) => e.id === id)
+      if (i >= 0) active().splice(i, 1)
+    },
+  }
+
+  // getSteps() returns the same array reference every call, as measured.
+  const steps = [{ id: 'reach_factory_tier_2', messages: [], objective: { type: 'factoryLevel' } }]
+  const i18n = {}
+  const sandkitApi = {
+    i18n: {
+      register: (locale, table) => { i18n[locale] = Object.assign(i18n[locale] || {}, table) },
+      getLocale: () => 'en',
+    },
+    progression: { getSteps: () => steps },
+  }
+  const FH = {
+    ui: { update: () => {} },
+    progression: {
+      // The public gate, verbatim: the domain, the id, and membership of the
+      // private table - which is the whole reason the SDK writes into it.
+      complete: (state, sel) => {
+        if (!sel || sel.domain !== 'objective' || typeof sel.id !== 'string') return false
+        env.completions.push(sel.id)
+        return Object.prototype.hasOwnProperty.call(qs, sel.id) && EM(state, sel.id)
+      },
+    },
+  }
+
+  const modules = { 92659: objectivesModule }
+  const req = (id) => {
+    const m = modules[String(id)]
+    if (!m) throw new Error('no module ' + id)
+    return m
+  }
+  req.m = modules
+
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    // The game's chunk array: pushing a chunk hands the callback the real
+    // __webpack_require__, which is how src/renderer/webpack-bridge.js gets in.
+    webpackChunksand_v1: { push(chunk) { if (chunk && typeof chunk[2] === 'function') chunk[2](req) } },
+    __SMLN_MODS__: opts.mods || [],
+    electron: { log: (level, scope, message) => env.logs.push(level + ': ' + message) },
+  }
+  sandbox.globalThis = sandbox
+  sandbox.self = sandbox
+  vm.createContext(sandbox)
+  for (const part of ['runtime.js', 'capabilities.js', 'webpack-bridge.js', 'story-sdk.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', part), 'utf8')
+    new vm.Script(src, { filename: part }).runInContext(sandbox)
+  }
+
+  const S = sandbox.__SMLN__
+  env.S = S
+  env.qs = qs
+  env.steps = steps
+  env.i18n = i18n
+  env.active = active
+  /** A world load: a fresh store, and the capture the game's patch performs. */
+  env.load = (store, phase) => {
+    env.state = { store, sandkit: { getApi: () => sandkitApi } }
+    S.__capture(FH, env.state, phase || 'game:started')
+    return env.state
+  }
+  env.load(opts.store || { objectives: { active: [] } }, 'game:ready')
+  return env
+}
+
+check('mission ids are namespaced per mod, and vanilla ids stay bare', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  assert(story, 'SMLN.forMod(id).story is missing')
+  const vanilla = env.qs.find_fluxite
+
+  const ok = story.objective({
+    id: 'find_fluxite',
+    title: 'Find fluxite',
+    description: 'Locate a vein in the deep layer',
+    next: ['find_fluxite', 'refine'],
+  })
+  assert(ok === true, 'the objective was refused')
+
+  const def = env.qs['my.mod:find_fluxite']
+  assert(def, 'nothing landed in the table under the namespaced id')
+  assert(env.qs.find_fluxite === vanilla, "the game's own entry was overwritten")
+
+  // A bare vanilla id still means the game's; a bare unknown id means the
+  // registering mod's. That split is what makes cross-mod references honest.
+  assert(def.nextObjectives[0] === 'find_fluxite',
+    'a bare vanilla id was namespaced: ' + def.nextObjectives[0])
+  assert(def.nextObjectives[1] === 'my.mod:refine',
+    'a bare mod id was not namespaced: ' + def.nextObjectives[1])
+
+  // The predicate deliberately stays out of the game's table: the shipped
+  // evaluator does not catch, so a throw there would land in game code.
+  assert(!def.check, "the mod's predicate was written into the game's own table")
+  assert(env.i18n.en[def.titleKey] === 'Find fluxite', 'the title never reached i18n')
+
+  // The story half is another task. It must refuse, not pretend.
+  assert(story.speaker('kira', { name: 'KIRA' }) === false, 'story.speaker() claims to work')
+  assert(story.step({ id: 'intro' }) === false, 'story.step() claims to work')
+  assert(env.steps.length === 1, 'the mission half touched the story-step table')
+
+  // A chain naming something nobody registered would sit in the active list as
+  // a raw id forever, uncompletable, so it is reported rather than left to be
+  // discovered in-game.
+  env.S.__story.tick()
+  const dangling = env.logs.find((l) => /chains to "my\.mod:refine"/.test(l))
+  assert(dangling && /my\.mod/.test(dangling),
+    'a chain to an id nothing registered was not reported: ' + env.logs.join(' | '))
+
+  env.S.__story.stop()
+  return 'registered as my.mod:find_fluxite; vanilla entry and step list untouched; dangling chain reported'
+})
+
+check('an objective that would collide with a key SandLoader did not create is refused', () => {
+  const env = bootStory({
+    mods: [{ id: 'my.mod', enabled: true }],
+    // A key that was already in the table when the SDK first read it. In the
+    // shipped build every such key is the game's; the rule is the same either
+    // way - a key we did not create is not ours to overwrite.
+    extraObjectives: { 'my.mod:taken': { titleKey: 'someone else|title' } },
+  })
+  const story = env.S.forMod('my.mod').story
+  const before = env.qs['my.mod:taken']
+
+  assert(story.objective({ id: 'taken', title: 'Mine now' }) === false,
+    'the SDK overwrote a key it did not create')
+  assert(env.qs['my.mod:taken'] === before, 'the existing entry was replaced anyway')
+  assert(env.logs.some((l) => /E_STORY_VANILLA_ID/.test(l)),
+    'the refusal was not named: ' + env.logs.join(' | '))
+
+  // A mod may not write its own namespace separator either - that is the one
+  // way it could aim at another mod's ids, or at a vanilla one.
+  assert(story.objective({ id: 'other.mod:goal', title: 'Theirs' }) === false,
+    'a mod was allowed to register into another namespace')
+  assert(env.logs.some((l) => /E_STORY_BAD_ID/.test(l)), 'the bad id was not named')
+  assert(!env.qs['other.mod:goal'], 'the foreign id landed in the table')
+
+  env.S.__story.stop()
+  return 'a pre-existing key and a hand-written namespace are both refused by name'
+})
+
+check('an objective whose required mod is absent or disabled is not registered', () => {
+  const env = bootStory({
+    mods: [
+      { id: 'my.mod', enabled: true },
+      { id: 'gas-pipes', enabled: false },
+      { id: 'ready-mod', enabled: true },
+    ],
+  })
+  const story = env.S.forMod('my.mod').story
+
+  assert(story.objective({ id: 'a', title: 'A', requires: ['ghost-mod'] }) === false,
+    'an objective requiring a mod that is not installed was registered')
+  assert(story.objective({ id: 'b', title: 'B', requires: ['gas-pipes'] }) === false,
+    'an objective requiring a disabled mod was registered')
+  assert(story.objective({ id: 'c', title: 'C', requires: ['ready-mod'] }) === true,
+    'a satisfied dependency was refused')
+
+  assert(!env.qs['my.mod:a'] && !env.qs['my.mod:b'], 'a refused objective reached the table')
+  assert(env.qs['my.mod:c'], 'the satisfied one is missing')
+
+  // Both mods have to be named, or the player is told a mission is broken
+  // without being told what to install.
+  const absent = env.logs.find((l) => /ghost-mod/.test(l))
+  const disabled = env.logs.find((l) => /gas-pipes/.test(l))
+  assert(absent && /my\.mod/.test(absent) && /not installed/.test(absent),
+    'the missing dependency was not reported with both mods: ' + absent)
+  assert(disabled && /my\.mod/.test(disabled) && /disabled/.test(disabled),
+    'the disabled dependency was not reported with both mods: ' + disabled)
+
+  env.S.__story.stop()
+  return 'absent and disabled both refused, naming the mod and the requirement'
+})
+
+check('the SDK ticks its own predicates and completes through the game\'s own gate', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  let fluxite = 0
+  story.objective({ id: 'find-fluxite', title: 'Find fluxite', check: () => fluxite > 0 })
+
+  env.S.__story.tick()
+  const row = env.active().find((e) => e.id === 'my.mod:find-fluxite')
+  assert(row, 'the objective was never added to the active list, so nothing can show or complete it')
+  assert(story.isComplete('find-fluxite') === false, 'complete before the predicate was true')
+
+  fluxite = 1
+  env.S.__story.tick()
+  assert(story.isComplete('find-fluxite') === true, 'the tick did not complete the objective')
+  assert(row.completed === true, "the game's own completion was not driven")
+  assert(env.completions.indexOf('my.mod:find-fluxite') >= 0,
+    'the public progression.complete gate was bypassed')
+  const saved = env.state.store[env.S.__story.storeKey]
+  assert(saved && saved.completed['my.mod:find-fluxite'],
+    'nothing was written to the saved half of the state')
+
+  // Bounded cadence, not per frame.
+  assert(env.S.__story.tickMs >= 250, 'the tick interval is ' + env.S.__story.tickMs + 'ms')
+
+  env.S.__story.stop()
+  return 'predicate ticked, completed through progression.complete, recorded in the save'
+})
+
+check('a predicate that throws is switched off by name, and never takes another mod down', () => {
+  const env = bootStory({
+    mods: [{ id: 'bad.mod', enabled: true }, { id: 'good.mod', enabled: true }],
+  })
+  const bad = env.S.forMod('bad.mod').story
+  const good = env.S.forMod('good.mod').story
+  bad.objective({ id: 'boom', title: 'Boom', check: () => { throw new Error('predicate exploded') } })
+  good.objective({ id: 'fine', title: 'Fine', check: () => true })
+
+  // The tick itself must not throw, however many times the bad one does.
+  for (let i = 0; i < 5; i++) env.S.__story.tick()
+
+  assert(good.isComplete('fine') === true, "one mod's broken predicate stopped another mod's")
+  const entry = env.S.__story.entries().find((e) => e.fullId === 'bad.mod:boom')
+  assert(entry && entry.disabled, 'the throwing predicate was never switched off')
+  assert(entry.throws === env.S.__story.maxThrows,
+    'expected ' + env.S.__story.maxThrows + ' attempts, got ' + entry.throws)
+  assert(bad.isComplete('boom') === false, 'a throwing predicate completed something')
+
+  const named = env.logs.find((l) => /switched off/.test(l))
+  assert(named && /bad\.mod/.test(named) && /predicate exploded/.test(named),
+    'the failure was not reported with its mod id and its reason: ' + named)
+
+  env.S.__story.stop()
+  return 'disabled after ' + entry.throws + ' throws, reported with its mod id, neighbours unaffected'
+})
+
+check('a completed objective survives a world reload, and does not leak into another save', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  let done = true
+  story.objective({ id: 'find-fluxite', title: 'Find fluxite', check: () => done })
+  env.S.__story.tick()
+  assert(story.isComplete('find-fluxite') === true, 'it never completed in the first place')
+
+  // The save is `state.store`, written wholesale - so a JSON round trip is
+  // exactly what the completion has to survive.
+  const save = JSON.parse(JSON.stringify(env.state.store))
+  // World load, as the game does it: every completed entry is filtered out of
+  // the active list and nothing anywhere remembers it was ever finished.
+  save.objectives.active = save.objectives.active.filter((e) => !e.completed)
+  done = false
+  env.load(save)
+  env.S.__story.tick()
+
+  assert(story.isComplete('find-fluxite') === true,
+    'the completion did not survive the reload')
+  assert(!env.active().some((e) => e.id === 'my.mod:find-fluxite'),
+    'a finished objective was pushed back into the active list as unfinished')
+
+  // A different world is a different set. Carrying one save's completions into
+  // another would hand the player missions they never did.
+  env.load({ objectives: { active: [] } })
+  env.S.__story.tick()
+  assert(story.isComplete('find-fluxite') === false,
+    "one save's completions leaked into another")
+
+  env.S.__story.stop()
+  return 'restored from the save before the first evaluation, and scoped to that save'
+})
+
+check('a mission event is namespaced by its emitter and any mod can hear it', () => {
+  const env = bootStory({
+    mods: [{ id: 'reactor.mod', enabled: true }, { id: 'mission.pack', enabled: true }],
+  })
+  const reactor = env.S.forMod('reactor.mod').story
+  const pack = env.S.forMod('mission.pack').story
+  const heard = []
+  pack.on('reactor.mod:reactor-online', (p) => heard.push(p))
+
+  reactor.emit('reactor-online', { power: 42 })
+  assert(heard.length === 1 && heard[0].power === 42,
+    'the listener never heard the namespaced event: ' + JSON.stringify(heard))
+
+  // Nothing is listening for the unqualified name, which is the point: the
+  // emitter cannot collide with another mod's event of the same name.
+  const bare = []
+  env.S.on('reactor-online', (p) => bare.push(p))
+  reactor.emit('reactor-online', {})
+  assert(bare.length === 0, 'the event was published without its namespace')
+  assert(heard.length === 2, 'the second emit was lost')
+
+  // The subscription goes through the facade, so it is reclaimed with its mod.
+  env.S.__disposeMod('mission.pack')
+  reactor.emit('reactor-online', {})
+  assert(heard.length === 2, 'the listener outlived the mod that made it')
+
+  env.S.__story.stop()
+  return 'published as reactor.mod:reactor-online, heard cross-mod, dropped on unload'
+})
+
+check('unloading a mod takes its objectives out of the game and out of the save', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  story.objective({ id: 'find-fluxite', title: 'Find fluxite', check: () => false })
+  env.S.__story.tick()
+  assert(env.qs['my.mod:find-fluxite'], 'it never registered')
+  assert(env.active().some((e) => e.id === 'my.mod:find-fluxite'), 'it never became active')
+
+  env.S.__disposeMod('my.mod')
+
+  assert(!env.qs['my.mod:find-fluxite'], "the mod's definition stayed in the game's table")
+  // An id left in a save whose mod is gone is permanent: the game refuses to
+  // complete an id its table no longer defines, so the row can never clear.
+  assert(!env.active().some((e) => e.id === 'my.mod:find-fluxite'),
+    'an orphan id was left in the active list of the save')
+  assert(env.qs.find_fluxite && env.qs.research_hover, 'disposal took a vanilla entry with it')
+  assert(env.S.__story.entries().length === 0, 'the SDK still thinks it owns something')
+
+  env.S.__story.stop()
+  return 'definition and active row both removed, vanilla table intact'
+})
+
 if (archive) archive.close()
 
 // Wait for the async checks before reporting, or their results land after the
@@ -6205,4 +6785,318 @@ Promise.all(asyncChecks).then(() => {
     console.log('')
   }
   process.exit(failed ? 1 : 0)
+})
+
+// ------------------------------------------------- map editor: validation
+//
+// Every one of these rules exists because the failure it catches is invisible
+// until someone plays the map. A blueprint can assemble, list and preview
+// perfectly and still open onto a hollow world - that has already happened
+// here once. These checks are the difference between the editor drawing a PNG
+// and the editor knowing what the PNG means.
+
+let mapValidate = null
+check('the map validator loads against the real terrain palette', () => {
+  mapValidate = require('../src/renderer/mapeditor-validate')
+  const pal = require('../src/game/terrain-palette')
+  assert(typeof mapValidate.spawnCell === 'function', 'spawnCell is missing')
+  assert(typeof mapValidate.validate === 'function', 'validate is missing')
+  assert(Object.keys(mapValidate).length === 2,
+    'the module exports more than spawnCell and validate: ' + Object.keys(mapValidate).join(', '))
+  assert(pal.byRgb(102, 102, 102), 'the palette does not know the fog colour')
+  assert(pal.DEFAULT_SOLID && pal.DEFAULT_EMPTY, 'the palette has no default solid/empty')
+  return 'two exports, palette reachable'
+})
+
+/** An RGBA buffer shaped the way ImageData hands one over. */
+function mvBuf(w, h, rgba) {
+  const data = new Uint8ClampedArray(w * h * 4)
+  if (rgba) {
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = rgba[0]; data[i + 1] = rgba[1]; data[i + 2] = rgba[2]; data[i + 3] = rgba[3]
+    }
+  }
+  return { data, width: w, height: h }
+}
+
+function mvPut(b, x, y, rgba) {
+  const i = (y * b.width + x) * 4
+  b.data[i] = rgba[0]; b.data[i + 1] = rgba[1]; b.data[i + 2] = rgba[2]; b.data[i + 3] = rgba[3]
+}
+
+function mvRect(b, x0, y0, x1, y1, rgba) {
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) mvPut(b, x, y, rgba)
+}
+
+const MV_AIR = [153, 0, 0, 255]     // the only air colour with no side effects
+const MV_ROCK = [170, 170, 170, 255] // the most reliably resolved solid
+const MV_FOG = [102, 102, 102, 255]  // the colour that produced the hollow map
+const MV_BROKEN = [240, 220, 120, 255] // throws while loading
+
+/**
+ * A map that plays: open air down to a rock floor, the spawn cell clear, all
+ * six layers the same size, and the size it advertises matching its pixels.
+ * 480 wide so the spawn lands at column 318, and 224 tall so row 200 exists.
+ */
+function mvCleanDoc() {
+  const w = 480
+  const h = 224
+  const terrain = mvBuf(w, h, MV_AIR)
+  mvRect(terrain, 0, 208, w - 1, h - 1, MV_ROCK)
+  return {
+    params: { width: w, height: h },
+    layers: {
+      terrain,
+      lights: mvBuf(w, h, null),
+      lightsMeta: mvBuf(w, h, null),
+      sensors: mvBuf(w, h, null),
+      authorization: mvBuf(w, h, null),
+      wall: mvBuf(w, h, null),
+    },
+  }
+}
+
+/** The codes a document produces, sorted, so a check can compare a whole set. */
+function mvCodes(doc) {
+  return mapValidate.validate(doc).problems.map((p) => p.code).sort()
+}
+
+/** The single problem carrying a code, or null. */
+function mvOne(doc, code) {
+  const hits = mapValidate.validate(doc).problems.filter((p) => p.code === code)
+  assert(hits.length <= 1, 'expected at most one ' + code + ', got ' + hits.length)
+  return hits[0] || null
+}
+
+check('the spawn cell comes off the game\'s own formula, and a finished map is quiet', () => {
+  // x = (width / 2) * 4 + 315 world pixels, y = 200 * 4, at 4 world pixels per
+  // cell. For 480 that is (240 * 4 + 315) / 4 = 1275 / 4 = 318.75, floored to
+  // column 318; the row is a literal 200 whatever the map's height.
+  const at480 = mapValidate.spawnCell(480)
+  assert(at480.x === 318 && at480.y === 200,
+    'a 480-wide map spawns at ' + at480.x + ',' + at480.y + ' - expected 318,200')
+  assert(mapValidate.spawnCell(3840).x === 1998, 'the game\'s own 3840 map moved')
+  assert(mapValidate.spawnCell(64).x === 110,
+    'the offset is a fixed +78.75 cells, so a narrow map spawns outside itself')
+  assert(mapValidate.spawnCell(0).y === 200 && mapValidate.spawnCell(-5).y === 200,
+    'spawnCell threw or drifted on a nonsense width')
+
+  const clean = mvCleanDoc()
+  const problems = mapValidate.validate(clean).problems
+  assert(problems.length === 0,
+    'a playable map was flagged: ' + problems.map((p) => p.code + ' (' + p.message + ')').join('; '))
+  return '480 wide spawns at 318,200; a playable map reports nothing'
+})
+
+check('a map whose layers disagree about the world size is refused', () => {
+  const doc = mvCleanDoc()
+  doc.layers.lights = mvBuf(100, 60, null)
+  doc.layers.wall = mvBuf(480, 225, null)
+  const hits = mapValidate.validate(doc).problems.filter((p) => p.code === 'layer-size-mismatch')
+  assert(hits.length === 2, 'expected both mismatched layers, got ' + hits.length)
+  assert(hits.every((p) => p.severity === 'error'), 'a silently corrupted world is only a warning')
+  // The layer has to be named, because "a layer" is not something an author
+  // can act on - the grids are filled using the source image's own width as
+  // the stride, so the wrong one smears diagonally with no error in game.
+  const named = hits.map((p) => p.layer).sort().join(',')
+  assert(named === 'lights,wall', 'the problems name ' + named + ' instead of the two bad layers')
+  assert(/lights/.test(hits[0].message) && /480x224/.test(hits[0].message),
+    'the message does not say which layer or what size it should be')
+
+  // A layer that is simply absent is not a size disagreement: the editor
+  // synthesises the five non-terrain layers, and blank ones make a sane world.
+  const missing = mvCleanDoc()
+  delete missing.layers.sensors
+  assert(mvCodes(missing).length === 0, 'an absent layer was reported as the wrong size')
+  return 'both bad layers named as errors; an absent layer is not one'
+})
+
+check('terrain that cannot survive being loaded is refused, and says what breaks', () => {
+  // Alpha below 255 is not air. It resolves to Fog: solid on load, and then
+  // the whole connected mass dissolves at the first pick swing.
+  const thin = mvCleanDoc()
+  mvPut(thin.layers.terrain, 5, 6, [153, 0, 0, 254])
+  mvPut(thin.layers.terrain, 9, 9, [0, 0, 0, 0])
+  const alpha = mvOne(thin, 'terrain-transparent')
+  assert(alpha && alpha.severity === 'error', 'a see-through terrain pixel was not an error')
+  assert(alpha.at.x === 5 && alpha.at.y === 6,
+    'reported the first bad pixel as ' + alpha.at.x + ',' + alpha.at.y + ' instead of 5,6')
+  assert(/\b2\b/.test(alpha.message), 'the count of bad pixels is missing: ' + alpha.message)
+  assert(/fog/i.test(alpha.message) && !/\binvalid\b/i.test(alpha.message),
+    'the message does not say it becomes fog: ' + alpha.message)
+  assert(mvOne(mvCleanDoc(), 'terrain-transparent') === null,
+    'fully opaque terrain was reported as see-through')
+
+  // 240,220,120 throws inside the loader. The player never sees the map: the
+  // game swallows the error and drops them into a random world instead.
+  const broke = mvCleanDoc()
+  mvPut(broke.layers.terrain, 12, 13, MV_BROKEN)
+  mvPut(broke.layers.terrain, 14, 13, MV_BROKEN)
+  const bad = mvOne(broke, 'terrain-broken-colour')
+  assert(bad && bad.severity === 'error', 'a colour that crashes the load was not an error')
+  assert(bad.at.x === 12 && bad.at.y === 13, 'the first bad pixel was not located')
+  assert(/240,220,120/.test(bad.message), 'the message does not name the colour: ' + bad.message)
+  assert(/\b2 places\b/.test(bad.message), 'the message does not count them: ' + bad.message)
+  assert(mvOne(mvCleanDoc(), 'terrain-broken-colour') === null,
+    'a map of ordinary colours was accused of holding a broken one')
+  return 'see-through pixels and 240,220,120 both refused, each located and counted'
+})
+
+check('a wall layer with more colours than the game can hold is refused', () => {
+  // The wall palette runs 1..254; colour 255 onward is funnelled into slot 254,
+  // so those parts of the backdrop come out the wrong colour in game.
+  const room = mvCleanDoc()
+  for (let i = 0; i < 254; i++) mvPut(room.layers.wall, i, 0, [i, 0, 0, 255])
+  assert(mvOne(room, 'wall-colour-limit') === null,
+    'exactly 254 wall colours - the most that fit - was reported as too many')
+
+  const over = mvCleanDoc()
+  for (let i = 0; i < 255; i++) mvPut(over.layers.wall, i, 0, [i, 0, 0, 255])
+  const hit = mvOne(over, 'wall-colour-limit')
+  assert(hit && hit.severity === 'error', '255 wall colours was not reported')
+  assert(/\b255\b/.test(hit.message) && /\b254\b/.test(hit.message),
+    'the message reports neither the count nor the limit: ' + hit.message)
+
+  // Alpha is part of a wall colour's identity, but a fully see-through pixel is
+  // skipped entirely and costs no palette slot - so a blank wall is free.
+  const alpha = mvCleanDoc()
+  for (let i = 0; i < 254; i++) mvPut(alpha.layers.wall, i, 0, [i, 0, 0, 255])
+  mvPut(alpha.layers.wall, 0, 1, [0, 0, 0, 254])
+  assert(mvOne(alpha, 'wall-colour-limit'),
+    'two pixels differing only in alpha were counted as one wall colour')
+  return '254 fits, 255 does not, and alpha counts toward the identity'
+})
+
+check('a map that lies about its size, or has none, is refused', () => {
+  // params.width/height is read unguarded by the game's own Custom Maps list,
+  // so a missing one takes down the whole list, not just this map.
+  const none = mvCleanDoc()
+  delete none.params
+  const missing = mvOne(none, 'params-size')
+  assert(missing && missing.severity === 'error', 'a map with no recorded size was accepted')
+  assert(/480x224/.test(missing.message), 'the message does not say what the size should be')
+
+  const half = mvCleanDoc()
+  half.params = { width: 480 }
+  assert(mvOne(half, 'params-size'), 'a params with no height was accepted')
+
+  const lying = mvCleanDoc()
+  lying.params = { width: 100, height: 100 }
+  const wrong = mvOne(lying, 'params-size')
+  assert(wrong && /100x100/.test(wrong.message) && /480x224/.test(wrong.message),
+    'the message does not contrast what it claims with what it is')
+  assert(mvOne(mvCleanDoc(), 'params-size') === null, 'an honest size was reported as wrong')
+
+  // Roughly 16383 cells per axis: past that the shared mouse position, a
+  // Uint16 of world pixels, wraps around.
+  const huge = mvCleanDoc()
+  huge.layers.terrain = { data: new Uint8ClampedArray(4), width: 20000, height: 300 }
+  const big = mapValidate.validate(huge).problems.filter((p) => p.code === 'map-size')
+  assert(big.length === 1 && big[0].severity === 'error',
+    'a 20000-cell axis produced ' + big.length + ' size problems')
+  assert(/16,383/.test(big[0].message), 'the message does not give the real limit')
+
+  const empty = mvCleanDoc()
+  empty.layers.terrain = { data: new Uint8ClampedArray(0), width: 0, height: 0 }
+  const zero = mapValidate.validate(empty).problems
+  assert(zero.filter((p) => p.code === 'map-size').length === 2, 'a 0x0 map was not refused twice')
+  // A map with no size at all cannot also be told its layers are the wrong
+  // size or that its params disagree - that is noise on top of the one thing
+  // that has to be fixed first.
+  assert(zero.every((p) => p.code === 'map-size'),
+    'a sizeless map also produced ' + zero.map((p) => p.code).join(', '))
+
+  assert(mvCodes({ params: { width: 8, height: 8 }, layers: {} }).join() === 'terrain-missing',
+    'a document with no terrain layer was not reported')
+  assert(mapValidate.validate(null).problems.length === 1, 'validate(null) did not survive')
+  return 'missing, half-missing, lying, oversized, zero and absent all named'
+})
+
+check('a map that will play badly is warned about, not blocked', () => {
+  // Spawn is unconditional: the player is dropped at the formula's cell with
+  // no search for open space, then shoved upward until clear. Survivable, so
+  // this is a warning - the design says so explicitly.
+  const buried = mvCleanDoc()
+  mvPut(buried.layers.terrain, 318, 200, MV_ROCK)
+  const spawn = mvOne(buried, 'spawn-blocked')
+  assert(spawn && spawn.severity === 'warning', 'the spawn rule blocked the save instead of warning')
+  assert(spawn.at.x === 318 && spawn.at.y === 200, 'the warning points at the wrong cell')
+  assert(/upward/i.test(spawn.message), 'the message never says the player is pushed upward')
+  assert(mvOne(mvCleanDoc(), 'spawn-blocked') === null, 'a clear spawn was reported as buried')
+
+  // Fog: one pick swing dissolves the whole connected mass, so the size of
+  // that mass is what separates a deliberate pocket from an accident.
+  const foggy = mvCleanDoc()
+  mvRect(foggy.layers.terrain, 10, 10, 19, 19, MV_FOG)  // 100 cells, all connected
+  mvPut(foggy.layers.terrain, 40, 40, MV_FOG)           // 1 cell on its own
+  const fog = mvOne(foggy, 'terrain-fog')
+  assert(fog && fog.severity === 'warning', 'fog in the terrain was not warned about')
+  assert(fog.at.x === 10 && fog.at.y === 10, 'the warning does not point at the first fog cell')
+  assert(/101/.test(fog.message), 'the total number of fog cells is missing: ' + fog.message)
+  assert(/100/.test(fog.message), 'the largest connected patch is missing: ' + fog.message)
+  assert(mvOne(mvCleanDoc(), 'terrain-fog') === null, 'a fog-free map was accused of holding fog')
+
+  // 51,51,51 is a different colour that resolves to the same sealed-pocket
+  // material, and carries exactly the same trap.
+  const alias = mvCleanDoc()
+  mvRect(alias.layers.terrain, 0, 0, 4, 4, [51, 51, 51, 255])
+  assert(mvOne(alias, 'terrain-fog'), 'only one of the fog colours is recognised as fog')
+  return 'spawn and fog both warn, both located, and fog counts its connected mass'
+})
+
+check('a map nobody has finished drawing is warned about', () => {
+  const solid = mvCleanDoc()
+  solid.layers.terrain = mvBuf(480, 224, MV_ROCK)
+  const brick = mvOne(solid, 'terrain-unfinished')
+  assert(brick && brick.severity === 'warning', 'a map of solid rock edge to edge was not flagged')
+  assert(/170,170,170/.test(brick.message), 'the warning does not say what the one colour is')
+
+  const air = mvCleanDoc()
+  air.layers.terrain = mvBuf(480, 224, MV_AIR)
+  assert(mvOne(air, 'terrain-unfinished'), 'a map of nothing but air was not flagged')
+
+  // Not one colour, but still nothing to stand on: water and fog are not floor.
+  const wet = mvCleanDoc()
+  wet.layers.terrain = mvBuf(480, 224, MV_AIR)
+  mvRect(wet.layers.terrain, 0, 210, 479, 223, [0, 0, 255, 255])
+  const nothing = mvOne(wet, 'terrain-unfinished')
+  assert(nothing && /solid/i.test(nothing.message),
+    'a map whose only floor is water was not flagged as having nothing solid')
+
+  assert(mvOne(mvCleanDoc(), 'terrain-unfinished') === null,
+    'a drawn map was called unfinished')
+  return 'all-one-colour and nothing-solid both warn; a drawn map does not'
+})
+
+check('no fog colour can be mistaken for open air while scanning the palette', () => {
+  const palette = require('../src/game/terrain-palette')
+  // The fog family fits no bucket cleanly: it collides on load, then the first
+  // dig anywhere in a connected mass converts all of it. It is grouped by what
+  // it leaves behind, so someone scanning the empty group for a cave would
+  // otherwise reach for it - the collision has to be in the label, not only in
+  // the note. The three real air colours and the two real water colours must
+  // not carry that warning, or it stops meaning anything.
+  const trueAir = ['#ffffff', '#ff0000', '#990000']
+  const trueWater = ['#0000ff', '#6600ff']
+  let fog = 0
+  for (const e of palette.TERRAIN) {
+    if (e.kind !== 'empty' && e.kind !== 'fluid') continue
+    if (trueAir.includes(e.hex) || trueWater.includes(e.hex)) {
+      assert(!/blocks/i.test(e.label), e.hex + ' is real open air or real water but its label says it blocks')
+      continue
+    }
+    fog++
+    assert(/blocks until dug/i.test(e.label),
+      e.hex + ' is grouped as ' + e.kind + ' but its label does not say it blocks until dug: "' + e.label + '"')
+    assert(e.note.length > 0, e.hex + ' is a fog colour with no note explaining what happens when it is dug')
+  }
+  assert(fog === 10, 'expected 10 fog-family rows, found ' + fog)
+  assert(trueAir.length + trueWater.length + fog === 15, 'the empty and fluid groups no longer add up')
+
+  // The colour that produced the hollow test map, by name.
+  const hollow = palette.byRgb(102, 102, 102)
+  assert(hollow && hollow.kind === 'empty', '102,102,102 is no longer grouped by what it leaves behind')
+  assert(/black rock/i.test(hollow.label), '102,102,102 no longer warns that it renders as black rock')
+  assert(/blocks until dug/i.test(hollow.label), '102,102,102 no longer warns that it blocks')
+  return '10 fog rows all say "blocks until dug"; the 3 air and 2 water colours do not'
 })
