@@ -113,7 +113,44 @@
     for (var rn in r) {
       if (Object.prototype.hasOwnProperty.call(r, rn)) names[String(rn).toLowerCase()] = r[rn]
     }
-    return function (name) { return names[String(name).toLowerCase()] }
+
+    /*
+     * Ask the game itself. This is what makes any vanilla element nameable:
+     * the shipped table carries 18 of the 51 types the build registers, and
+     * the rest cannot be added to it - 0.5.6 stopped emitting them as an enum
+     * in the bundle, so they only exist at runtime.
+     *
+     * Ids are camelCase with a lowercase first letter (`wetSand`,
+     * `burntResidue`) while corelib writes them capitalised, so the name is
+     * tried as written and then with the first letter lowered. An unknown id
+     * throws rather than returning undefined, hence the try around each.
+     */
+    function liveType(name) {
+      var api = SMLN.sandkit
+      var state = SMLN.state
+      if (!state || !api || !api.elements || typeof api.elements.getElementTypeFromId !== 'function') {
+        return undefined
+      }
+      var candidates = [name, String(name).charAt(0).toLowerCase() + String(name).slice(1)]
+      for (var i = 0; i < candidates.length; i++) {
+        try {
+          var t = api.elements.getElementTypeFromId(state, candidates[i])
+          if (typeof t === 'number') return t
+        } catch (_e) { /* not that id; try the next spelling */ }
+      }
+      return undefined
+    }
+
+    return function (name) {
+      // This run's own registrations first: they are the most specific, and
+      // a mod may deliberately shadow a name. Then the game, then the table
+      // the main process sent for builds with no such lookup.
+      var key = String(name).toLowerCase()
+      if (typeof r[name] === 'number') return r[name]
+      var live = liveType(name)
+      if (typeof live === 'number') return live
+      return names[key]
+    }
   }
 
   SMLN.whenReady(function () {

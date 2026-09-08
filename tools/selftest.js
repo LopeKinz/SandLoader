@@ -5096,9 +5096,23 @@ check('captured recipes reach the game with their element names resolved', () =>
     // sandkit.mods.elements stays empty on purpose. In the real game the mod
     // elements were not findable there, so the resolver has to work from the
     // type number the registration itself returned - and only after it has.
+    state: { fake: true },
     sandkit: {
       structures: { recipes: { register: () => true } },
       mods: { elements: {} },
+      // The live lookup, as the game exposes it: ids are camelCase with a
+      // lowercase first letter, and an unknown id throws rather than returning
+      // undefined. `copper` is deliberately absent from elementTypes below, so
+      // only this path can resolve it.
+      elements: {
+        getElementTypeFromId(state, id) {
+          const table = { sand: 1, water: 3, wetSand: 4, copper: 36, gold: 7 }
+          if (!state || !Object.prototype.hasOwnProperty.call(table, id)) {
+            throw new Error("Element with id '" + id + "' not found")
+          }
+          return table[id]
+        },
+      },
     },
     callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
       ok: true,
@@ -5116,6 +5130,11 @@ check('captured recipes reach the game with their element names resolved', () =>
             outputs: [{ name: 'CompressedTrash', chance: 0.65 }] } },
           { id: 'Ghost', kind: 'growers', def: {
             input: 'Nonexistent', output: 'WetSand', chance: 1 } },
+          // Copper is in neither the shipped table nor this run's mod
+          // elements. Only the live lookup knows it, and corelib writes it
+          // capitalised while the game's id is lowercase-first.
+          { id: 'Wire', kind: 'shakers', def: {
+            input: 'Copper', outputsAbove: [{ name: 'Gold', chance: 0.5 }], outputsBelow: [] } },
         ],
         unsupported: [],
       },
@@ -5139,20 +5158,27 @@ check('captured recipes reach the game with their element names resolved', () =>
     try {
       // The contact never reaches the game: this build has no machine id for
       // one, so it is reported instead of attempted.
-      assert(calls.recipes.length === 1,
-        'expected only the press to be registered, got ' + calls.recipes.length)
+      assert(calls.recipes.length === 2,
+        'expected the press and the shaker, got ' + calls.recipes.length)
       assert(calls.logs.some((l) => /contacts recipes|nothing to register/.test(l)),
         'the contact recipe was not reported: ' + JSON.stringify(calls.logs))
 
-      const press = calls.recipes[0]
-      assert(press.kind === 'kineticPress', 'press kind is ' + press.kind)
+      // Copper is resolvable only through the live lookup, and only after the
+      // capitalised name corelib wrote is retried with a lowercase first letter.
+      const shaker = calls.recipes.find((r) => r.kind === 'shaker')
+      assert(shaker, 'the shaker naming a live-only element was not registered')
+      assert(shaker.def.input === 36, 'Copper did not resolve through the live lookup')
+      assert(shaker.def.outputsAbove[0].elementType === 7, 'Gold did not resolve')
+
+      const press = calls.recipes.find((r) => r.kind === 'kineticPress')
+      assert(press, 'the press was not registered')
       assert(press.def.outputs[0].elementType === 91,
         'a mod element registered this run was not resolved: ' + JSON.stringify(press.def.outputs))
       assert(press.def.outputs[0].chance === 0.65, 'the chance was lost')
 
       assert(calls.logs.some((l) => /Ghost|Nonexistent/.test(l)),
         'the unresolvable recipe was not reported: ' + JSON.stringify(calls.logs))
-      resolve('press registered with type numbers; contact and unresolvable name both reported')
+      resolve('press and live-only shaker registered; contact and unresolvable name reported')
     } catch (e) { reject(e) }
   }, 120))
 })
