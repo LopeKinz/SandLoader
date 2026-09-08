@@ -120,11 +120,18 @@ mod removes its maps, without the player cleaning up by hand.
 
 ### Unlocking the browser
 
-The screen exists and is disabled in configuration. Finding the switch is a
-measurement, not a guess: the plan names the search and the expected shape, and
-if the switch turns out to need a patch rather than a config write, it is a
-patch with the usual `required: false` posture — a build that moves must cost
-the browser, never the game.
+Measured: the switch is a literal in the shipped bundle, beside its sibling for
+the mods screen.
+
+```js
+mods:{showSubscribedMods:!1},customMaps:{showCustomMaps:!1},procgen:{...}
+```
+
+It is compiled in, not read from a JSON file, so turning it on is a patch:
+`customMaps:{showCustomMaps:!1}` becomes `customMaps:{showCustomMaps:!0}`. One
+match, and `required: false`, because a build that moves the literal must cost
+the browser screen and never the game. Autoheal reports it like any other
+anchor.
 
 ### Failing honestly
 
@@ -155,8 +162,9 @@ defect no unit test could have found.
 
 ## Risks
 
-- **The browser switch is unmeasured.** It is the one part of this design whose
-  mechanism is not yet established.
+- **The browser switch is a compiled-in literal.** One match in a 4 MiB
+  bundle, so a build that reshapes that config object silently costs the
+  screen. The anchor check reports it, and nothing else depends on it.
 - **Layer dimensions and formats are inferred from the game's loader, not from
   documentation.** A map that assembles cleanly can still be rejected at load.
 - **Writing into the player's own map folder.** The prefix rule and the
