@@ -4733,16 +4733,43 @@ check('the bridge captures element registrations instead of patching', () => {
 })
 
 check('a registration the build cannot support is recorded with its reason', () => {
-  // 0.5.5 has no recipe registry at all. Reporting beats a silent no-op.
+  // A recipe the registry would refuse is reported, not silently dropped.
+  // 0.5.6 added the registry, so an unregisterable recipe is now one the game
+  // itself would reject - a press with no outputs, here.
   const g = { corelib: fakeCorelib() }
   const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
-  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [['CompressedTrash', 0.65]] })
+  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [] })
   assert(r.captured.unsupported.length === 1,
-    'the recipe call was not recorded as unsupported')
+    'the invalid recipe was not recorded as unsupported')
   const u = r.captured.unsupported[0]
   assert(u.kind === 'recipe', 'wrong kind: ' + u.kind)
-  assert(/no recipe registry/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
+  assert(/output/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
   return u.reason
+})
+
+check('corelib recipe calls are captured now that 0.5.6 has a registry', () => {
+  const g = { corelib: fakeCorelib() }
+  const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
+  assert(Array.isArray(r.captured.recipes), 'captured.recipes is missing')
+
+  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [['CompressedTrash', 0.65]] })
+  assert(r.captured.recipes.length === 1,
+    'the recipe was not captured, got ' + r.captured.recipes.length)
+  const got = r.captured.recipes[0]
+  assert(got.kind === 'kineticPresses', 'captured as ' + got.kind)
+  assert(got.def.input === 'Trash', 'the captured def is wrong')
+  assert(got.def.outputs[0].name === 'CompressedTrash', 'the outputs were lost')
+
+  // Allow-lists are not recipes and must not be captured as one.
+  g.corelib.recipes.registerShakerRecipe({ input: 'Trash', outputAbove: [['Gold', 0.1]] })
+  assert(r.captured.recipes.length === 2, 'the shaker recipe was not captured')
+  assert(r.captured.recipes[1].kind === 'shakers', 'shaker captured as ' + r.captured.recipes[1].kind)
+
+  // And a corelib call must never throw back into the mod.
+  let threw = false
+  try { g.corelib.recipes.registerPressRecipe(null) } catch (_e) { threw = true }
+  assert(!threw, 'a malformed recipe threw into the mod')
+  return 'press and shaker captured, malformed one reported without throwing'
 })
 
 check('a bad definition is recorded, and never throws into the mod', () => {
@@ -5127,9 +5154,18 @@ check('a mod that registers content gets it captured, with a working matter tabl
   assert(ids.includes('CompressedTrash'), 'CompressedTrash was not captured')
   assert(out.content.soils.some((s) => s.id === 'TrashSoil'), 'TrashSoil was not captured')
 
-  // 0.5.5 has no recipe registry, so those must be reported, not silently lost.
-  const recipes = out.content.unsupported.filter((u) => u.kind === 'recipe')
-  assert(recipes.length >= 2, 'recipe calls were not reported: ' + recipes.length)
+  // 0.5.6 has a recipe registry, so a valid recipe is captured for the renderer
+  // to register; only one the registry would refuse is reported. Either way it
+  // is accounted for - the failure this guards against is silent loss.
+  const captured = out.content.recipes || []
+  const reported = out.content.unsupported.filter((u) => u.kind === 'recipe')
+  assert(captured.length + reported.length >= 2,
+    'recipe calls were neither captured nor reported: ' +
+    captured.length + ' captured, ' + reported.length + ' reported')
+  for (const rec of captured) {
+    assert(typeof rec.kind === 'string' && rec.def,
+      'a captured recipe carries no kind or def: ' + JSON.stringify(rec))
+  }
 
   // And the superseded patches must not reach the patch set.
   for (const list of Object.values(out.patches)) {
@@ -5138,7 +5174,7 @@ check('a mod that registers content gets it captured, with a working matter tabl
     }
   }
   return `captured ${ids.length} element(s), ${out.content.soils.length} soil(s), ` +
-    `${recipes.length} recipe(s) reported unavailable`
+    `${captured.length} recipe(s) captured and ${reported.length} reported`
 })
 
 if (archive) archive.close()

@@ -66,7 +66,7 @@ function install(sandboxGlobal, opts) {
   const log = o.logger
   const matterEnum = o.matterEnum || {}
   const corelib = sandboxGlobal && sandboxGlobal.corelib
-  const captured = { elements: [], soils: [], blocks: [], tech: [], upgrades: [], unsupported: [] }
+  const captured = { elements: [], soils: [], blocks: [], tech: [], upgrades: [], recipes: [], unsupported: [] }
   const reasons = []
 
   if (!corelib || typeof corelib !== 'object') {
@@ -225,10 +225,17 @@ function install(sandboxGlobal, opts) {
     }
   }
 
-  // Sandustry 0.5.5 has no recipe registry: `sandkit.structures.recipes` is
-  // undefined, no namespace matches /recipe/i, and no module carries an
-  // input/output shape. There is nothing to register into, so these are
-  // recorded with the reason instead of pretending to work.
+  /*
+   * Sandustry 0.5.6 added the recipe registry 0.5.5 did not have: nine machine
+   * categories with a state-first register(). corelib's four methods are
+   * intercepted and shape-translated here; the renderer resolves the element
+   * names and does the registering, because only it can see elements a mod
+   * added this run.
+   *
+   * corelib's own constructor seeds about nine recipes the game already
+   * implements natively. They are forwarded like any other - see the spec for
+   * why, and for what that costs.
+   */
   const RECIPE_FNS = [
     'registerBasicRecipe', 'registerPressRecipe', 'registerShakerRecipe',
     'registerGrowerRecipe',
@@ -237,7 +244,7 @@ function install(sandboxGlobal, opts) {
   // which may be a throwing getter, so it must not be able to throw itself.
   function safeRecipeId(config, fallback) {
     try {
-      return String((config && (config.input || config.id)) || fallback)
+      return String((config && (config.input || config.inputTop || config.id)) || fallback)
     } catch (_e) {
       return fallback
     }
@@ -246,14 +253,18 @@ function install(sandboxGlobal, opts) {
   if (corelib.recipes && typeof corelib.recipes === 'object') {
     for (const fn of RECIPE_FNS) {
       if (typeof corelib.recipes[fn] !== 'function') continue
-      corelib.recipes[fn] = function suppressedRecipe(config) {
+      corelib.recipes[fn] = function capturedRecipe(config) {
+        let id = fn
         try {
-          note('recipe', safeRecipeId(config, fn),
-            'this Sandustry build has no recipe registry, so recipes cannot be ' +
-            'registered by any means (verified against 0.5.5)')
+          id = safeRecipeId(config, fn)
+          const r = translate.translateRecipe(fn, config)
+          if (r.ok) captured.recipes.push({ id, kind: r.kind, def: r.def })
+          else note('recipe', id, r.reason)
         } catch (e) {
-          note('recipe', fn, `reading the recipe definition threw: ${e && e.message}`)
+          note('recipe', id, `reading the recipe definition threw: ${e && e.message}`)
         }
+        // corelib reads the return value only for its own bookkeeping, and a
+        // throw here would take down the mod that called it.
         return false
       }
     }
