@@ -145,16 +145,23 @@
           ((e && e.message) || e))
       }
 
+      // Recipes name elements, so they have to wait for the element
+      // registrations to settle - the game only knows an element's type number
+      // once it has registered it. Every entry pushed here resolves rather than
+      // rejects, so one bad definition cannot strand the recipes behind it.
+      var contentSettled = []
+
       function hand(entry, register, kind) {
         // One definition failing must not take the others with it: a mod that
         // registers five elements and gets one wrong should lose that one.
         try {
-          register(entry.def).then(function () {
+          var done = register(entry.def).then(function () {
             SMLN.log('info', 'fluxloader ' + kind + ' registered: ' + entry.id)
           }, function (e) {
             SMLN.log('error', 'fluxloader ' + kind + ' "' + entry.id + '" failed: ' +
               ((e && e.message) || e))
           })
+          contentSettled.push(done)
         } catch (e) {
           SMLN.log('error', 'fluxloader ' + kind + ' "' + entry.id + '" threw: ' +
             ((e && e.message) || e))
@@ -216,11 +223,16 @@
        */
       var recipes = payload.recipes || []
       if (recipes.length) {
-        var live = SMLN.sandkit && SMLN.sandkit.structures && SMLN.sandkit.structures.recipes
-        if (!live || typeof live.register !== 'function') {
-          SMLN.log('warn', 'fluxloader: ' + recipes.length + ' recipe(s) were not registered - ' +
-            'this build has no recipe registry (it arrived in Sandustry 0.5.6)')
-        } else {
+        // Only after the elements above are in: the name lookup is built from
+        // what the game handed back, and building it early is why a recipe
+        // naming a mod's own element reported "no element is named Trash".
+        Promise.all(contentSettled).then(function () {
+          var live = SMLN.sandkit && SMLN.sandkit.structures && SMLN.sandkit.structures.recipes
+          if (!live || typeof live.register !== 'function') {
+            SMLN.log('warn', 'fluxloader: ' + recipes.length + ' recipe(s) were not registered - ' +
+              'this build has no recipe registry (it arrived in Sandustry 0.5.6)')
+            return
+          }
           var resolveName = elementNameResolver(payload.elementTypes)
           for (var ri = 0; ri < recipes.length; ri++) {
             var rec = recipes[ri]
@@ -237,7 +249,7 @@
                 ((e && e.message) || e))
             }
           }
-        }
+        })
       }
 
       // Say what could not be done and why, rather than leaving the player to

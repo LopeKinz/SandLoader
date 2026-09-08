@@ -325,14 +325,21 @@ function elementName(value) {
  * `[["Spore", 1], ["Gold", 0.25]]` -> `[{name:'Spore', chance:1}, …]`.
  *
  * The game validates chances itself and throws, but its throw arrives without
- * the mod's name attached - so the same rules are checked here, where the
- * recipe can be reported against the mod that wrote it.
+ * the mod's name attached - so the same rule is checked here, where the recipe
+ * can be reported against the mod that wrote it.
+ *
+ * The rule is per entry only: 0 to 1. Sandustry keeps two validators, and the
+ * stricter one - at least one output, chances totalling no more than 1 - guards
+ * only the five categories corelib cannot reach (condensers, steamDryers,
+ * synthesizers, snowmakers, smelters). Shakers and kinetic presses take the
+ * lenient one, and applying the strict rule to them refused recipes the game
+ * itself accepts: trashelement declares shaker outputs totalling 1.49 and the
+ * game is content with that.
  */
 function outputList(pairs, field) {
   if (pairs === undefined || pairs === null) return { ok: true, list: [] }
   if (!Array.isArray(pairs)) return { ok: false, reason: `${field} must be an array` }
   const list = []
-  let total = 0
   for (const pair of pairs) {
     const name = elementName(Array.isArray(pair) ? pair[0] : pair && pair.name)
     const chance = Array.isArray(pair) ? pair[1] : pair && pair.chance
@@ -341,11 +348,7 @@ function outputList(pairs, field) {
     if (typeof c !== 'number' || !isFinite(c) || c < 0 || c > 1) {
       return { ok: false, reason: `${field}["${name}"].chance must be between 0 and 1, got ${c}` }
     }
-    total += c
     list.push({ name, chance: c })
-  }
-  if (total > 1 + 1e-9) {
-    return { ok: false, reason: `${field} chances total ${total}, which is more than 1` }
   }
   return { ok: true, list }
 }
@@ -403,7 +406,6 @@ function translateRecipe(fn, config) {
   if (kind === 'kineticPresses') {
     const outputs = outputList(c.outputs, 'outputs')
     if (!outputs.ok) return { ok: false, reason: outputs.reason }
-    if (!outputs.list.length) return { ok: false, reason: 'a press recipe needs at least one output' }
     // The game requires this field and corelib has no equivalent. Zero is the
     // permissive value - any downward velocity qualifies - which is what a
     // corelib press meant when it did not talk about velocity at all.
@@ -418,9 +420,6 @@ function translateRecipe(fn, config) {
   if (!above.ok) return { ok: false, reason: above.reason }
   const below = outputList(c.outputBelow, 'outputBelow')
   if (!below.ok) return { ok: false, reason: below.reason }
-  if (!above.list.length && !below.list.length) {
-    return { ok: false, reason: 'a shaker recipe needs at least one output' }
-  }
   return { ok: true, kind, def: { input, outputsAbove: above.list, outputsBelow: below.list } }
 }
 

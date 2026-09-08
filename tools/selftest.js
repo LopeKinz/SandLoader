@@ -526,18 +526,32 @@ check('corelib recipe shapes translate onto the 0.5.6 categories', () => {
 check('a recipe the game would reject is refused before it gets there', () => {
   assert(!flTranslate.translateRecipe('registerBasicRecipe', { inputTop: 'Sand' }).ok,
     'a contact with no second input was accepted')
-  assert(!flTranslate.translateRecipe('registerPressRecipe', { input: 'X', outputs: [] }).ok,
-    'a press with no outputs was accepted')
   assert(!flTranslate.translateRecipe('registerPressRecipe', { input: 'X', outputs: [['Gold', 2]] }).ok,
     'a chance above 1 was accepted')
-  assert(!flTranslate.translateRecipe('registerShakerRecipe',
-    { input: 'X', outputAbove: [['A', 0.7], ['B', 0.7]] }).ok,
-    'chances totalling more than 1 were accepted')
   assert(!flTranslate.translateRecipe('registerGrowerRecipe', { input: 'X' }).ok,
     'a grower with no output was accepted')
+  assert(!flTranslate.translateRecipe('registerGrowerRecipe',
+    { input: 'X', output: 'Y', chance: 1.5 }).ok,
+    'a grower chance above 1 was accepted')
   assert(!flTranslate.translateRecipe('registerConveyorBeltIgnores', 'Water').ok,
     'an allow-list call was mistaken for a recipe')
-  return 'six invalid shapes refused with reasons'
+  return 'five invalid shapes refused with reasons'
+})
+
+check('the translation is no stricter about outputs than the game is', () => {
+  // Sandustry keeps two output validators. The strict one - at least one
+  // output, chances totalling no more than 1 - guards only the five categories
+  // corelib cannot reach. Shakers and presses take the lenient one, and being
+  // strict here refused recipes the game accepts: trashelement's real shaker
+  // declares 1.49 across outputAbove and the game is content with it.
+  const shaker = flTranslate.translateRecipe('registerShakerRecipe',
+    { input: 'Trash', outputAbove: [['Slag', 0.99], ['Gold', 0.5]] })
+  assert(shaker.ok, 'a shaker totalling more than 1 was refused: ' + shaker.reason)
+  assert(shaker.def.outputsAbove.length === 2, 'the outputs were not carried over')
+
+  const press = flTranslate.translateRecipe('registerPressRecipe', { input: 'X', outputs: [] })
+  assert(press.ok, 'an empty press output list was refused: ' + press.reason)
+  return 'totals above 1 and empty lists both pass, as the game allows'
 })
 
 check('fluxloader modinfo is read into an SMLN mod', () => {
@@ -4747,15 +4761,15 @@ check('the bridge captures element registrations instead of patching', () => {
 check('a registration the build cannot support is recorded with its reason', () => {
   // A recipe the registry would refuse is reported, not silently dropped.
   // 0.5.6 added the registry, so an unregisterable recipe is now one the game
-  // itself would reject - a press with no outputs, here.
+  // itself would reject - here an output chance outside 0 to 1.
   const g = { corelib: fakeCorelib() }
   const r = flContent.install(g, { modId: 'corelib', logger: testLogger(), matterEnum: LIVE_MATTER })
-  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [] })
+  g.corelib.recipes.registerPressRecipe({ input: 'Trash', outputs: [['CompressedTrash', 4]] })
   assert(r.captured.unsupported.length === 1,
     'the invalid recipe was not recorded as unsupported')
   const u = r.captured.unsupported[0]
   assert(u.kind === 'recipe', 'wrong kind: ' + u.kind)
-  assert(/output/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
+  assert(/chance/i.test(u.reason), 'reason is not explanatory: ' + u.reason)
   return u.reason
 })
 
@@ -5079,15 +5093,17 @@ check('captured recipes reach the game with their element names resolved', () =>
     log: (level, msg) => calls.logs.push(level + ': ' + msg),
     whenReady: (fn) => fn(),
     // The live registry has to be present, or the bridge correctly refuses.
+    // The mod element does not exist until its registration resolves. That is
+    // the real ordering, and running the recipe pass before it is why a recipe
+    // naming a mod's own element reported "no element is named ...".
     sandkit: {
       structures: { recipes: { register: () => true } },
-      // A mod element registered moments earlier in the same pass.
-      mods: { elements: { CompressedTrash: { elementType: 91 } } },
+      mods: { elements: {} },
     },
     callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
       ok: true,
       value: {
-        elements: [],
+        elements: [{ id: 'CompressedTrash', def: { id: 'CompressedTrash' } }],
         soils: [],
         // enums.ElementByName is keyed lowercase; the resolver must normalise.
         elementTypes: { sand: 1, water: 3, wetsand: 4 },
@@ -5106,13 +5122,18 @@ check('captured recipes reach the game with their element names resolved', () =>
     } : null),
     register: {
       as: () => ({
-        element: () => Promise.resolve({}),
+        // Registering is asynchronous, and only afterwards does the game know
+        // the element's type number.
+        element: (def) => new Promise((res) => setTimeout(() => {
+          SMLN.sandkit.mods.elements[def.id] = { elementType: 91 }
+          res({ elementType: 91 })
+        }, 10)),
         terrain: () => Promise.resolve({}),
         recipe: (kind, def) => { calls.recipes.push({ kind, def }); return Promise.resolve({}) },
       }),
     },
   }
-  const sandbox = { globalThis: null, __SMLN__: SMLN, console }
+  const sandbox = { globalThis: null, __SMLN__: SMLN, console, Promise, setTimeout }
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
   new vm.Script(src, { filename: 'flux-register.js' }).runInContext(sandbox)
@@ -5138,7 +5159,7 @@ check('captured recipes reach the game with their element names resolved', () =>
         'the unresolvable recipe was not reported: ' + JSON.stringify(calls.logs))
       resolve('two recipes registered with type numbers, one refused and reported')
     } catch (e) { reject(e) }
-  }, 40))
+  }, 120))
 })
 
 check('captured content is exposed to the renderer over IPC', () => {
