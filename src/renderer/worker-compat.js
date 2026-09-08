@@ -150,7 +150,13 @@
 
   // The API only answers once the game has published its state, so the event
   // corelib's dependents wait on fires then and not before.
+  //
+  // The info line is the only observable proof that the capture landed: success
+  // is otherwise silent, and "no warning" is indistinguishable from "still
+  // waiting" when you are reading a log to find out whether any of this works.
   SMLN.whenWorkerReady(function () {
+    SMLN.log('info', 'worker Sandkit reached - corelib and fluxloaderAPI are live in the ' +
+      (SMLN.workerKind || 'unknown') + ' worker')
     fire('cl:raw-api-setup', undefined, true)
   })
 })(typeof self !== 'undefined' ? self : this)
