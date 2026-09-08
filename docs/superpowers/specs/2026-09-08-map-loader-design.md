@@ -106,10 +106,11 @@ before the window exists.
 
 ### Names that cannot collide
 
-A mod's map is written as `smln.<modId>.<key>.custommap`. The prefix does three
-things: it keeps a mod from overwriting a map the player made, it makes the
-origin visible in the browser, and it is what makes pruning safe — SandLoader
-only ever deletes files it can prove it wrote.
+A mod's map is written as `smln.<modId>.custommap` - one file per mod, because
+a `.custommap` carries all six layers at once. The prefix does three things: it
+keeps a mod from overwriting a map the player made, it makes the origin visible
+in the browser, and it is what makes pruning safe, since SandLoader only ever
+deletes files it can prove it wrote.
 
 ### Lifecycle
 
