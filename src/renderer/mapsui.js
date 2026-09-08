@@ -250,7 +250,12 @@
     importBtn.className = 'import'
     importBtn.textContent = tx('maps.import', 'Import map...')
     importBtn.addEventListener('click', function () { importMaps(importBtn) })
+    var newBtn = document.createElement('button')
+    newBtn.className = 'import'
+    newBtn.textContent = tx('maps.newMap', 'New map...')
+    newBtn.addEventListener('click', function () { promptNewMap() })
     footer.appendChild(note)
+    footer.appendChild(newBtn)
     footer.appendChild(importBtn)
     footer.appendChild(close)
 
@@ -269,9 +274,115 @@
     overlay._list = list
     overlay._stage = stage
     overlay._note = note
+    overlay._panel = panel
 
     renderList()
     renderStage()
+  }
+
+  // ---------------------------------------------------------- the editor
+  /** Is SandLoader's map editor installed and on screen right now? */
+  function editorOpen() {
+    var ed = SMLN.mapEditor
+    return !!(ed && typeof ed.isOpen === 'function' && ed.isOpen())
+  }
+
+  /**
+   * Hand a map to the editor, and refresh the list when it saves.
+   *
+   * The browser stays open underneath: the editor is a full-screen overlay
+   * above it, so closing the editor puts the player back in the list they
+   * came from rather than in the main menu.
+   */
+  function edit(mapId, opts) {
+    var ed = SMLN.mapEditor
+    if (!ed || typeof ed.open !== 'function') {
+      say(tx('maps.noEditor', 'the map editor is not available in this build'))
+      return
+    }
+    var options = opts || {}
+    options.onSaved = function (r) {
+      if (r && r.id) selectedId = r.id
+      // The saved map may be new, or may have changed name or size; the cached
+      // preview is of the old pixels either way.
+      if (r && r.id) delete previews[r.id]
+      loadList()
+    }
+    ed.open(mapId, options)
+  }
+
+  /**
+   * Ask for a size and a name, then start the editor on a blank map.
+   *
+   * The size cannot be changed later without deciding what happens to the
+   * pixels already painted, so it is asked for once, up front, rather than
+   * defaulted silently.
+   */
+  function promptNewMap() {
+    if (!overlay || overlay._prompt) return
+
+    var wrap = document.createElement('div')
+    wrap.className = 'prompt'
+    var card = document.createElement('div')
+    card.className = 'card'
+
+    var h3 = document.createElement('h3')
+    h3.textContent = tx('maps.newTitle', 'New map')
+    card.appendChild(h3)
+
+    function field(labelText, value, parent) {
+      var label = document.createElement('label')
+      label.textContent = labelText
+      var input = document.createElement('input')
+      input.type = 'text'
+      input.value = value
+      parent.appendChild(label)
+      parent.appendChild(input)
+      return input
+    }
+
+    var nameInput = field(tx('maps.newName', 'Name'), tx('maps.newNameDefault', 'Untitled map'), card)
+
+    var pair = document.createElement('div')
+    pair.className = 'pair'
+    var wcell = document.createElement('div')
+    var hcell = document.createElement('div')
+    pair.appendChild(wcell)
+    pair.appendChild(hcell)
+    var widthInput = field(tx('maps.newWidth', 'Width (cells)'), '640', wcell)
+    var heightInput = field(tx('maps.newHeight', 'Height (cells)'), '400', hcell)
+    card.appendChild(pair)
+
+    var row = document.createElement('div')
+    row.className = 'row'
+    var cancel = document.createElement('button')
+    cancel.className = 'close'
+    cancel.textContent = tx('maps.cancel', 'Cancel')
+    cancel.addEventListener('click', function () { closePrompt() })
+    var create = document.createElement('button')
+    create.className = 'play'
+    create.style.marginTop = '0'
+    create.textContent = tx('maps.create', 'Create')
+    create.addEventListener('click', function () {
+      var w = parseInt(widthInput.value, 10)
+      var h = parseInt(heightInput.value, 10)
+      closePrompt()
+      edit(null, { width: w, height: h, name: nameInput.value })
+    })
+    row.appendChild(cancel)
+    row.appendChild(create)
+    card.appendChild(row)
+
+    wrap.appendChild(card)
+    overlay._panel.appendChild(wrap)
+    overlay._prompt = wrap
+    if (nameInput.focus) nameInput.focus()
+  }
+
+  function closePrompt() {
+    if (!overlay || !overlay._prompt) return
+    overlay._panel.removeChild(overlay._prompt)
+    overlay._prompt = null
   }
 
   function say(text) {
@@ -534,6 +645,12 @@
     play.addEventListener('click', function () { playMap(m.id) })
     details.appendChild(play)
 
+    var editBtn = document.createElement('button')
+    editBtn.className = 'edit'
+    editBtn.textContent = tx('maps.edit', 'Edit')
+    editBtn.addEventListener('click', function () { edit(m.id) })
+    details.appendChild(editBtn)
+
     return details
   }
 
@@ -644,11 +761,21 @@
   }
 
   function onKey(ev) {
-    if (open && ev.key === 'Escape') {
+    if (!open || ev.key !== 'Escape') return
+    // The editor covers this overlay and has its own Escape, which asks
+    // before discarding unsaved pixels. Both handlers sit on window, and
+    // stopPropagation does not stop a sibling listener on the same node, so
+    // the browser would otherwise close the list out from under the editor.
+    if (editorOpen()) return
+    if (overlay && overlay._prompt) {
       ev.preventDefault()
       ev.stopPropagation()
-      toggle(false)
+      closePrompt()
+      return
     }
+    ev.preventDefault()
+    ev.stopPropagation()
+    toggle(false)
   }
 
   SMLN.mapsUI = {

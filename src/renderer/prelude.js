@@ -73,6 +73,10 @@ const PARTS = [
   'permui.js',
   'modsui.js',
   'mapsui.js',
+  // Reached from mapsui.js ("New map...", "Edit"), which looks it up on
+  // SMLN when the button is clicked rather than at install time - so the
+  // order of these two is convention, not a dependency.
+  'mapeditor.js',
   'hotreload.js',
 ]
 

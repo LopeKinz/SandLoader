@@ -5843,6 +5843,356 @@ check('the loader installs map mods instead of refusing them', () => {
   return 'the refusal is gone and the installer is wired in'
 })
 
+check('the README stops calling map loading unavailable', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8')
+  assert(!/loading\s+them needs game-side support that is not exposed/.test(readme),
+    'the README still says map loading needs support that is not exposed')
+  assert(/custom_maps/.test(readme), 'the README does not say where maps go')
+  assert(/browser|Custom Maps/i.test(readme), "the README does not mention the game's map browser")
+  return 'map mods documented as working'
+})
+
+// --------------------------------------------------------------- map editor
+/** Six layers of the requested size, as the editor hands them to the save. */
+function editorLayers(maps, width, height, sizes) {
+  const out = {}
+  for (const layer of maps.LAYERS) {
+    const w = (sizes && sizes[layer] && sizes[layer].width) || width
+    const h = (sizes && sizes[layer] && sizes[layer].height) || height
+    out[layer] = {
+      width: (sizes && sizes[layer] && sizes[layer].declared)
+        ? sizes[layer].declared.width : w,
+      height: (sizes && sizes[layer] && sizes[layer].declared)
+        ? sizes[layer].declared.height : h,
+      dataUrl: 'data:image/png;base64,' + makeTinyPng(w, h).toString('base64'),
+    }
+  }
+  return out
+}
+
+check('a mod install and an editor save go through one serialiser', () => {
+  // The editor could have grown its own two-line writer. If it ever does, the
+  // two files drift and only one of them is the format the game reads - so
+  // the check is that the bytes agree, not that both "look right".
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-onewriter-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  const bp = path.join(root, 'layer.png')
+  try {
+    fs.writeFileSync(bp, makeTinyPng(8, 6))
+    const blueprints = {}
+    for (const layer of maps.LAYERS) blueprints[layer] = bp
+    const built = maps.assemble({ modId: 'demo', name: 'Demo', seed: 's', blueprints })
+    assert(built.ok, built.reason)
+    assert(built.fileText === maps.serialise(built.doc),
+      'assemble no longer writes what serialise writes')
+
+    const saved = maps.saveDocument(mapsDir, {
+      id: null, name: 'Demo', seed: 's', layers: editorLayers(maps, 8, 6),
+    })
+    assert(saved.ok, saved.reason)
+    const text = fs.readFileSync(path.join(mapsDir, saved.file), 'utf8')
+    assert(text.split('\n').length === 2, 'the editor wrote something other than two lines')
+    assert(JSON.stringify(Object.keys(JSON.parse(text.split('\n')[0]))) ===
+      JSON.stringify(Object.keys(JSON.parse(built.fileText.split('\n')[0]))),
+      'the two writers disagree about the metadata line')
+
+    // The importer's own rules are the closest thing to the game's reader.
+    const seen = maps.inspect(text)
+    assert(seen.ok, 'the editor wrote a file the importer refuses: ' + seen.reason)
+    assert(seen.meta.params.width === 8 && seen.meta.params.height === 6,
+      'params does not carry the pixel size the game renders unguarded')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'same serialiser, same metadata line, and the result passes inspect()'
+})
+
+check('an authored map is never written under a name the loader may prune', () => {
+  // PREFIX marks a file sync() deletes when its mod goes away. A map somebody
+  // drew is not a mod's map, and losing it on the next launch would be the
+  // worst possible bug in an editor.
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-mapsave-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  try {
+    const layers = editorLayers(maps, 4, 4)
+    for (const attempt of ['smln.sneaky', 'smln.smln.sneaky', 'smln']) {
+      const r = maps.saveDocument(mapsDir, { id: attempt, layers })
+      assert(r.ok, r.reason)
+      assert(r.file.indexOf(maps.PREFIX) !== 0,
+        `"${attempt}" was written as ${r.file}, which the pruner would delete`)
+      assert(JSON.parse(fs.readFileSync(path.join(mapsDir, r.file), 'utf8').split('\n')[0]).id === r.id,
+        'the id inside the file disagrees with its name, so the game cannot open it')
+    }
+    assert(maps.mapId('smln.x', 'fallback') === 'x', 'mapId does not strip the prefix')
+    assert(maps.mapId('', 'fallback') === 'fallback', 'mapId has no fallback')
+    assert(maps.mapId('My Great Map', 'x') === 'My-Great-Map', 'mapId mangles a plain name')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'the prefix is stripped, and the id inside always matches the file name'
+})
+
+check('a save refuses the shapes that load as a silently broken world', () => {
+  const maps = require('../src/mods/custom-maps')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-mapguard-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  try {
+    const short = editorLayers(maps, 4, 4)
+    delete short.wall
+    assert(!maps.saveDocument(mapsDir, { id: 'a', layers: short }).ok,
+      'a five-layer map was accepted; the game needs all six or it fails to load')
+
+    // The game sizes each layer's canvas from the recorded numbers and draws
+    // the PNG at 0,0 without scaling, so a disagreement is not an error - it
+    // is a clipped or transparently padded world.
+    const lying = editorLayers(maps, 4, 4)
+    lying.terrain = { width: 8, height: 8, dataUrl: lying.terrain.dataUrl }
+    assert(!maps.saveDocument(mapsDir, { id: 'b', layers: lying }).ok,
+      'a layer whose size disagrees with its own PNG was accepted')
+
+    const ragged = editorLayers(maps, 4, 4, { lights: { width: 8, height: 8 } })
+    assert(!maps.saveDocument(mapsDir, { id: 'c', layers: ragged }).ok,
+      'layers describing two different worlds were accepted')
+
+    const notPng = editorLayers(maps, 4, 4)
+    notPng.sensors = { width: 4, height: 4, dataUrl: 'data:image/jpeg;base64,AAAA' }
+    assert(!maps.saveDocument(mapsDir, { id: 'd', layers: notPng }).ok,
+      'a layer that is not a PNG was accepted')
+
+    assert(!fs.existsSync(mapsDir) || fs.readdirSync(mapsDir).length === 0,
+      'a refused save still wrote a file')
+
+    // Editing a map saves over it; a new map steps aside from what is there.
+    const layers = editorLayers(maps, 4, 4)
+    const first = maps.saveDocument(mapsDir, { id: 'keeper', layers })
+    const again = maps.saveDocument(mapsDir, { id: 'keeper', layers })
+    assert(first.file === again.file, 'editing a map wrote a second file instead of saving over it')
+    const fresh1 = maps.saveDocument(mapsDir, { id: null, name: 'Fresh', layers })
+    const fresh2 = maps.saveDocument(mapsDir, { id: null, name: 'Fresh', layers })
+    assert(fresh1.id === 'Fresh' && fresh2.id === 'Fresh-2',
+      'a new map overwrote an existing one: ' + fresh1.id + ', ' + fresh2.id)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+  return 'six layers, agreeing sizes, real PNGs; edits overwrite and new maps do not'
+})
+
+check('undo is bounded by bytes rather than by step count', () => {
+  // A 1920x1080 layer is ~8 MB as ImageData. Bounding by step count would be a
+  // quarter of a gigabyte on a big map and nothing at all on a small one, so
+  // the rule under test is the eviction, not the number.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
+  const from = src.indexOf('// --- undo:begin')
+  const to = src.indexOf('// --- undo:end')
+  assert(from > 0 && to > from, 'the undo region markers are gone from mapeditor.js')
+
+  const sandbox = {}
+  vm.createContext(sandbox)
+  new vm.Script(src.slice(from, to) +
+    ';globalThis.__undo = { UndoStack: UndoStack, BUDGET: UNDO_BUDGET, TILE: UNDO_TILE }',
+  { filename: 'mapeditor-undo.js' }).runInContext(sandbox)
+  const api = sandbox.__undo
+
+  const budget = 64 * 1024
+  const stack = new api.UndoStack(budget)
+  const tile = () => ({ image: { data: new Uint8ClampedArray(api.TILE * api.TILE * 4) } })
+  for (let i = 0; i < 200; i++) stack.push({ layer: 'terrain', tiles: [tile(), tile()] })
+  assert(stack.bytes <= budget, 'the stack grew to ' + stack.bytes + ' bytes past a ' + budget + ' budget')
+  assert(stack.depth() > 0 && stack.depth() < 200,
+    'nothing was evicted, or everything was: depth ' + stack.depth())
+
+  // A stroke too big for the whole budget still leaves something to undo.
+  const tight = new api.UndoStack(16)
+  tight.push({ layer: 'terrain', tiles: [tile()] })
+  assert(tight.depth() === 1, 'an oversized stroke evicted itself and cannot be taken back')
+
+  assert(api.BUDGET >= 16 * 1024 * 1024 && api.BUDGET <= 256 * 1024 * 1024,
+    'the shipped budget is not in the tens of megabytes: ' + api.BUDGET)
+  return 'oldest evicted past ' + Math.round(api.BUDGET / (1024 * 1024)) + ' MB, one step always kept'
+})
+
+/**
+ * The renderer stack in a VM, with a canvas and an Image.
+ *
+ * Separate from bootConsole() because the editor is the only part that needs
+ * real pixels, and the harness's PNG codec is not something every other check
+ * should have to carry.
+ */
+function bootEditor(opts = {}) {
+  const { createDom } = require('./dom-harness')
+  const dom = createDom()
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {} },
+    document: dom.document,
+    window: dom.window,
+    navigator: { language: 'en-US' },
+    location: { search: '' },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    WeakSet,
+    Image: dom.Image,
+    MutationObserver: dom.window.MutationObserver,
+    electron: { log() {}, customMaps: opts.customMaps || null },
+  }
+  sandbox.globalThis = sandbox
+  sandbox.self = sandbox
+  sandbox.window.document = dom.document
+  vm.createContext(sandbox)
+  const src = prelude.build({ reload: true, mods: [], locale: 'en' })
+  new vm.Script(src, { filename: 'prelude.js' }).runInContext(sandbox)
+  return { sandbox, dom, S: sandbox.__SMLN__ }
+}
+
+/** First descendant carrying this class, the way a querySelector would find it. */
+function findByClass(root, className) {
+  const found = []
+  ;(function walk(node) {
+    for (const child of node.childNodes || []) {
+      if ((child.className || '').split(/\s+/).includes(className)) found.push(child)
+      walk(child)
+    }
+  })(root)
+  return found[0] || null
+}
+
+check('a painted map survives being saved and read back off disk', () => {
+  // The test that matters most: a document is created at a requested size,
+  // painted, written as six PNGs, read back from the file, and re-encoded.
+  // Every step the format actually goes through is exercised - decode, canvas,
+  // encode - so a defect in any of them shows up as pixels that changed.
+  const maps = require('../src/mods/custom-maps')
+  const harness = require('./dom-harness')
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-roundtrip-'))
+  const mapsDir = path.join(root, 'custom_maps')
+  const WIDTH = 64
+  const HEIGHT = 48
+
+  const { S, dom, sandbox } = bootEditor()
+  sandbox.electron.customMaps = {
+    load: (id) => Promise.resolve(
+      JSON.parse(fs.readFileSync(path.join(mapsDir, id + '.custommap'), 'utf8').split('\n')[1])),
+  }
+  const calls = []
+  S.callMain = (action, payload) => {
+    calls.push(action)
+    if (action !== 'saveCustomMap') return Promise.resolve({ ok: false, reason: 'unexpected ' + action })
+    // The real main-process handler, minus Electron: the same function
+    // src/main/entry.js calls, against a real folder.
+    return Promise.resolve(maps.saveDocument(mapsDir, payload))
+  }
+
+  assert(S.mapEditor && typeof S.mapEditor.open === 'function', 'the editor did not install')
+  assert(!S.mapEditor.isOpen(), 'the editor was open before anything opened it')
+
+  const decoded = (text, layer) => harness.decodePng(
+    Buffer.from(JSON.parse(text.split('\n')[1])[layer].dataUrl.split(',')[1], 'base64'))
+  /** A save is a round trip through the main process; let it land. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  return S.mapEditor.open(null, { width: WIDTH, height: HEIGHT, name: 'Round Trip' }).then(() => {
+    assert(S.mapEditor.isOpen(), 'open() did not open the editor')
+    const overlay = dom.document.getElementById('smln-mapedit')
+    assert(overlay, 'the editor overlay is not in the document')
+    const view = findByClass(overlay, 'view')
+    const save = findByClass(overlay, 'save')
+    assert(view && save, 'the editor has no canvas or no save button')
+
+    // The map is fitted and centred, so the middle of the view is the middle
+    // of the map whatever the nominal size of the harness's box.
+    const cx = harness.NOMINAL.width / 2
+    const cy = harness.NOMINAL.height / 2
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', { clientX: cx, clientY: cy }))
+    view.dispatch('mousemove', harness.mouseEvent('mousemove', { clientX: cx + 20, clientY: cy }))
+    dom.window.emit('mouseup', {})
+
+    save.dispatch('click', { type: 'click' })
+    assert(calls.length === 1 && calls[0] === 'saveCustomMap',
+      'Save did not reach the main process: ' + JSON.stringify(calls))
+    return settle()
+  }).then(() => {
+    const files = fs.readdirSync(mapsDir)
+    assert(files.length === 1, 'expected one map file, got ' + JSON.stringify(files))
+    const firstText = fs.readFileSync(path.join(mapsDir, files[0]), 'utf8')
+    const seen = maps.inspect(firstText)
+    assert(seen.ok, 'the editor wrote a file the importer refuses: ' + seen.reason)
+    assert(seen.meta.params.width === WIDTH && seen.meta.params.height === HEIGHT,
+      'the saved size is not the size that was asked for: ' + JSON.stringify(seen.meta.params))
+
+    const painted = decoded(firstText, 'terrain')
+    assert(painted.width === WIDTH && painted.height === HEIGHT,
+      'the terrain PNG is ' + painted.width + 'x' + painted.height)
+    let inked = 0
+    for (let i = 3; i < painted.data.length; i += 4) if (painted.data[i] !== 0) inked++
+    assert(inked > 0, 'nothing was painted, so the round trip would be trivially true')
+
+    // The five other layers are written blank and that is deliberate: they are
+    // deny-lists and decoration, and a blank one means "nothing here".
+    for (const layer of ['lights', 'lightsMeta', 'sensors', 'authorization', 'wall']) {
+      const l = decoded(firstText, layer)
+      assert(l.width === WIDTH && l.height === HEIGHT, layer + ' is the wrong size')
+    }
+
+    return S.mapEditor.open(seen.meta.id).then(() => {
+      const overlay2 = dom.document.getElementById('smln-mapedit')
+      findByClass(overlay2, 'save').dispatch('click', { type: 'click' })
+      return settle()
+    }).then(() => {
+      const secondText = fs.readFileSync(path.join(mapsDir, files[0]), 'utf8')
+      assert(fs.readdirSync(mapsDir).length === 1,
+        'saving an edited map made a second file instead of saving over it')
+
+      for (const layer of maps.LAYERS) {
+        const before = decoded(firstText, layer)
+        const after = decoded(secondText, layer)
+        assert(before.width === after.width && before.height === after.height,
+          layer + ' changed size across the round trip')
+        for (let i = 0; i < before.data.length; i++) {
+          assert(before.data[i] === after.data[i],
+            layer + ' changed at byte ' + i + ': ' + before.data[i] + ' became ' + after.data[i])
+        }
+      }
+      S.mapEditor.close()
+      assert(!S.mapEditor.isOpen(), 'close() left the editor open')
+      return inked + ' painted pixels and all six layers came back identical at ' + WIDTH + 'x' + HEIGHT
+    })
+  }).then(
+    (detail) => { fs.rmSync(root, { recursive: true, force: true }); return detail },
+    (e) => { fs.rmSync(root, { recursive: true, force: true }); throw e })
+})
+
+check('the editor is reachable from the maps browser and knows no colours', () => {
+  const editorSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
+  const mapsSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapsui.js'), 'utf8')
+
+  assert(prelude.PARTS.includes('mapeditor.js'), 'mapeditor.js is not in the injected prelude')
+  assert(/maps\.newMap/.test(mapsSrc) && /maps\.edit/.test(mapsSrc),
+    'the maps overlay offers neither New map nor Edit')
+
+  // Nearest-neighbour twice over: the CSS covers the browser scaling the
+  // canvas element, the flag covers drawImage scaling the pixels.
+  assert(/image-rendering:pixelated/.test(editorSrc), 'the view canvas is not pixelated')
+  assert(/imageSmoothingEnabled = false/.test(editorSrc), 'the drawing context smooths')
+
+  // The palette is another investigation's answer. One placeholder, one seam,
+  // and no colour in this file named after a material - a wrong name here is
+  // exactly how a map comes out hollow.
+  const inks = editorSrc.match(/PLACEHOLDER_INK\s*=/g) || []
+  assert(inks.length === 1, 'the editor ships ' + inks.length + ' placeholder colours; it may ship one')
+  assert(!/['"]\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}['"]\s*:/.test(editorSrc),
+    'the editor carries a colour-keyed table, which is the palette it was told not to invent')
+  assert(/THE PALETTE SEAM/.test(editorSrc), 'the palette seam is no longer marked')
+  // Prose may say what the placeholder is not; a string or a key would be the
+  // editor claiming to know what a colour means, which it does not.
+  assert(!/['"](stone|bedrock|dirt|sand|grass|water|lava|solid|empty)['"]/i.test(editorSrc) &&
+    !/\b(stone|bedrock|dirt|grass|lava|sandium)\s*:/i.test(editorSrc),
+    'the editor names a material, which is the defect the palette split exists to prevent')
+  return 'registered, reachable, nearest-neighbour, and one unnamed placeholder colour'
+})
+
 if (archive) archive.close()
 
 // Wait for the async checks before reporting, or their results land after the

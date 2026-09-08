@@ -707,6 +707,29 @@ async function handleRpc(msg) {
       return { ok: imported.length > 0, imported, failed }
     }
 
+    case 'saveCustomMap': {
+      // The editor's six layers arrive already encoded as PNG data URLs, which
+      // is what a canvas produces and what the game reads. They are written
+      // here rather than through the game's own custom-map IPC so that an
+      // authored map and a mod's map are written by the same serialiser and
+      // cannot drift apart.
+      const hp = runtime.host && runtime.host.paths
+      if (!hp || !hp.userData) return { ok: false, reason: 'the maps folder is unknown on this install' }
+      const mapsDir = path.join(hp.userData, 'custom_maps')
+
+      const result = customMaps.saveDocument(mapsDir, {
+        id: p.id || null,
+        name: p.name,
+        seed: p.seed,
+        params: p.params,
+        createdAt: p.createdAt,
+        layers: p.layers,
+      })
+      if (result.ok) logger.info(`saved custom map "${result.name}" as ${result.file}`)
+      else logger.warn(`custom map save refused: ${result.reason}`)
+      return result
+    }
+
     case 'openModsFolder': {
       const dir = p.dir || modRoots(runtime.host && runtime.host.paths)[0]
       ensureDir(dir)
