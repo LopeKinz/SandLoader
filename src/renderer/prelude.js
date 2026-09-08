@@ -23,6 +23,11 @@
  *   official-runtime delays official entries until that adapter is ready
  *   settingsui/permui defined before modsui.js, which opens them
  *
+ * MODULES is a second, smaller list of plain CommonJS files - the terrain
+ * palette and the map editor's tools, validator and transforms - injected ahead
+ * of every part with a `module`/`require` shim around each. See MODULES for why
+ * they are not parts.
+ *
  * The result is cached only when nothing mod-specific went into it, because
  * the interceptor asks for it on every bundle request.
  */
@@ -85,6 +90,84 @@ const PARTS = [
   'mapeditor.js',
   'hotreload.js',
 ]
+
+/**
+ * CommonJS modules the renderer needs, injected ahead of PARTS.
+ *
+ * These four are not renderer parts and are deliberately not written like
+ * one. They are plain `module.exports` files with no reference to `__SMLN__`,
+ * because `tools/selftest.js` and the main process `require()` the very same
+ * source the game runs - the palette that decides what a colour does, and the
+ * three modules the map editor draws, checks and transforms with. Turning them
+ * into self-installing renderer parts would mean either a second copy or a
+ * wrapper around every one of them, and both are how a table like the palette
+ * comes to say two different things in two places.
+ *
+ * So the prelude supplies what CommonJS would: a `module`, an `exports`, and a
+ * `require` that resolves only the ids listed in `provides` below. Nothing here
+ * reaches the filesystem or invents a resolver - an id that is not in the table
+ * throws, loudly, at install time rather than at the first click.
+ *
+ * `global` is the seam the editor actually reads, so the order matters exactly
+ * as much as PARTS' does: terrain-palette first, because mapeditor-validate
+ * requires it.
+ *
+ * @type {Array<{file:string, global:string, provides:string[]}>}
+ */
+const MODULES = [
+  {
+    file: path.join('..', 'game', 'terrain-palette.js'),
+    global: '__SMLN_TERRAIN_PALETTE__',
+    provides: ['../game/terrain-palette.js', '../game/terrain-palette'],
+  },
+  {
+    // This one already publishes its own global for exactly this reason; the
+    // wrapper gives it a `module` as well, so both routes agree.
+    file: 'mapeditor-tools.js',
+    global: '__SMLN_MAPEDITOR_TOOLS__',
+    provides: ['./mapeditor-tools.js', './mapeditor-tools'],
+  },
+  {
+    file: 'mapeditor-validate.js',
+    global: '__SMLN_MAPEDITOR_VALIDATE__',
+    provides: ['./mapeditor-validate.js', './mapeditor-validate'],
+  },
+  {
+    file: 'mapeditor-transform.js',
+    global: '__SMLN_MAPEDITOR_TRANSFORM__',
+    provides: ['./mapeditor-transform.js', './mapeditor-transform'],
+  },
+]
+
+/**
+ * One module, wrapped so its CommonJS body runs unchanged in the renderer.
+ *
+ * `'use strict'` is the first statement of the wrapper rather than something
+ * the module's own directive establishes: pasted into the middle of a function
+ * body, that directive would be an ordinary string expression and the module
+ * would quietly run sloppy. Making the wrapper strict puts the body back in the
+ * mode it was written in.
+ */
+function moduleChunk(entry, source) {
+  const provides = JSON.stringify(entry.provides)
+  return (
+    ';(function(g){"use strict";\n' +
+    '  var reg=g.__SMLN_CJS__||(g.__SMLN_CJS__={});\n' +
+    '  var module={exports:{}},exports=module.exports;\n' +
+    '  function require(id){\n' +
+    '    if(Object.prototype.hasOwnProperty.call(reg,id))return reg[id];\n' +
+    '    throw new Error("[SMLN] ' + entry.file.replace(/[\\\\"]/g, '/') +
+    ' requires \\""+id+"\\", which the prelude does not carry");\n' +
+    '  }\n' +
+    '  try{\n' + source + '\n' +
+    '  }catch(e){console.error("[SMLN] module ' + entry.file.replace(/[\\\\"]/g, '/') +
+    ' failed to install:",e);return}\n' +
+    '  g.' + entry.global + '=module.exports;\n' +
+    '  var ids=' + provides + ';\n' +
+    '  for(var i=0;i<ids.length;i++)reg[ids[i]]=module.exports;\n' +
+    '})(typeof globalThis!=="undefined"?globalThis:window);'
+  )
+}
 
 /**
  * Emit `<global>.<name> = <json>` without ever interpolating raw text.
@@ -166,6 +249,20 @@ function build(opts = {}) {
   chunks.push(globalAssign('__SMLN_LOCALE__', opts.locale || null))
   chunks.push(globalAssign('__SMLN_PROBLEMS__', opts.problems || { problems: [], summary: { total: 0, errors: 0, warnings: 0, mods: [] } }))
   chunks.push(globalAssign('__SMLN_BOOT__', opts.boot || null))
+
+  // Before the parts, because mapeditor.js reads these globals as it installs.
+  for (const entry of MODULES) {
+    const file = path.join(__dirname, entry.file)
+    let source
+    try {
+      source = fs.readFileSync(file, 'utf8')
+    } catch (e) {
+      chunks.push(`/* --- ${entry.file}: unavailable (${e.code || e.message}) --- */`)
+      continue
+    }
+    chunks.push(`/* --- ${entry.file} (module) --- */`)
+    chunks.push(moduleChunk(entry, source))
+  }
 
   for (const part of PARTS) {
     const file = path.join(__dirname, part)
@@ -310,4 +407,7 @@ function bidirectional(table) {
 
 function invalidate() { cache = null }
 
-module.exports = { build, buildWorker, invalidate, PARTS, VERSION, officialRendererMeta, wrapOfficialRenderer }
+module.exports = {
+  build, buildWorker, invalidate, PARTS, MODULES, VERSION,
+  officialRendererMeta, wrapOfficialRenderer,
+}

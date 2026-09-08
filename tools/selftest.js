@@ -6068,8 +6068,11 @@ check('a painted map survives being saved and read back off disk', () => {
   const harness = require('./dom-harness')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-roundtrip-'))
   const mapsDir = path.join(root, 'custom_maps')
-  const WIDTH = 64
-  const HEIGHT = 48
+  // Just over the floor the fixed spawn imposes (158 x 201). Below it the
+  // editor raises the size rather than creating a map the player starts
+  // outside of, so a smaller number here would not be the size that came back.
+  const WIDTH = 160
+  const HEIGHT = 204
 
   const { S, dom, sandbox } = bootEditor()
   sandbox.electron.customMaps = {
@@ -6125,8 +6128,17 @@ check('a painted map survives being saved and read back off disk', () => {
     const painted = decoded(firstText, 'terrain')
     assert(painted.width === WIDTH && painted.height === HEIGHT,
       'the terrain PNG is ' + painted.width + 'x' + painted.height)
+    // A blank document's terrain is air, not transparency - alpha 0 is Fog -
+    // so "was anything painted" is "is anything not air", not "is anything
+    // opaque". Every pixel being opaque is itself the rule, and is asserted.
+    const air = require('../src/game/terrain-palette').DEFAULT_EMPTY.rgb
     let inked = 0
-    for (let i = 3; i < painted.data.length; i += 4) if (painted.data[i] !== 0) inked++
+    for (let i = 0; i < painted.data.length; i += 4) {
+      assert(painted.data[i + 3] === 255,
+        'a terrain pixel came back see-through at byte ' + i + ', which the game reads as fog')
+      if (painted.data[i] !== air[0] || painted.data[i + 1] !== air[1] ||
+          painted.data[i + 2] !== air[2]) inked++
+    }
     assert(inked > 0, 'nothing was painted, so the round trip would be trivially true')
 
     // The five other layers are written blank and that is deliberate: they are
@@ -6164,7 +6176,7 @@ check('a painted map survives being saved and read back off disk', () => {
     (e) => { fs.rmSync(root, { recursive: true, force: true }); throw e })
 })
 
-check('the editor is reachable from the maps browser and knows no colours', () => {
+check('the editor is reachable, and still names no colour of its own', () => {
   const editorSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
   const mapsSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapsui.js'), 'utf8')
 
@@ -6177,20 +6189,25 @@ check('the editor is reachable from the maps browser and knows no colours', () =
   assert(/image-rendering:pixelated/.test(editorSrc), 'the view canvas is not pixelated')
   assert(/imageSmoothingEnabled = false/.test(editorSrc), 'the drawing context smooths')
 
-  // The palette is another investigation's answer. One placeholder, one seam,
-  // and no colour in this file named after a material - a wrong name here is
-  // exactly how a map comes out hollow.
-  const inks = editorSrc.match(/PLACEHOLDER_INK\s*=/g) || []
-  assert(inks.length === 1, 'the editor ships ' + inks.length + ' placeholder colours; it may ship one')
+  // The palette seam is closed - the table landed and the editor reads it -
+  // but the rule the seam existed to enforce did not go away with it: this
+  // file may not hold an opinion about what a colour means. Every colour it
+  // paints comes out of terrain-palette.js, and a hard-coded triple or a
+  // colour-keyed table here would be a second, unreviewed palette.
+  assert(/__SMLN_TERRAIN_PALETTE__/.test(editorSrc),
+    'the editor no longer reads the palette module')
+  assert(!/PLACEHOLDER_INK/.test(editorSrc),
+    'the placeholder ink is still here, so the palette was never actually wired up')
+  assert(!/\[\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*255\s*\]/.test(editorSrc),
+    'the editor hard-codes an opaque colour instead of taking one from the palette')
   assert(!/['"]\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}['"]\s*:/.test(editorSrc),
     'the editor carries a colour-keyed table, which is the palette it was told not to invent')
-  assert(/THE PALETTE SEAM/.test(editorSrc), 'the palette seam is no longer marked')
-  // Prose may say what the placeholder is not; a string or a key would be the
-  // editor claiming to know what a colour means, which it does not.
-  assert(!/['"](stone|bedrock|dirt|sand|grass|water|lava|solid|empty)['"]/i.test(editorSrc) &&
+  // Prose may describe the rules; a string or a key naming a material would be
+  // the editor claiming to know what a colour means, which it still does not.
+  assert(!/['"](stone|bedrock|dirt|sand|grass|water|lava)['"]/i.test(editorSrc) &&
     !/\b(stone|bedrock|dirt|grass|lava|sandium)\s*:/i.test(editorSrc),
     'the editor names a material, which is the defect the palette split exists to prevent')
-  return 'registered, reachable, nearest-neighbour, and one unnamed placeholder colour'
+  return 'registered, reachable, nearest-neighbour, and every colour still comes from the table'
 })
 
 // ----------------------------------------------------- map editor transforms
@@ -7617,4 +7634,649 @@ check('the story SDK files its refusals as problems, not only as log lines', () 
     'info-level chatter would be filed as problems')
   assert(/catch/.test(body), 'a failed report could take the SDK down with it')
   return 'warn and error reach the panel, info does not, and a failure to file is survivable'
+})
+
+// ------------------------------------------------- the map editor's interface
+// The four modules above are proven as functions; these prove the editor is
+// actually wired to them, which is a separate thing and the one that decides
+// what a person can do. They drive the real overlay through tools/dom-harness.js
+// - real DOM events, real canvas pixels, real PNGs - because "the button
+// exists" is not the same claim as "clicking it writes the right colour".
+
+/** Every descendant of a node, in document order. */
+function mapUiNodes(root) {
+  const out = []
+  ;(function walk(node) {
+    for (const child of node.childNodes || []) { out.push(child); walk(child) }
+  })(root)
+  return out
+}
+
+function mapUiByText(nodes, text) {
+  return nodes.find((e) => e.textContent === text) || null
+}
+
+function mapUiByClass(nodes, cls) {
+  return nodes.filter((e) => mapUiHasClass(e, cls))
+}
+
+/**
+ * Read the class off the attribute rather than off classList.
+ *
+ * The harness's classList only knows what add/toggle put in it, and the editor
+ * sets these particular classes by assigning className - so asking classList
+ * would answer "no" to every one of them and quietly pass every assertion.
+ */
+function mapUiHasClass(el, cls) {
+  return (el.className || '').split(/\s+/).includes(cls)
+}
+
+/**
+ * The six layer canvases, in the order the editor created them - which is the
+ * order the game reads them in. The view canvas is excluded by its class, not
+ * by its size, because a map the size of the harness's nominal box would
+ * otherwise be indistinguishable from it.
+ */
+function mapUiLayers(dom, width, height) {
+  return dom.document._all.filter((e) => e.tagName === 'CANVAS' &&
+    e.className !== 'view' && e.width === width && e.height === height)
+}
+
+function mapUiPixel(canvas, x, y) {
+  const d = canvas._data()
+  const i = (y * d.width + x) * 4
+  return [d.pixels[i], d.pixels[i + 1], d.pixels[i + 2], d.pixels[i + 3]]
+}
+
+/** A point in the middle of the stage, which fit-view puts in the middle of the map. */
+function mapUiCentre(harness) {
+  return { clientX: harness.NOMINAL.width / 2, clientY: harness.NOMINAL.height / 2 }
+}
+
+/** A map size just above the editor's own floor. */
+const MAPUI_W = 176
+const MAPUI_H = 216
+
+check('the prelude carries the four map modules into the renderer', () => {
+  // They are plain CommonJS - the self-test and the main process require the
+  // same files - so the renderer needs a module/require shim rather than a
+  // second copy of each. If that shim breaks, every feature below fails in the
+  // game while every unit test here still passes, which is the failure mode
+  // worth a check of its own.
+  const wanted = [
+    '__SMLN_TERRAIN_PALETTE__', '__SMLN_MAPEDITOR_TOOLS__',
+    '__SMLN_MAPEDITOR_VALIDATE__', '__SMLN_MAPEDITOR_TRANSFORM__',
+  ]
+  for (const name of wanted) {
+    assert(prelude.MODULES.some((m) => m.global === name), name + ' is not in prelude.MODULES')
+  }
+  const { sandbox } = bootEditor()
+  const pal = sandbox.__SMLN_TERRAIN_PALETTE__
+  const tools = sandbox.__SMLN_MAPEDITOR_TOOLS__
+  const validate = sandbox.__SMLN_MAPEDITOR_VALIDATE__
+  const transform = sandbox.__SMLN_MAPEDITOR_TRANSFORM__
+  assert(pal && typeof pal.paintable === 'function', 'the palette did not reach the renderer')
+  assert(tools && typeof tools.eraser === 'function', 'the drawing tools did not reach the renderer')
+  assert(validate && typeof validate.validate === 'function', 'the validator did not reach the renderer')
+  assert(transform && typeof transform.resize === 'function', 'the transforms did not reach the renderer')
+
+  // mapeditor-validate.js requires the palette by path. That require is served
+  // by the shim, so the renderer's validator and its picker read one table.
+  assert(pal.paintable().length === require('../src/game/terrain-palette').paintable().length,
+    'the renderer palette and the Node palette disagree about how many colours are offered')
+  assert(validate.spawnCell(480).x === 318, 'the renderer validator lost the spawn formula')
+  return 'all four install, and the validator resolves its require of the palette'
+})
+
+check('the palette picker offers exactly the paintable colours, and no broken one', () => {
+  // The whole reason the palette module exists is that an author must not be
+  // able to pick a colour without knowing what the player gets. That means two
+  // things at once: everything safe is reachable, and the colours that make the
+  // game abandon the map are not offered at all.
+  const pal = require('../src/game/terrain-palette')
+  const { S, dom } = bootEditor()
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Palette' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const swatches = mapUiByClass(mapUiNodes(overlay), 'swatch')
+    const offered = pal.paintable()
+
+    assert(swatches.length === offered.length,
+      'the picker shows ' + swatches.length + ' colours for ' + offered.length + ' paintable ones')
+    const shown = swatches.map((b) => b.getAttribute('data-hex'))
+    const broken = pal.TERRAIN.filter((e) => e.kind === 'broken')
+    assert(broken.length > 0, 'the table has no broken colour, so this check proves nothing')
+    for (const bad of broken) {
+      assert(shown.indexOf(bad.hex) === -1,
+        'the picker offers ' + bad.hex + ', which stops the map loading at all')
+    }
+    for (const entry of offered) {
+      assert(shown.indexOf(entry.hex) >= 0, entry.hex + ' is paintable but is not offered')
+    }
+
+    // Grouped in the table's own order, so the buckets a reader scans are the
+    // buckets the table classified.
+    const order = shown.map((hex) => pal.byHex(hex).kind)
+    let at = 0
+    for (const kind of pal.KINDS) {
+      while (at < order.length && order[at] === kind) at++
+    }
+    assert(at === order.length,
+      'the picker interleaves the palette groups instead of showing them in KINDS order')
+
+    // The note is what turns "Solid rock" into "Solid rock, but the starting
+    // shovel does nothing to it", so it has to be reachable from the button.
+    for (const b of swatches) {
+      const entry = pal.byHex(b.getAttribute('data-hex'))
+      const title = b.getAttribute('title') || ''
+      assert(title.indexOf(entry.label) >= 0, entry.hex + ' does not show its own label')
+      if (entry.note) {
+        assert(title.indexOf(entry.note) >= 0, entry.hex + ' hides its note, which is the warning')
+      }
+      // The fog rows say "blocks until dug" in the label on purpose. Shortening
+      // one is how an author reaches for fog believing it is rock.
+      if (/blocks until dug/.test(entry.label)) {
+        assert(title.indexOf('blocks until dug') >= 0,
+          entry.hex + ' lost the "blocks until dug" warning out of its label')
+      }
+    }
+    assert(swatches.some((b) => /blocks until dug/.test(
+      pal.byHex(b.getAttribute('data-hex')).label)),
+    'no fog colour is offered, so the label rule was never exercised')
+
+    // The current colour has to be readable without hovering anything.
+    const current = mapUiByClass(mapUiNodes(overlay), 'current')[0]
+    assert(current, 'there is no current-colour readout')
+    assert(mapUiNodes(current).some((e) => e.textContent === pal.DEFAULT_SOLID.label),
+      'the current colour does not name itself')
+    return swatches.length + ' offered, ' + broken.length + ' withheld, notes and fog labels intact'
+  })
+})
+
+check('erasing writes the palette empty colour, never transparency', () => {
+  // Alpha 0 is not air in this game - it resolves to Fog, which collides,
+  // floods when broken and leaves nothing behind. An eraser that cleared to
+  // transparent would fill a map with the worst material in it, and the map
+  // would look perfect in every preview.
+  const harness = require('./dom-harness')
+  const pal = require('../src/game/terrain-palette')
+  const { S, dom } = bootEditor()
+  const air = pal.DEFAULT_EMPTY.rgb
+  const dirt = pal.DEFAULT_SOLID.rgb
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Eraser' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const view = mapUiByClass(nodes, 'view')[0]
+    const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+    const centre = mapUiCentre(harness)
+
+    // A blank document is air, not transparency, for the same reason.
+    const start = terrain._data().pixels
+    for (let i = 3; i < start.length; i += 4) {
+      assert(start[i] === 255, 'a blank map starts see-through, which the game reads as fog')
+    }
+    assert(mapUiPixel(terrain, 4, 4).join(',') === air.concat(255).join(','),
+      'a blank map does not start as the palette empty colour')
+
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+    dom.window.emit('mouseup', {})
+
+    // Find what the brush wrote, rather than recomputing the editor's geometry.
+    const d = terrain._data()
+    let painted = null
+    for (let y = 0; y < d.height && !painted; y++) {
+      for (let x = 0; x < d.width; x++) {
+        const i = (y * d.width + x) * 4
+        if (d.pixels[i] !== air[0] || d.pixels[i + 1] !== air[1] || d.pixels[i + 2] !== air[2]) {
+          painted = { x, y }
+          break
+        }
+      }
+    }
+    assert(painted, 'the brush painted nothing, so there is nothing to erase')
+    assert(mapUiPixel(terrain, painted.x, painted.y).join(',') === dirt.concat(255).join(','),
+      'the brush did not paint the palette default: ' + mapUiPixel(terrain, painted.x, painted.y))
+
+    mapUiByText(nodes, 'Eraser').dispatch('click', { type: 'click' })
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+    dom.window.emit('mouseup', {})
+
+    const erased = mapUiPixel(terrain, painted.x, painted.y)
+    assert(erased[3] === 255, 'the eraser wrote alpha ' + erased[3] + ', and alpha 0 is fog')
+    assert(erased.join(',') === air.concat(255).join(','),
+      'the eraser wrote ' + erased + ' instead of the palette empty colour ' + air)
+
+    // Nothing anywhere may be see-through after an erase, either.
+    const after = terrain._data().pixels
+    for (let i = 3; i < after.length; i += 4) {
+      assert(after[i] === 255, 'erasing left a see-through pixel somewhere in the terrain layer')
+    }
+    return 'erased to ' + air.join(',') + ' at full opacity, with no transparent pixel anywhere'
+  })
+})
+
+check('a save is blocked by an error and allowed by a warning', () => {
+  // The distinction is the whole point of the panel: an error is something the
+  // player never gets past, a warning is something they merely notice. Blocking
+  // on both would teach authors to ignore the block.
+  const harness = require('./dom-harness')
+  const mapValidate = require('../src/renderer/mapeditor-validate')
+  const { S, dom, sandbox } = bootEditor()
+
+  // A map whose terrain is entirely see-through: the game turns every one of
+  // those pixels into sealed fog. It is an error, and the map still opens in
+  // the editor so it can be fixed.
+  const clear = new Uint8ClampedArray(MAPUI_W * MAPUI_H * 4)
+  const url = 'data:image/png;base64,' +
+    harness.encodePng(MAPUI_W, MAPUI_H, clear).toString('base64')
+  const layer = { width: MAPUI_W, height: MAPUI_H, dataUrl: url }
+  sandbox.electron.customMaps = {
+    load: () => Promise.resolve({
+      id: 'broken', name: 'See-through', params: { width: MAPUI_W, height: MAPUI_H },
+      terrain: layer, lights: layer, lightsMeta: layer,
+      sensors: layer, authorization: layer, wall: layer,
+    }),
+  }
+  const calls = []
+  S.callMain = (action) => {
+    calls.push(action)
+    return Promise.resolve({ ok: true, id: 'saved', file: 'saved.custommap' })
+  }
+
+  // What the module itself says about exactly these pixels - the panel has to
+  // show that sentence, not a summary of it.
+  const buffer = () => ({
+    data: new Uint8ClampedArray(MAPUI_W * MAPUI_H * 4), width: MAPUI_W, height: MAPUI_H,
+  })
+  const expected = mapValidate.validate({
+    params: { width: MAPUI_W, height: MAPUI_H },
+    layers: {
+      terrain: buffer(), lights: buffer(), lightsMeta: buffer(),
+      sensors: buffer(), authorization: buffer(), wall: buffer(),
+    },
+  }).problems
+  const expectedErrors = expected.filter((p) => p.severity === 'error')
+  const expectedWarnings = expected.filter((p) => p.severity !== 'error')
+  assert(expectedErrors.length > 0 && expectedWarnings.length > 0,
+    'the fixture does not produce both an error and a warning, so it proves neither half')
+
+  return S.mapEditor.open('broken').then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const note = mapUiByClass(nodes, 'note')[0]
+    const save = mapUiByClass(nodes, 'save')[0]
+
+    save.dispatch('click', { type: 'click' })
+    assert(calls.length === 0,
+      'the map was saved despite ' + expectedErrors.length + ' error(s): ' + JSON.stringify(calls))
+    assert(/not saved/i.test(note.textContent),
+      'nothing said the save was refused: "' + note.textContent + '"')
+    assert(/error/i.test(note.textContent) && /warning/i.test(note.textContent),
+      'the refusal does not say which of the two blocks a save: "' + note.textContent + '"')
+
+    // Verbatim, because the module wrote these for a person holding a brush.
+    const shown = mapUiByClass(mapUiNodes(overlay), 'problem')
+    assert(shown.length === expected.length,
+      'the panel lists ' + shown.length + ' problems for ' + expected.length)
+    for (const p of expected) {
+      assert(shown.some((b) => b.textContent === p.message),
+        'the panel paraphrased or dropped: ' + p.code)
+    }
+    // Severity has to be readable off each row, not only from its position.
+    for (const p of expectedErrors) {
+      assert(mapUiHasClass(shown.find((b) => b.textContent === p.message), 'error'),
+        p.code + ' is not marked as an error')
+    }
+    for (const p of expectedWarnings) {
+      assert(mapUiHasClass(shown.find((b) => b.textContent === p.message), 'warning'),
+        p.code + ' is not marked as a warning')
+    }
+
+    // A problem that carries a position takes the view there. "0, 0" in a
+    // message is only useful if the author can get to 0, 0.
+    const located = expected.find((p) => p.at)
+    assert(located, 'no problem in this fixture carries a position')
+    const view = mapUiByClass(nodes, 'view')[0]
+    const framed = Array.from(view._data().pixels)
+    mapUiByText(mapUiNodes(overlay), located.message).dispatch('click', { type: 'click' })
+    const moved = view._data().pixels
+    assert(framed.some((v, i) => v !== moved[i]),
+      'clicking a problem at ' + located.at.x + ', ' + located.at.y + ' did not move the view')
+
+    // Now the other half: a map with warnings and no errors saves.
+    const second = bootEditor()
+    const calls2 = []
+    second.S.callMain = (action) => {
+      calls2.push(action)
+      return Promise.resolve({ ok: true, id: 'ok', file: 'ok.custommap' })
+    }
+    return second.S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Air' })
+      .then(() => {
+        const o2 = second.dom.document.getElementById('smln-mapedit')
+        // Untouched, a new map is air from edge to edge - nothing solid to
+        // stand on. That is a warning, and warnings do not block.
+        mapUiByText(mapUiNodes(o2), 'Check map').dispatch('click', { type: 'click' })
+        const shown2 = mapUiByClass(mapUiNodes(o2), 'problem')
+        assert(shown2.length > 0, 'a blank map reported nothing, so nothing is being checked')
+        for (const b of shown2) {
+          assert(!mapUiHasClass(b, 'error'), 'a blank map reports an error: ' + b.textContent)
+        }
+        mapUiByClass(mapUiNodes(o2), 'save')[0].dispatch('click', { type: 'click' })
+        assert(calls2.length === 1 && calls2[0] === 'saveCustomMap',
+          'a map with only warnings was not saved: ' + JSON.stringify(calls2))
+        return new Promise((resolve) => setTimeout(resolve, 0)).then(() =>
+          expectedErrors.length + ' error(s) blocked a save; ' + shown2.length +
+          ' warning(s) did not')
+      })
+  })
+})
+
+check('a transform runs on all six layers at once, as one undo step', () => {
+  // The game fills its grids using each image's own width as the stride, so a
+  // layer left at the old size does not fail - it smears what was drawn on it
+  // diagonally across the world and says nothing. That makes "all six, or
+  // none" the property worth asserting, not "the terrain layer resized".
+  const harness = require('./dom-harness')
+  const pal = require('../src/game/terrain-palette')
+  const { S, dom } = bootEditor()
+  const air = pal.DEFAULT_EMPTY.rgb
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Shape' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const layers = mapUiLayers(dom, MAPUI_W, MAPUI_H)
+    assert(layers.length === 6, 'expected six layer canvases, found ' + layers.length)
+
+    // Something asymmetric to follow through the transform.
+    const view = mapUiByClass(mapUiNodes(overlay), 'view')[0]
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', mapUiCentre(harness)))
+    dom.window.emit('mouseup', {})
+    const before = Array.from(layers[0]._data().pixels)
+
+    const grown = { w: MAPUI_W + 40, h: MAPUI_H + 30 }
+    mapUiByText(mapUiNodes(overlay), 'Resize...').dispatch('click', { type: 'click' })
+    const inputs = mapUiNodes(overlay).filter((e) => e.tagName === 'INPUT' && e.className !== 'name')
+    assert(inputs.length === 2, 'the resize dialog does not ask for a width and a height')
+    inputs[0].value = String(grown.w)
+    inputs[1].value = String(grown.h)
+    const anchor = mapUiNodes(overlay).find((e) => e.getAttribute && e.getAttribute('title') === 'top-left')
+    assert(anchor, 'the resize dialog has no anchor picker')
+    anchor.dispatch('click', { type: 'click' })
+    mapUiByText(mapUiNodes(overlay), 'Resize').dispatch('click', { type: 'click' })
+
+    for (const canvas of layers) {
+      assert(canvas.width === grown.w && canvas.height === grown.h,
+        'a layer stayed ' + canvas.width + 'x' + canvas.height + ' while the map became ' +
+        grown.w + 'x' + grown.h)
+    }
+    assert(mapUiByClass(mapUiNodes(overlay), 'dims')[0].textContent === grown.w + '×' + grown.h,
+      'the header still advertises the old size')
+
+    // New terrain is air, because a transparent terrain pixel is fog. New space
+    // in the other five is nothing at all, which is what they mean by empty.
+    assert(mapUiPixel(layers[0], grown.w - 2, 2).join(',') === air.concat(255).join(','),
+      'the terrain layer grew into see-through pixels, which the game reads as fog')
+    for (let i = 1; i < layers.length; i++) {
+      assert(mapUiPixel(layers[i], grown.w - 2, 2)[3] === 0,
+        'a non-terrain layer grew into opaque pixels instead of nothing')
+    }
+
+    // One step, not six.
+    const undoBtn = mapUiByText(mapUiNodes(overlay), 'Undo')
+    assert(!undoBtn.disabled, 'the resize left nothing to undo')
+    undoBtn.dispatch('click', { type: 'click' })
+    for (const canvas of layers) {
+      assert(canvas.width === MAPUI_W && canvas.height === MAPUI_H,
+        'undoing the resize left a layer at ' + canvas.width + 'x' + canvas.height)
+    }
+    const restored = layers[0]._data().pixels
+    assert(restored.length === before.length, 'the terrain layer came back a different size')
+    for (let i = 0; i < before.length; i++) {
+      assert(restored[i] === before[i], 'undoing the resize changed terrain at byte ' + i)
+    }
+    // Two edits went in - one dab and one resize - so exactly one undo is left.
+    // A resize that had recorded a step per layer would leave five.
+    assert(!undoBtn.disabled, 'the dab before the resize is no longer undoable')
+    undoBtn.dispatch('click', { type: 'click' })
+    assert(undoBtn.disabled, 'one resize cost more than one undo step')
+    // Put the dab back, so the mirror below has something asymmetric to move.
+    mapUiByText(mapUiNodes(overlay), 'Redo').dispatch('click', { type: 'click' })
+
+    // Mirroring keeps the size and moves the pixels, on every layer.
+    mapUiByText(mapUiNodes(overlay), 'Mirror ⇄').dispatch('click', { type: 'click' })
+    for (const canvas of layers) {
+      assert(canvas.width === MAPUI_W && canvas.height === MAPUI_H,
+        'mirroring changed a layer size to ' + canvas.width + 'x' + canvas.height)
+    }
+    const mirrored = layers[0]._data().pixels
+    for (let y = 0; y < MAPUI_H; y++) {
+      for (let x = 0; x < MAPUI_W; x++) {
+        const src = (y * MAPUI_W + x) * 4
+        const dst = (y * MAPUI_W + (MAPUI_W - 1 - x)) * 4
+        assert(mirrored[dst] === before[src] && mirrored[dst + 3] === before[src + 3],
+          'the mirror did not move terrain at ' + x + ', ' + y)
+      }
+    }
+    return 'resize and mirror both ran on six layers of equal size, each in one undo step'
+  })
+})
+
+check('undo restores exactly the rectangle a tool reported dirty', () => {
+  // mapeditor-tools.js returns a rectangle bounding exactly the bytes it
+  // changed, and the editor's contract is to repaint and record from that and
+  // nothing wider. An over-wide rectangle is not a rounding convenience: it
+  // makes undo restore pixels the stroke never owned, which is a silent way to
+  // lose the work of two strokes ago.
+  const harness = require('./dom-harness')
+  const draw = require('../src/renderer/mapeditor-tools')
+  const pal = require('../src/game/terrain-palette')
+  const { S, dom } = bootEditor()
+  const dirt = pal.DEFAULT_SOLID.rgb.concat(255)
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Undo' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const view = mapUiByClass(nodes, 'view')[0]
+    const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+    const centre = mapUiCentre(harness)
+    const before = Array.from(terrain._data().pixels)
+
+    // A box, because its dirty rectangle is a shape this test can name.
+    mapUiByText(nodes, 'Box').dispatch('click', { type: 'click' })
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+    view.dispatch('mousemove', harness.mouseEvent('mousemove',
+      { clientX: centre.clientX + 24, clientY: centre.clientY + 18 }))
+    dom.window.emit('mouseup', {})
+
+    // What actually changed on the canvas.
+    const after = terrain._data().pixels
+    let x0 = MAPUI_W; let y0 = MAPUI_H; let x1 = -1; let y1 = -1
+    for (let y = 0; y < MAPUI_H; y++) {
+      for (let x = 0; x < MAPUI_W; x++) {
+        const i = (y * MAPUI_W + x) * 4
+        if (after[i] === before[i] && after[i + 1] === before[i + 1] &&
+            after[i + 2] === before[i + 2] && after[i + 3] === before[i + 3]) continue
+        if (x < x0) x0 = x
+        if (x > x1) x1 = x
+        if (y < y0) y0 = y
+        if (y > y1) y1 = y
+      }
+    }
+    assert(x1 >= x0 && y1 >= y0, 'the box tool changed nothing')
+    const changed = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+    assert(changed.w * changed.h < MAPUI_W * MAPUI_H,
+      'the box repainted the whole layer, so no dirty rectangle is being honoured')
+
+    // The module, run again over the original pixels with those corners, has to
+    // report the same rectangle and produce the same bytes. That is the editor
+    // applying the tool's own answer rather than an approximation of it.
+    const replay = { data: new Uint8ClampedArray(before), width: MAPUI_W, height: MAPUI_H }
+    const rect = draw.rectangle(replay, changed.x, changed.y,
+      changed.x + changed.w - 1, changed.y + changed.h - 1, dirt, true)
+    assert(rect && rect.x === changed.x && rect.y === changed.y &&
+      rect.w === changed.w && rect.h === changed.h,
+    'the editor changed ' + JSON.stringify(changed) + ' where the tool reports ' +
+      JSON.stringify(rect))
+    for (let i = 0; i < replay.data.length; i++) {
+      assert(replay.data[i] === after[i], 'the editor and the tool disagree about byte ' + i)
+    }
+
+    // And undo puts every one of those bytes back, and touches nothing else.
+    mapUiByText(nodes, 'Undo').dispatch('click', { type: 'click' })
+    const back = terrain._data().pixels
+    for (let i = 0; i < before.length; i++) {
+      assert(back[i] === before[i],
+        'undo left byte ' + i + ' at ' + back[i] + ' instead of ' + before[i])
+    }
+
+    // The same again for a dragged brush stroke, which is many operations and
+    // still one undo step.
+    mapUiByText(nodes, 'Brush').dispatch('click', { type: 'click' })
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+    view.dispatch('mousemove', harness.mouseEvent('mousemove',
+      { clientX: centre.clientX + 30, clientY: centre.clientY + 6 }))
+    view.dispatch('mousemove', harness.mouseEvent('mousemove',
+      { clientX: centre.clientX + 10, clientY: centre.clientY + 20 }))
+    dom.window.emit('mouseup', {})
+    const dragged = Array.from(terrain._data().pixels)
+    let moved = 0
+    for (let i = 0; i < before.length; i += 4) if (dragged[i] !== before[i]) moved++
+    assert(moved > 0, 'the dragged stroke painted nothing')
+
+    const undoBtn = mapUiByText(nodes, 'Undo')
+    undoBtn.dispatch('click', { type: 'click' })
+    const back2 = terrain._data().pixels
+    for (let i = 0; i < before.length; i++) {
+      assert(back2[i] === before[i], 'undoing a drag left byte ' + i + ' changed')
+    }
+    assert(undoBtn.disabled, 'a single drag cost more than one undo step')
+
+    // Redo puts it back, so undo is not a one-way door.
+    mapUiByText(nodes, 'Redo').dispatch('click', { type: 'click' })
+    const again = terrain._data().pixels
+    for (let i = 0; i < before.length; i++) {
+      assert(again[i] === dragged[i], 'redo did not restore the stroke at byte ' + i)
+    }
+    return changed.w + 'x' + changed.h + ' reported and restored exactly; a ' + moved +
+      '-cell drag is one step, and redo brings it back'
+  })
+})
+
+check('a new map is never made at a size the fixed spawn falls outside of', () => {
+  // Below 158 x 201 the spawn is not merely buried, it is off the map - and the
+  // shove-upward rescue cannot help someone who was never inside the world. So
+  // the size is raised and the reason is said, rather than rounded in silence.
+  const mapsSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'mapsui.js'), 'utf8')
+  const { S, dom } = bootEditor()
+  const limits = S.mapEditor.limits()
+
+  assert(limits.minWidth === 158 && limits.minHeight === 201,
+    'the editor floor is ' + limits.minWidth + ' x ' + limits.minHeight + ', not 158 x 201')
+  assert(/spot/.test(limits.reason) && /158/.test(limits.reason) && /201/.test(limits.reason),
+    'the reason does not explain the fixed spawn: "' + limits.reason + '"')
+
+  // The maps overlay asks the editor rather than keeping its own copy. Prose
+  // may quote the number; code holding it would be a second thing to be wrong,
+  // so the comments come out before that half is checked.
+  const mapsCode = mapsSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert(/limits\.minWidth/.test(mapsCode) && /limits\.minHeight/.test(mapsCode),
+    'the maps overlay does not ask the editor for its floor')
+  assert(!/\b158\b|\b201\b/.test(mapsCode),
+    'the maps overlay hard-codes the floor, which is a second number to be wrong')
+
+  return S.mapEditor.open(null, { width: 40, height: 40, name: 'Tiny' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const layers = mapUiLayers(dom, limits.minWidth, limits.minHeight)
+    assert(layers.length === 6,
+      'a 40x40 map was created anyway: found ' + layers.length + ' layers at the floor size')
+    const note = mapUiByClass(mapUiNodes(overlay), 'note')[0]
+    assert(/158/.test(note.textContent) && /spot/.test(note.textContent),
+      'the size was raised without saying why: "' + note.textContent + '"')
+
+    // And the map that comes out of it is one the validator will let through.
+    const mapValidate = require('../src/renderer/mapeditor-validate')
+    const buffers = {}
+    const names = ['terrain', 'lights', 'lightsMeta', 'sensors', 'authorization', 'wall']
+    names.forEach((name, i) => {
+      const d = layers[i]._data()
+      buffers[name] = { data: d.pixels, width: d.width, height: d.height }
+    })
+    const problems = mapValidate.validate({
+      params: { width: limits.minWidth, height: limits.minHeight },
+      layers: buffers,
+    }).problems
+    const errors = problems.filter((p) => p.severity === 'error')
+    assert(errors.length === 0,
+      'a map the editor just created cannot be saved: ' + errors.map((e) => e.code).join(', '))
+    return 'raised to ' + limits.minWidth + ' x ' + limits.minHeight +
+      ', the reason said out loud, and no error left in it'
+  })
+})
+
+check('the spawn marker is drawn over the map at every zoom, and never into it', () => {
+  // The spawn is fixed and unconditional - the game does not look for open
+  // space - so an author who cannot see where it is cannot avoid burying it.
+  // It has to be visible over every layer and at any zoom, and it must never be
+  // painted into a layer, because then it would be a cell of the world.
+  const { S, dom } = bootEditor()
+  const mapValidate = require('../src/renderer/mapeditor-validate')
+  const spawn = mapValidate.spawnCell(MAPUI_W)
+
+  /** The bounding box of view-canvas pixels a test can pick out by hand. */
+  const boxOf = (canvas, keep) => {
+    const d = canvas._data()
+    let x0 = d.width; let y0 = d.height; let x1 = -1; let y1 = -1
+    for (let y = 0; y < d.height; y++) {
+      for (let x = 0; x < d.width; x++) {
+        const i = (y * d.width + x) * 4
+        if (!keep(d.pixels[i], d.pixels[i + 1], d.pixels[i + 2], d.pixels[i + 3])) continue
+        if (x < x0) x0 = x
+        if (x > x1) x1 = x
+        if (y < y0) y0 = y
+        if (y > y1) y1 = y
+      }
+    }
+    return x1 < x0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+  }
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Spawn' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const view = mapUiByClass(nodes, 'view')[0]
+    const layers = mapUiLayers(dom, MAPUI_W, MAPUI_H)
+
+    // The marker's own translucency is what picks it out of the map behind it:
+    // nothing an author can paint is anything but fully opaque.
+    const isMarker = (r, g, b, a) => a > 0 && a < 255
+    const drawn = (r, g, b, a) => a > 0
+
+    for (const zoom of ['Fit', '1:1']) {
+      mapUiByText(nodes, zoom).dispatch('click', { type: 'click' })
+      const map = boxOf(view, drawn)
+      const marker = boxOf(view, isMarker)
+      assert(map, 'at ' + zoom + ' the map is not drawn at all')
+      assert(marker, 'at ' + zoom + ' there is no spawn marker anywhere on the view')
+
+      // Where the marker sits inside the drawn map has to be where the spawn
+      // cell sits inside the map, at whatever scale the map is drawn.
+      const scale = map.w / MAPUI_W
+      const wantX = map.x + spawn.x * scale
+      const wantY = map.y + spawn.y * scale
+      assert(Math.abs(marker.x - wantX) <= 1.5 && Math.abs(marker.y - wantY) <= 1.5,
+        'at ' + zoom + ' the marker is at ' + marker.x + ', ' + marker.y +
+        ' where the spawn cell is drawn at ' + Math.round(wantX) + ', ' + Math.round(wantY))
+      assert(marker.w <= Math.ceil(scale) + 2 && marker.h <= Math.ceil(scale) + 2,
+        'at ' + zoom + ' the marker covers ' + marker.w + 'x' + marker.h +
+        ' cells rather than the one the player lands in')
+    }
+
+    // And it is decoration on the view, not a pixel of the world: no layer may
+    // hold anything but the opaque colours the palette offers.
+    for (const canvas of layers) {
+      const stray = boxOf(canvas, isMarker)
+      assert(!stray, 'the spawn marker was painted into a layer at ' +
+        JSON.stringify(stray) + ', where it would become part of the map')
+    }
+    return 'marked at ' + spawn.x + ', ' + spawn.y + ' at both zooms, and in no layer'
+  })
 })

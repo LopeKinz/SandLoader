@@ -196,6 +196,8 @@
     '#smln-maps .prompt input:focus{outline:none;border-color:rgba(255,231,0,.45)}',
     '#smln-maps .prompt .pair{display:flex;gap:12px}',
     '#smln-maps .prompt .pair>div{flex:1}',
+    '#smln-maps .prompt .hint{margin-top:12px;color:#94a3b8;font-size:11px;line-height:1.5}',
+    '#smln-maps .prompt .hint.err{color:#f87171}',
     '#smln-maps .prompt .row{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}',
 
     '#smln-maps footer{padding:13px 24px;border-top:1px solid rgba(100,116,139,.34);',
@@ -312,11 +314,30 @@
   }
 
   /**
+   * What the editor says a new map may be.
+   *
+   * Asked for rather than written down here: the floor comes from the game's
+   * fixed spawn point, which the editor derives from the validator's own
+   * formula, and a second copy of the number in this file is a second thing to
+   * be wrong. The fallback is only for a build where the editor is missing, in
+   * which case nothing here can start one anyway.
+   */
+  function editorLimits() {
+    var ed = SMLN.mapEditor
+    var limits = ed && typeof ed.limits === 'function' ? ed.limits() : null
+    return limits || { minWidth: 1, minHeight: 1, defaultWidth: 640, defaultHeight: 400, reason: '' }
+  }
+
+  /**
    * Ask for a size and a name, then start the editor on a blank map.
    *
    * The size cannot be changed later without deciding what happens to the
    * pixels already painted, so it is asked for once, up front, rather than
    * defaulted silently.
+   *
+   * A size under the floor is refused here, with the reason, rather than
+   * quietly rounded up on the other side: an author who typed 100 and got 158
+   * back with no explanation has learned nothing and will type 100 again.
    */
   function promptNewMap() {
     if (!overlay || overlay._prompt) return
@@ -349,9 +370,17 @@
     var hcell = document.createElement('div')
     pair.appendChild(wcell)
     pair.appendChild(hcell)
-    var widthInput = field(tx('maps.newWidth', 'Width (cells)'), '640', wcell)
-    var heightInput = field(tx('maps.newHeight', 'Height (cells)'), '400', hcell)
+    var limits = editorLimits()
+    var widthInput = field(tx('maps.newWidth', 'Width (cells)'),
+      String(limits.defaultWidth), wcell)
+    var heightInput = field(tx('maps.newHeight', 'Height (cells)'),
+      String(limits.defaultHeight), hcell)
     card.appendChild(pair)
+
+    var hint = document.createElement('div')
+    hint.className = 'hint'
+    hint.textContent = limits.reason
+    card.appendChild(hint)
 
     var row = document.createElement('div')
     row.className = 'row'
@@ -366,6 +395,13 @@
     create.addEventListener('click', function () {
       var w = parseInt(widthInput.value, 10)
       var h = parseInt(heightInput.value, 10)
+      if (!(w >= limits.minWidth) || !(h >= limits.minHeight)) {
+        hint.className = 'hint err'
+        hint.textContent = tx('maps.newTooSmall',
+          'At least ' + limits.minWidth + ' × ' + limits.minHeight + ' cells. ' + limits.reason,
+          { width: limits.minWidth, height: limits.minHeight })
+        return
+      }
       closePrompt()
       edit(null, { width: w, height: h, name: nameInput.value })
     })
