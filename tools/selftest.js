@@ -7100,3 +7100,167 @@ check('no fog colour can be mistaken for open air while scanning the palette', (
   assert(/blocks until dug/i.test(hollow.label), '102,102,102 no longer warns that it blocks')
   return '10 fog rows all say "blocks until dug"; the 3 air and 2 water colours do not'
 })
+
+// --- Terrain palette -------------------------------------------------------
+//
+// The data behind the map editor's colour picker. A wrong classification here
+// ships unplayable maps to every author, so these checks are about the table
+// being internally coherent and matching the bundle investigation, not about
+// it being large.
+//
+// Placed after the summary runner only because several agents append here at
+// once; every check below is synchronous, so it still runs before the runner's
+// microtask fires.
+
+check('every terrain palette entry is well formed and its hex agrees with its rgb', () => {
+  const palette = require('../src/game/terrain-palette')
+  assert(Array.isArray(palette.TERRAIN) && palette.TERRAIN.length > 0, 'TERRAIN is not a populated array')
+  for (const e of palette.TERRAIN) {
+    const where = e && e.hex ? e.hex : JSON.stringify(e)
+    assert(Array.isArray(e.rgb) && e.rgb.length === 3, 'rgb is not a triple: ' + where)
+    for (const v of e.rgb) {
+      assert(Number.isInteger(v) && v >= 0 && v <= 255, 'channel out of range in ' + where + ': ' + v)
+    }
+    const expected = '#' + e.rgb.map((v) => v.toString(16).padStart(2, '0')).join('')
+    assert(e.hex === expected, 'hex disagrees with rgb: ' + where + ' should be ' + expected)
+    assert(palette.KINDS.includes(e.kind), 'unknown kind on ' + where + ': ' + e.kind)
+    assert(typeof e.label === 'string' && e.label.length > 0, 'no label on ' + where)
+    assert(typeof e.note === 'string', 'note is not a string on ' + where)
+    assert(e.cellType === null || Number.isInteger(e.cellType), 'cellType is neither null nor an integer on ' + where)
+    // No pass-through terrain type exists, so nothing may be sold as one.
+    assert(!/background/i.test(e.label), 'an entry is labelled as background: ' + where)
+  }
+  return palette.TERRAIN.length + ' entries, all with an rgb triple and a matching hex'
+})
+
+check('no two terrain palette entries claim the same colour', () => {
+  const palette = require('../src/game/terrain-palette')
+  const seen = new Map()
+  for (const e of palette.TERRAIN) {
+    assert(!seen.has(e.hex), 'duplicate hex ' + e.hex + ': "' + seen.get(e.hex) + '" and "' + e.label + '"')
+    seen.set(e.hex, e.label)
+  }
+  return seen.size + ' distinct colours'
+})
+
+check('a palette colour can be looked up by hex in either spelling and by rgb', () => {
+  const palette = require('../src/game/terrain-palette')
+  const stone = palette.byHex('#aaaaaa')
+  assert(stone && stone.cellType === 23, '#aaaaaa did not resolve to Stone')
+  assert(palette.byHex('aaaaaa') === stone, 'the unprefixed spelling gave a different answer')
+  assert(palette.byHex('#AAAAAA') === stone, 'the uppercase spelling gave a different answer')
+  assert(palette.byHex('AaAaAa') === stone, 'the mixed-case unprefixed spelling gave a different answer')
+  assert(palette.byRgb(170, 170, 170) === stone, 'byRgb gave a different answer to byHex')
+
+  // Every entry must be reachable both ways, or the picker can show a swatch
+  // the eyedropper cannot then find.
+  for (const e of palette.TERRAIN) {
+    assert(palette.byHex(e.hex) === e, 'byHex could not find ' + e.hex)
+    assert(palette.byRgb(e.rgb[0], e.rgb[1], e.rgb[2]) === e, 'byRgb could not find ' + e.hex)
+  }
+
+  // A miss is meaningful: the game silently leaves an unrecognised colour Empty.
+  assert(palette.byHex('#010203') === null, 'an unknown colour resolved to something')
+  assert(palette.byHex('#abc') === null, 'a short hex was accepted')
+  assert(palette.byHex('nothex') === null, 'a non-hex string was accepted')
+  assert(palette.byHex(null) === null, 'null was accepted')
+  assert(palette.byRgb(256, 0, 0) === null, 'an out-of-range channel was accepted')
+  assert(palette.byRgb(1.5, 0, 0) === null, 'a fractional channel was accepted')
+  return 'both spellings, both cases, and every entry reachable by hex and by rgb'
+})
+
+check('the editor is offered every palette colour except the ones that break a map', () => {
+  const palette = require('../src/game/terrain-palette')
+  const offered = palette.paintable()
+  const broken = palette.TERRAIN.filter((e) => e.kind === 'broken')
+  assert(broken.length > 0, 'no broken rows are recorded at all')
+  assert(offered.length === palette.TERRAIN.length - broken.length,
+    'paintable() dropped ' + (palette.TERRAIN.length - offered.length) + ' rows but only ' + broken.length + ' are broken')
+  for (const e of offered) assert(e.kind !== 'broken', 'a broken colour is on offer: ' + e.hex)
+  for (const e of broken) {
+    assert(!offered.includes(e), 'a broken colour is on offer: ' + e.hex)
+    assert(e.note.length > 0, 'a broken colour carries no warning: ' + e.hex)
+    // It stays in TERRAIN so an existing map containing it can be flagged.
+    assert(palette.byHex(e.hex) === e, 'a broken colour cannot be recognised in an existing map: ' + e.hex)
+  }
+  // The colour that throws on load, by name, because blacklisting it is the point.
+  const thrower = palette.byRgb(240, 220, 120)
+  assert(thrower && thrower.kind === 'broken', '240,220,120 is not recorded as broken')
+  return offered.length + ' offered, ' + broken.length + ' withheld'
+})
+
+check('the palette classification counts match the bundle investigation', () => {
+  const palette = require('../src/game/terrain-palette')
+  const counts = { solid: 0, empty: 0, fluid: 0, broken: 0 }
+  for (const e of palette.TERRAIN) counts[e.kind]++
+
+  // The investigation counts 50 rows: solid 32, empty 9, fluid 7, broken 2.
+  // Two of those are not colours and cannot carry an rgb, so they are not rows
+  // here: alpha 0 (a rule in the resolver's default arm, yielding Fog - carried
+  // as a warning on #000000) and any unrecognised RGB (which is what a null
+  // lookup means). The remaining 48 colour rows are asserted exactly.
+  assert(counts.solid === 32, 'solid count is ' + counts.solid + ', expected 32')
+  assert(counts.empty === 8, 'empty count is ' + counts.empty + ', expected 8 (9 less the alpha-0 rule)')
+  assert(counts.fluid === 7, 'fluid count is ' + counts.fluid + ', expected 7')
+  assert(counts.broken === 1, 'broken count is ' + counts.broken + ', expected 1 (2 less the unrecognised-colour case)')
+  assert(palette.TERRAIN.length === 48, 'total is ' + palette.TERRAIN.length + ', expected 48')
+
+  // Nothing pass-through exists: the kinds are exactly these four, in this order.
+  assert(palette.KINDS.join(',') === 'solid,empty,fluid,broken', 'KINDS drifted: ' + palette.KINDS.join(','))
+  return 'solid 32, empty 8, fluid 7, broken 1 across 48 colours'
+})
+
+check('the palette defaults are the two colours a new map can rely on', () => {
+  const palette = require('../src/game/terrain-palette')
+  const solid = palette.DEFAULT_SOLID
+  assert(solid && solid.hex === '#000000', 'DEFAULT_SOLID is not 0,0,0: ' + (solid && solid.hex))
+  assert(solid.kind === 'solid', 'DEFAULT_SOLID is not classified solid')
+  assert(solid.cellType === 2, 'DEFAULT_SOLID is not Dirt (CellType 2): ' + solid.cellType)
+  assert(palette.TERRAIN.includes(solid), 'DEFAULT_SOLID is not one of the table rows')
+  // Dirt and a transparent pixel are one bit apart, and transparent yields Fog.
+  assert(/opaque/i.test(solid.note), 'DEFAULT_SOLID does not warn that the pixel must be opaque')
+
+  const empty = palette.DEFAULT_EMPTY
+  assert(empty && empty.hex === '#990000', 'DEFAULT_EMPTY is not 153,0,0: ' + (empty && empty.hex))
+  assert(empty.kind === 'empty', 'DEFAULT_EMPTY is not classified empty')
+  assert(empty.cellType === 0, 'DEFAULT_EMPTY is not Empty (CellType 0): ' + empty.cellType)
+  assert(palette.TERRAIN.includes(empty), 'DEFAULT_EMPTY is not one of the table rows')
+  // It is the only air colour with no side effects; white also sets the horizon.
+  assert(empty.note === '', 'DEFAULT_EMPTY carries a caveat, so it is no longer the side-effect-free eraser')
+  const white = palette.byRgb(255, 255, 255)
+  assert(white && white !== empty && /horizon/i.test(white.note), '255,255,255 does not record its horizon side effect')
+  return 'DEFAULT_SOLID is Dirt at #000000, DEFAULT_EMPTY is #990000 with no side effects'
+})
+
+check('no fog colour can be mistaken for open air while scanning the palette', () => {
+  const palette = require('../src/game/terrain-palette')
+  // The fog family fits no bucket cleanly: it collides on load, then the first
+  // dig anywhere in a connected mass converts all of it. It is grouped by what
+  // it leaves behind, so someone scanning the empty group for a cave would
+  // otherwise reach for it - the collision has to be in the label, not only in
+  // the note. The three real air colours and the two real water colours must
+  // not carry that warning, or it stops meaning anything.
+  const trueAir = ['#ffffff', '#ff0000', '#990000']
+  const trueWater = ['#0000ff', '#6600ff']
+  let fog = 0
+  for (const e of palette.TERRAIN) {
+    if (e.kind !== 'empty' && e.kind !== 'fluid') continue
+    if (trueAir.includes(e.hex) || trueWater.includes(e.hex)) {
+      assert(!/blocks/i.test(e.label), e.hex + ' is real open air or real water but its label says it blocks')
+      continue
+    }
+    fog++
+    assert(/blocks until dug/i.test(e.label),
+      e.hex + ' is grouped as ' + e.kind + ' but its label does not say it blocks until dug: "' + e.label + '"')
+    assert(e.note.length > 0, e.hex + ' is a fog colour with no note explaining what happens when it is dug')
+  }
+  assert(fog === 10, 'expected 10 fog-family rows, found ' + fog)
+  assert(trueAir.length + trueWater.length + fog === 15, 'the empty and fluid groups no longer add up')
+
+  // The colour that produced the hollow test map, by name.
+  const hollow = palette.byRgb(102, 102, 102)
+  assert(hollow && hollow.kind === 'empty', '102,102,102 is no longer grouped by what it leaves behind')
+  assert(/black rock/i.test(hollow.label), '102,102,102 no longer warns that it renders as black rock')
+  assert(/blocks until dug/i.test(hollow.label), '102,102,102 no longer warns that it blocks')
+  return '10 fog rows all say "blocks until dug"; the 3 air and 2 water colours do not'
+})
