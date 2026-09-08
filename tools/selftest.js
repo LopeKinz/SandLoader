@@ -67,6 +67,23 @@ function check(name, fn) {
 }
 
 function assert(cond, msg) { if (!cond) throw new Error(msg) }
+/*
+ * How many times an async check may look before it gives up.
+ *
+ * A budget, not a wall-clock deadline. `check()` does not await an async check:
+ * it collects the promise and keeps running every synchronous check after it,
+ * and some of those compile megabytes of bundle inside `vm`. So the event loop
+ * stays blocked while a deadline measured in milliseconds runs out, and the
+ * check fails for something that happened nowhere near it. That is exactly how
+ * the worker-runtime check started failing: nothing in it changed, the suite
+ * simply grew past four seconds of synchronous work.
+ *
+ * Counting polls measures the thing worth measuring - did the code under test
+ * get its chance and not take it - because a poll only happens when the loop is
+ * free to run one.
+ */
+const POLL_BUDGET = 200
+
 
 /**
  * A minimal but structurally valid PNG, so map tests need no image library.
@@ -2632,9 +2649,9 @@ check('the worker runtime hands mods the captured Sandkit', () => {
   SMLN.state = { sandkit: { getApi: function () { return fakeApi }, workerEvents: {} } }
 
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 4000
+    let polls = POLL_BUDGET
     const tick = () => {
-      if (seen === null && Date.now() < deadline) return setTimeout(tick, 20)
+      if (seen === null && polls-- > 0) return setTimeout(tick, 20)
       try {
         assert(seen === SMLN.state, 'whenWorkerReady never fired after the capture')
         assert(SMLN.sandkit() === SMLN.state.sandkit, 'sandkit() does not return the captured one')
@@ -2716,9 +2733,9 @@ check('the worker shim translates corelib calls onto the game API', () => {
   sandbox.__SMLN_WORKER__.state = { sandkit: { getApi: () => api, workerEvents: {} } }
 
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 4000
+    let polls = POLL_BUDGET
     const tick = () => {
-      if (!sandbox.corelib && Date.now() < deadline) return setTimeout(tick, 20)
+      if (!sandbox.corelib && polls-- > 0) return setTimeout(tick, 20)
       try {
         assert(sandbox.corelib, 'no corelib global was published')
         assert(sandbox.fluxloaderAPI, 'no fluxloaderAPI global was published')
@@ -5580,9 +5597,9 @@ check('captured recipes reach the game with their element names resolved', () =>
   // behind the element promises, and a heavy check elsewhere in this suite can
   // starve a fixed timer long enough to make this look like a failure.
   return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 4000
+    let polls = POLL_BUDGET
     const tick = () => {
-      if (calls.recipes.length < 2 && calls.logs.length < 2 && Date.now() < deadline) {
+      if (calls.recipes.length < 2 && calls.logs.length < 2 && polls-- > 0) {
         return setTimeout(tick, 20)
       }
       try {
