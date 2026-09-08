@@ -124,8 +124,26 @@
   var savedFrom = { state: null, store: null }
   var ticker = null
 
+  /*
+   * A warning or an error also files a problem, so it reaches the Problems
+   * panel and not only the log. The panel is where a player looks when a mod
+   * did not do what they expected, and a dependency refusal that only ever
+   * reaches a log file is invisible to exactly the person it is for.
+   *
+   * Fire and forget: the loader de-duplicates and caps its list, and a problem
+   * that cannot be filed must not stop the SDK from working.
+   */
   function report(level, modId, msg) {
     try { SMLN.log(level, 'story [' + modId + '] ' + msg) } catch (_e) { /* logging must never throw */ }
+    if (level !== 'warn' && level !== 'error') return
+    try {
+      if (typeof SMLN.callMain !== 'function') return
+      var sent = SMLN.callMain('reportProblem', {
+        modId: modId, message: msg, severity: level === 'warn' ? 'warn' : 'error',
+        code: 'E_STORY', scope: 'story',
+      })
+      if (sent && typeof sent.catch === 'function') sent.catch(function () {})
+    } catch (_e) { /* the panel is a courtesy, never a dependency */ }
   }
 
   /**

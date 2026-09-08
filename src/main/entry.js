@@ -677,6 +677,35 @@ async function handleRpc(msg) {
       }
     }
 
+    /*
+     * A renderer-side mod problem, so it reaches the Problems panel.
+     *
+     * The problems list is built in the main process and published to the
+     * renderer as a one-way snapshot, which leaves renderer code able to read
+     * problems but not to add one - so a mission SDK refusing a mod's content
+     * could only reach the log. A dependency refusal nobody can see is the
+     * failure that feature exists to prevent, so this is the way back.
+     *
+     * The mod id is taken as given. The renderer RPC is not authenticated, so a
+     * mod could file a problem under another's name; that is true of the rest
+     * of this channel too, and a mod that wanted to lie about a peer has
+     * cheaper ways. `problems.record` caps and de-duplicates, so this cannot be
+     * used to exhaust memory either.
+     */
+    case 'reportProblem': {
+      const message = typeof p.message === 'string' ? p.message.slice(0, 2000) : ''
+      if (!message) return { ok: false, error: 'a problem needs a message' }
+      const err = new Error(message)
+      err.code = typeof p.code === 'string' && p.code ? p.code : 'E_MOD_PROBLEM'
+      const recorded = problems.record({
+        error: err,
+        scope: typeof p.scope === 'string' && p.scope ? p.scope : 'renderer',
+        modId: typeof p.modId === 'string' && p.modId ? p.modId : null,
+        severity: p.severity === 'warn' ? 'warn' : 'error',
+      })
+      return { ok: true, id: recorded && recorded.id }
+    }
+
     case 'importCustomMap': {
       const { dialog } = require('electron')
       const picked = await dialog.showOpenDialog(runtime.gameWindow || undefined, {

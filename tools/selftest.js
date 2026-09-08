@@ -7574,3 +7574,47 @@ check('a map too small for the game\'s fixed spawn is refused, not just warned a
 
   return 'below 158 x 201 the fixed spawn falls outside the world, and that is an error'
 })
+
+check('a mod problem raised in the renderer reaches the loader\'s problems list', () => {
+  // The problems list is built in main and published to the renderer as a
+  // one-way snapshot, so before this action a mission SDK refusing a mod's
+  // content could only reach the log - invisible to the player it is for.
+  const problems = require('../src/core/problems')
+  const entry = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'entry.js'), 'utf8')
+  assert(/case 'reportProblem'/.test(entry), 'the renderer has no way to file a problem')
+
+  problems.clear()
+  const before = problems.summary().total
+
+  const err = new Error('mission pack needs gas-pipes, which is not installed')
+  err.code = 'E_STORY'
+  problems.record({ error: err, scope: 'story', modId: 'my.mod', severity: 'warn' })
+
+  const after = problems.list()
+  assert(after.length === before + 1, 'the problem was not recorded')
+  const p = after[after.length - 1]
+  assert(p.modId === 'my.mod', 'the problem lost the mod it came from')
+  assert(p.severity === 'warn', 'a warning was filed as an error')
+  assert(/gas-pipes/.test(p.message), 'the message did not survive')
+
+  // Recording the same refusal twice must not grow the list, or a mod that
+  // retries every tick would push everything else out of a capped list.
+  problems.record({ error: err, scope: 'story', modId: 'my.mod', severity: 'warn' })
+  assert(problems.list().length === before + 1, 'a repeated problem was filed twice')
+
+  problems.clear()
+  return 'renderer problems are recorded, attributed to their mod, and de-duplicated'
+})
+
+check('the story SDK files its refusals as problems, not only as log lines', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'story-sdk.js'), 'utf8')
+  const from = src.indexOf('function report(level, modId, msg)')
+  assert(from > 0, 'the SDK no longer has a single reporting chokepoint')
+  const body = src.slice(from, from + 900)
+  assert(/callMain\('reportProblem'/.test(body), 'warnings and errors never reach the problems panel')
+  assert(/level !== 'warn' && level !== 'error'/.test(body),
+    'info-level chatter would be filed as problems')
+  assert(/catch/.test(body), 'a failed report could take the SDK down with it')
+  return 'warn and error reach the panel, info does not, and a failure to file is survivable'
+})
