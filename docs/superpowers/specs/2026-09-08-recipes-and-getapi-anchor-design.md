@@ -113,7 +113,8 @@ any mod.
 `register.recipe` is left as it is. The work is removing the assumption that the
 registry cannot exist, and translating what Fluxloader mods send.
 
-New in `src/compat/flux-translate.js`: `translateRecipe(kind, config)`, mapping
+New in `src/compat/flux-translate.js`: `translateRecipe(fn, config)`, taking the
+corelib method name and mapping
 corelib's four shapes onto the game's categories.
 
 | corelib | game | config corelib sends |
@@ -123,16 +124,20 @@ corelib's four shapes onto the game's categories.
 | `grower` | `growers` | `{input, output}` |
 | `shaker` | `shakers` | `{input, outputAbove: [["Slag", 1]], outputBelow: […]}` |
 
-Element names resolve to `elementType` numbers in two steps, because neither
-source alone is enough. `flux-translate.js` has `matterTypeToNumber`, but that
-is the *matter* table, not the element one, and it does not answer this.
+Element names resolve to `elementType` numbers in the renderer, because only
+it can see an element a mod registered this run. `flux-translate.js` has
+`matterTypeToNumber`, but that is the *matter* table and does not answer this.
 
-1. The live API first: `api.elements.getRegisteredTypes()` and
-   `structures.resolveTypeName()` exist on 0.5.6 and know about elements mods
-   registered earlier in the same run — which is the case that matters, since a
-   corelib recipe usually consumes a corelib element.
-2. `enums.ElementType` (`src/game/enums.js:32`) as the fallback for vanilla
-   names, so a recipe naming `Water` resolves even before any mod content is in.
+`flux-register.js` is an IIFE: no `require`, no enum tables of its own. So the
+lookup is assembled from two sources that need no guessing about live-API method
+names:
+
+1. The vanilla name-to-number map `enums.ElementByName` (`src/game/enums.js:243`
+   - note `ElementType` is the inverse, number to name), sent along in the
+   payload from the main process, where it is requireable.
+2. `sandkit.mods.elements`, overlaid on top, which carries the type numbers the
+   game handed back for the mod elements registered moments earlier in the same
+   pass.
 
 Output pairs become `{elementType, chance}`. The game's remaining five categories — condensers,
 steamDryers, synthesizers, snowmakers, smelters — have no corelib equivalent
