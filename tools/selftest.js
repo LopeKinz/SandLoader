@@ -5093,9 +5093,9 @@ check('captured recipes reach the game with their element names resolved', () =>
     log: (level, msg) => calls.logs.push(level + ': ' + msg),
     whenReady: (fn) => fn(),
     // The live registry has to be present, or the bridge correctly refuses.
-    // The mod element does not exist until its registration resolves. That is
-    // the real ordering, and running the recipe pass before it is why a recipe
-    // naming a mod's own element reported "no element is named ...".
+    // sandkit.mods.elements stays empty on purpose. In the real game the mod
+    // elements were not findable there, so the resolver has to work from the
+    // type number the registration itself returned - and only after it has.
     sandkit: {
       structures: { recipes: { register: () => true } },
       mods: { elements: {} },
@@ -5124,10 +5124,7 @@ check('captured recipes reach the game with their element names resolved', () =>
       as: () => ({
         // Registering is asynchronous, and only afterwards does the game know
         // the element's type number.
-        element: (def) => new Promise((res) => setTimeout(() => {
-          SMLN.sandkit.mods.elements[def.id] = { elementType: 91 }
-          res({ elementType: 91 })
-        }, 10)),
+        element: () => new Promise((res) => setTimeout(() => res({ elementType: 91 }), 10)),
         terrain: () => Promise.resolve({}),
         recipe: (kind, def) => { calls.recipes.push({ kind, def }); return Promise.resolve({}) },
       }),

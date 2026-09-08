@@ -75,10 +75,18 @@
 
   /**
    * Build the name lookup: the vanilla table the main process sent, overlaid
-   * with the mod elements the game gave a type number to in this same pass.
+   * with the type numbers the game returned for this run's mod elements.
+   *
+   * The returned numbers come first because they are what the game actually
+   * assigned. Reading sandkit.mods.elements instead assumed both that the
+   * registry is reachable from here and that it is keyed by the mod's own id -
+   * neither held, and every recipe naming a mod element was refused as
+   * "no element is named ...". That registry is still consulted afterwards, as
+   * a second chance for an element some other mod registered.
+   *
    * enums.ElementByName is keyed lowercase, so every lookup is normalised.
    */
-  function elementNameResolver(vanilla) {
+  function elementNameResolver(vanilla, registered) {
     var names = {}
     var v = vanilla || {}
     for (var vn in v) {
@@ -90,6 +98,10 @@
       var me = mods[mn]
       var mt = me && (me.elementType || (me.element && me.element.elementType))
       if (typeof mt === 'number') names[String(mn).toLowerCase()] = mt
+    }
+    var r = registered || {}
+    for (var rn in r) {
+      if (Object.prototype.hasOwnProperty.call(r, rn)) names[String(rn).toLowerCase()] = r[rn]
     }
     return function (name) { return names[String(name).toLowerCase()] }
   }
@@ -150,12 +162,18 @@
       // once it has registered it. Every entry pushed here resolves rather than
       // rejects, so one bad definition cannot strand the recipes behind it.
       var contentSettled = []
+      // id -> elementType, filled from what the game hands back. That return
+      // value is the authority: where the game keeps its own registry, and
+      // under which key, is not something this side should be guessing at.
+      var registeredTypes = {}
 
       function hand(entry, register, kind) {
         // One definition failing must not take the others with it: a mod that
         // registers five elements and gets one wrong should lose that one.
         try {
-          var done = register(entry.def).then(function () {
+          var done = register(entry.def).then(function (result) {
+            var t = result && result.elementType
+            if (typeof t === 'number') registeredTypes[entry.id] = t
             SMLN.log('info', 'fluxloader ' + kind + ' registered: ' + entry.id)
           }, function (e) {
             SMLN.log('error', 'fluxloader ' + kind + ' "' + entry.id + '" failed: ' +
@@ -233,7 +251,7 @@
               'this build has no recipe registry (it arrived in Sandustry 0.5.6)')
             return
           }
-          var resolveName = elementNameResolver(payload.elementTypes)
+          var resolveName = elementNameResolver(payload.elementTypes, registeredTypes)
           for (var ri = 0; ri < recipes.length; ri++) {
             var rec = recipes[ri]
             var resolved = resolveRecipeElements(rec.def, resolveName)
