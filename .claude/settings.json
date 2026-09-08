@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx tsc --noEmit *)",
+      "Bash(npx vitest run)",
+      "Bash(npx vitest run *)",
+      "Bash(node tools/selftest.js)",
+      "Bash(node install.js --status)",
+      "mcp__godot-ai__logs_read",
+      "mcp__godot-ai__editor_screenshot",
+      "mcp__godot-ai__editor_state",
+      "mcp__scenario__model_schema_get"
+    ]
+  }
+}
