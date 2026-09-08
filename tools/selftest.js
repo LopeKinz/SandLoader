@@ -7101,6 +7101,312 @@ check('no fog colour can be mistaken for open air while scanning the palette', (
   return '10 fog rows all say "blocks until dug"; the 3 air and 2 water colours do not'
 })
 
+// ------------------------------------------------- map editor drawing tools
+/**
+ * A pixel buffer of one colour, in the shape ImageData has: RGBA bytes,
+ * row-major, four per pixel.
+ *
+ * Built by hand, at a size small enough to reason about, because the whole
+ * reason the drawing tools are DOM-free is so these checks can assert on
+ * pixels rather than on what a canvas appeared to look like.
+ */
+function pixBuf(width, height, rgba) {
+  const data = new Uint8ClampedArray(width * height * 4)
+  if (rgba) {
+    for (let i = 0; i < width * height; i++) {
+      data[i * 4] = rgba[0]
+      data[i * 4 + 1] = rgba[1]
+      data[i * 4 + 2] = rgba[2]
+      data[i * 4 + 3] = rgba[3]
+    }
+  }
+  return { data, width, height }
+}
+
+function pixAt(buf, x, y) {
+  const i = (y * buf.width + x) * 4
+  return [buf.data[i], buf.data[i + 1], buf.data[i + 2], buf.data[i + 3]]
+}
+
+function pixPut(buf, x, y, rgba) {
+  const i = (y * buf.width + x) * 4
+  buf.data[i] = rgba[0]
+  buf.data[i + 1] = rgba[1]
+  buf.data[i + 2] = rgba[2]
+  buf.data[i + 3] = rgba[3]
+}
+
+/** How many pixels hold exactly this colour. */
+function pixCount(buf, rgba) {
+  let n = 0
+  for (let i = 0; i < buf.width * buf.height; i++) {
+    if (buf.data[i * 4] === rgba[0] && buf.data[i * 4 + 1] === rgba[1] &&
+        buf.data[i * 4 + 2] === rgba[2] && buf.data[i * 4 + 3] === rgba[3]) n++
+  }
+  return n
+}
+
+/** A dirty rectangle as a string, so a failure says which one it got. */
+function rectStr(r) {
+  return r ? r.x + ',' + r.y + ' ' + r.w + 'x' + r.h : 'null'
+}
+
+/**
+ * The bounding box of the pixels that actually differ, found the slow and
+ * obvious way.
+ *
+ * This is the answer every tool's reported rectangle is measured against. The
+ * caller repaints from that rectangle and records undo from it, so one pixel
+ * too wide is not a rounding convenience - it is undo restoring ground the
+ * stroke never touched.
+ */
+function changedBox(before, buf) {
+  let x0 = null
+  let y0 = 0
+  let x1 = 0
+  let y1 = 0
+  for (let y = 0; y < buf.height; y++) {
+    for (let x = 0; x < buf.width; x++) {
+      const i = (y * buf.width + x) * 4
+      if (before[i] === buf.data[i] && before[i + 1] === buf.data[i + 1] &&
+          before[i + 2] === buf.data[i + 2] && before[i + 3] === buf.data[i + 3]) continue
+      if (x0 === null) { x0 = x1 = x; y0 = y1 = y; continue }
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+    }
+  }
+  return x0 === null ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+}
+
+check('a size 1 brush paints one pixel, and a dab clips at the edge', () => {
+  const draw = require('../src/renderer/mapeditor-tools')
+  for (const name of ['brush', 'line', 'rectangle', 'fill', 'pick', 'eraser']) {
+    assert(typeof draw[name] === 'function', 'the tools module no longer exports ' + name)
+  }
+  const ground = [10, 20, 30, 255]
+  const ink = [170, 170, 170, 255]
+
+  // The classic defect in a pixel editor: a "1 pixel" brush whose radius
+  // rounds up and lays down 2x2. Nobody notices until a map has been drawn
+  // with it, so it is asserted rather than looked at.
+  const buf = pixBuf(16, 16, ground)
+  const one = draw.brush(buf, 5, 5, 1, ink)
+  assert(pixCount(buf, ink) === 1, 'a size 1 brush painted ' + pixCount(buf, ink) + ' pixels')
+  assert(rectStr(one) === '5,5 1x1', 'size 1 reported ' + rectStr(one))
+  assert(draw.brush(buf, 5, 5, 1, ink) === null,
+    'repainting a pixel with the colour it already had was reported as a change')
+
+  // Off the edge in every direction, and half over two of them. None of these
+  // may throw: a drag that leaves the window is an ordinary event.
+  assert(draw.brush(pixBuf(16, 16, ground), -5, -5, 2, ink) === null,
+    'a dab entirely outside the buffer painted something')
+  assert(draw.brush(pixBuf(16, 16, ground), 99, 4, 8, ink) === null,
+    'a dab past the right edge painted something')
+  const corner = draw.brush(pixBuf(16, 16, ground), 15, 15, 4, ink)
+  assert(rectStr(corner) === '14,14 2x2', 'a dab over the bottom-right corner gave ' + rectStr(corner))
+  const origin = draw.brush(pixBuf(16, 16, ground), 0, 0, 8, ink)
+  assert(rectStr(origin) === '0,0 5x5', 'a dab over the top-left corner gave ' + rectStr(origin))
+
+  // Sizes 2, 4 and 8 are the toolbar's other buttons; each must cover exactly
+  // its own area when it lands clear of the edges.
+  for (const size of [2, 4, 8]) {
+    const b = pixBuf(32, 32, ground)
+    draw.brush(b, 16, 16, size, ink)
+    assert(pixCount(b, ink) === size * size,
+      'a size ' + size + ' brush painted ' + pixCount(b, ink) + ' pixels, not ' + (size * size))
+  }
+  return 'one pixel at size 1, size squared above it, clipped at every edge'
+})
+
+check('a dragged line has no gaps, at a shallow angle or a steep one', () => {
+  const draw = require('../src/renderer/mapeditor-tools')
+  const ground = [0, 0, 0, 255]
+  const ink = [153, 0, 0, 255]
+
+  // "No gaps" for an 8-connected line means exactly one pixel per step of the
+  // major axis, and never a jump of more than one along the minor. Stepping
+  // along the vector and rounding - the obvious wrong implementation - drops
+  // pixels and leaves a dotted diagonal on a fast drag.
+  const shallow = pixBuf(16, 16, ground)
+  const sr = draw.line(shallow, 0, 0, 15, 7, 1, ink)
+  let prev = null
+  for (let x = 0; x < 16; x++) {
+    const rows = []
+    for (let y = 0; y < 16; y++) if (pixAt(shallow, x, y)[0] === ink[0]) rows.push(y)
+    assert(rows.length === 1, 'column ' + x + ' holds ' + rows.length + ' pixels of the line, not one')
+    if (prev !== null) {
+      assert(Math.abs(rows[0] - prev) <= 1, 'the line jumped from row ' + prev + ' to ' + rows[0])
+    }
+    prev = rows[0]
+  }
+  assert(rectStr(sr) === '0,0 16x8', 'the shallow line reported ' + rectStr(sr))
+
+  const steep = pixBuf(16, 16, ground)
+  const tr = draw.line(steep, 0, 0, 7, 15, 1, ink)
+  prev = null
+  for (let y = 0; y < 16; y++) {
+    const cols = []
+    for (let x = 0; x < 16; x++) if (pixAt(steep, x, y)[0] === ink[0]) cols.push(x)
+    assert(cols.length === 1, 'row ' + y + ' holds ' + cols.length + ' pixels of the line, not one')
+    if (prev !== null) {
+      assert(Math.abs(cols[0] - prev) <= 1, 'the line jumped from column ' + prev + ' to ' + cols[0])
+    }
+    prev = cols[0]
+  }
+  assert(rectStr(tr) === '0,0 8x16', 'the steep line reported ' + rectStr(tr))
+  assert(pixAt(steep, 0, 0)[0] === ink[0] && pixAt(steep, 7, 15)[0] === ink[0],
+    'a line that does not include both of its own endpoints')
+
+  // A drag that begins off the canvas draws the part that is on it, and one
+  // that never touches the canvas draws nothing at all.
+  const half = pixBuf(16, 16, ground)
+  assert(rectStr(draw.line(half, -20, 8, 8, 8, 1, ink)) === '0,8 9x1',
+    'a stroke starting outside the buffer was not clipped to it')
+  assert(draw.line(pixBuf(16, 16, ground), -50, -50, -10, -10, 1, ink) === null,
+    'a stroke entirely outside the buffer changed something')
+  assert(rectStr(draw.line(pixBuf(16, 16, ground), 3, 3, 3, 3, 1, ink)) === '3,3 1x1',
+    'a zero-length drag did not leave a single dab')
+  return 'one pixel per major step, no jump over one, clipped at both ends'
+})
+
+check('a rectangle is an outline or a fill, and stays inside its own corners', () => {
+  const draw = require('../src/renderer/mapeditor-tools')
+  const ground = [0, 0, 0, 255]
+  const ink = [170, 170, 170, 255]
+
+  // Corners in the wrong order, because a drag can go up and to the left.
+  const outline = pixBuf(16, 16, ground)
+  const outlineRect = draw.rectangle(outline, 6, 4, 1, 1, ink, false)
+  assert(rectStr(outlineRect) === '1,1 6x4', 'the outline reported ' + rectStr(outlineRect))
+  assert(pixCount(outline, ink) === 2 * 6 + 2 * 4 - 4,
+    'the outline is ' + pixCount(outline, ink) + ' pixels, not a 6x4 perimeter')
+  assert(pixAt(outline, 3, 2)[0] === ground[0], 'the outline painted its own interior')
+  assert(pixAt(outline, 1, 1)[0] === ink[0] && pixAt(outline, 6, 4)[0] === ink[0],
+    'the outline is missing a corner')
+
+  const solid = pixBuf(16, 16, ground)
+  const solidRect = draw.rectangle(solid, 1, 1, 6, 4, ink, true)
+  assert(rectStr(solidRect) === '1,1 6x4', 'the filled rectangle reported ' + rectStr(solidRect))
+  assert(pixCount(solid, ink) === 24, 'the fill is ' + pixCount(solid, ink) + ' pixels, not 6x4')
+  assert(pixAt(solid, 0, 1)[0] === ground[0] && pixAt(solid, 7, 4)[0] === ground[0],
+    'the fill spilled past its own corners')
+
+  const off = draw.rectangle(pixBuf(16, 16, ground), -4, -4, 2, 2, ink, true)
+  assert(rectStr(off) === '0,0 3x3', 'a rectangle hanging off the corner gave ' + rectStr(off))
+  assert(draw.rectangle(pixBuf(16, 16, ground), 20, 20, 40, 40, ink, false) === null,
+    'a rectangle entirely outside the buffer changed something')
+  assert(rectStr(draw.rectangle(pixBuf(16, 16, ground), 7, 7, 7, 7, ink, false)) === '7,7 1x1',
+    'a one-pixel rectangle is not one pixel')
+  return 'perimeter and area both exact, corners in any order, clipped at the edge'
+})
+
+check('flood fill stops at a one-pixel diagonal, and survives a big buffer', () => {
+  const draw = require('../src/renderer/mapeditor-tools')
+  const ground = [0, 0, 0, 255]
+  const wall = [170, 170, 170, 255]
+  const ink = [153, 0, 0, 255]
+
+  // A one-pixel-thick diagonal is only 8-connected, so a fill that walked
+  // diagonal neighbours would step straight through it. In this game that is
+  // paint escaping a cave wall an author drew on purpose.
+  const buf = pixBuf(16, 16, ground)
+  for (let i = 0; i < 16; i++) pixPut(buf, i, i, wall)
+  const r = draw.fill(buf, 15, 0, ink)
+  assert(rectStr(r) === '1,0 15x15', 'the fill reported ' + rectStr(r))
+  assert(pixCount(buf, ink) === 120,
+    'the fill covered ' + pixCount(buf, ink) + ' pixels, not the 120 above the line')
+  assert(pixCount(buf, ground) === 120,
+    'the fill leaked past the diagonal: ' + pixCount(buf, ground) + ' pixels left below it')
+  assert(pixCount(buf, wall) === 16, 'the fill ate the barrier it was supposed to stop at')
+
+  // Filling with the colour already there has nothing to do - and no way to
+  // terminate if it tried, since a filled pixel would still match the seed.
+  assert(draw.fill(buf, 15, 0, ink) === null, 'filling with the colour already there was not a no-op')
+  assert(draw.fill(buf, -1, 0, ink) === null && draw.fill(buf, 0, 99, ink) === null,
+    'a fill seeded outside the buffer did something')
+
+  // Exact match, no tolerance: one channel apart is a different material, and
+  // smearing two palette entries into one is how a map becomes unplayable.
+  const near = pixBuf(8, 8, [10, 10, 10, 255])
+  pixPut(near, 0, 0, [10, 10, 11, 255])
+  draw.fill(near, 4, 4, ink)
+  assert(pixAt(near, 0, 0)[2] === 11, 'the fill swallowed a colour one channel away')
+
+  // 4000x4000 is a size the editor has to survive. A recursive fill dies here
+  // rather than in front of an author; an explicit stack does not.
+  const big = pixBuf(4000, 4000, ground)
+  const started = Date.now()
+  const whole = draw.fill(big, 0, 0, ink)
+  const took = Date.now() - started
+  assert(rectStr(whole) === '0,0 4000x4000', 'the big fill reported ' + rectStr(whole))
+  assert(pixAt(big, 3999, 3999).join(',') === ink.join(','),
+    'the far corner of the big fill was never reached')
+  assert(pixAt(big, 0, 3999).join(',') === ink.join(','),
+    'the bottom-left of the big fill was never reached')
+  return '4-connected, exact, and 16 million pixels filled in ' + took + ' ms'
+})
+
+check('a drawing tool reports exactly the pixels it changed, and the eraser never writes air', () => {
+  const draw = require('../src/renderer/mapeditor-tools')
+  const ground = [0, 0, 0, 255]
+  const ink = [170, 170, 170, 255]
+  const empty = [153, 0, 0, 255]
+
+  // Each tool's rectangle is compared against the pixels that actually differ,
+  // not against the geometry it was asked for. Those two diverge whenever a
+  // stroke is clipped by an edge or lands on ground that already holds the
+  // colour, which is exactly when an over-wide rectangle would go unnoticed.
+  const cases = [
+    ['brush', (b) => draw.brush(b, 5, 5, 3, ink)],
+    ['a clipped brush', (b) => draw.brush(b, 0, 0, 8, ink)],
+    ['line', (b) => draw.line(b, 2, 14, 13, 3, 2, ink)],
+    ['a clipped line', (b) => draw.line(b, -6, 12, 9, 2, 4, ink)],
+    ['a rectangle outline', (b) => draw.rectangle(b, 2, 2, 12, 9, ink, false)],
+    ['a filled rectangle', (b) => draw.rectangle(b, 2, 2, 12, 9, ink, true)],
+    ['fill', (b) => draw.fill(b, 8, 8, ink)],
+    ['eraser', (b) => draw.eraser(b, 9, 9, 4, empty)],
+  ]
+  for (const [name, run] of cases) {
+    const buf = pixBuf(16, 16, ground)
+    const before = Uint8ClampedArray.from(buf.data)
+    const got = run(buf)
+    const want = changedBox(before, buf)
+    assert(rectStr(got) === rectStr(want),
+      name + ' reported ' + rectStr(got) + ' but changed ' + rectStr(want))
+  }
+
+  // Ground that already holds the colour is not a change, and the rectangle
+  // has to shrink to the part that is.
+  const partial = pixBuf(16, 16, ground)
+  draw.rectangle(partial, 0, 0, 15, 0, ink, true)
+  const shrunk = draw.brush(partial, 1, 1, 4, ink)
+  assert(rectStr(shrunk) === '0,1 4x3',
+    'a dab overlapping ground it did not change reported ' + rectStr(shrunk))
+
+  // The eyedropper reads a colour back, and has nothing to say off the edge.
+  assert(draw.pick(partial, 0, 0).join(',') === ink.join(','), 'pick read the wrong colour')
+  assert(draw.pick(partial, 0, 5).join(',') === ground.join(','), 'pick read the wrong colour')
+  for (const [x, y] of [[-1, 0], [0, -1], [16, 0], [0, 16], [99, 99]]) {
+    assert(draw.pick(partial, x, y) === null, 'pick at ' + x + ',' + y + ' was not out of bounds')
+  }
+
+  // Alpha 0 is not air in this game: a fully transparent terrain pixel
+  // resolves to Fog, which collides, floods the whole connected mass when it
+  // is broken, and leaves no element behind. So the eraser writes the colour
+  // the caller says means empty, and refuses to write nothing at all.
+  const air = pixBuf(8, 8, ground)
+  assert(rectStr(draw.eraser(air, 4, 4, 1, empty)) === '4,4 1x1',
+    'the eraser did not write the colour it was handed')
+  assert(pixAt(air, 4, 4).join(',') === empty.join(','),
+    'the eraser wrote ' + pixAt(air, 4, 4).join(',') + ' instead of the caller colour')
+  assert(draw.eraser(air, 2, 2, 1, [0, 0, 0, 0]) === null, 'the eraser wrote a fully transparent pixel')
+  assert(pixAt(air, 2, 2)[3] === 255, 'the eraser cleared alpha anyway')
+  assert(draw.eraser(air, 3, 3, 1, null) === null, 'the eraser invented a colour when given none')
+  return 'every rectangle is the true bounding box; the eraser writes the caller colour or nothing'
+})
+
 // --- Terrain palette -------------------------------------------------------
 //
 // The data behind the map editor's colour picker. A wrong classification here
@@ -7230,37 +7536,4 @@ check('the palette defaults are the two colours a new map can rely on', () => {
   const white = palette.byRgb(255, 255, 255)
   assert(white && white !== empty && /horizon/i.test(white.note), '255,255,255 does not record its horizon side effect')
   return 'DEFAULT_SOLID is Dirt at #000000, DEFAULT_EMPTY is #990000 with no side effects'
-})
-
-check('no fog colour can be mistaken for open air while scanning the palette', () => {
-  const palette = require('../src/game/terrain-palette')
-  // The fog family fits no bucket cleanly: it collides on load, then the first
-  // dig anywhere in a connected mass converts all of it. It is grouped by what
-  // it leaves behind, so someone scanning the empty group for a cave would
-  // otherwise reach for it - the collision has to be in the label, not only in
-  // the note. The three real air colours and the two real water colours must
-  // not carry that warning, or it stops meaning anything.
-  const trueAir = ['#ffffff', '#ff0000', '#990000']
-  const trueWater = ['#0000ff', '#6600ff']
-  let fog = 0
-  for (const e of palette.TERRAIN) {
-    if (e.kind !== 'empty' && e.kind !== 'fluid') continue
-    if (trueAir.includes(e.hex) || trueWater.includes(e.hex)) {
-      assert(!/blocks/i.test(e.label), e.hex + ' is real open air or real water but its label says it blocks')
-      continue
-    }
-    fog++
-    assert(/blocks until dug/i.test(e.label),
-      e.hex + ' is grouped as ' + e.kind + ' but its label does not say it blocks until dug: "' + e.label + '"')
-    assert(e.note.length > 0, e.hex + ' is a fog colour with no note explaining what happens when it is dug')
-  }
-  assert(fog === 10, 'expected 10 fog-family rows, found ' + fog)
-  assert(trueAir.length + trueWater.length + fog === 15, 'the empty and fluid groups no longer add up')
-
-  // The colour that produced the hollow test map, by name.
-  const hollow = palette.byRgb(102, 102, 102)
-  assert(hollow && hollow.kind === 'empty', '102,102,102 is no longer grouped by what it leaves behind')
-  assert(/black rock/i.test(hollow.label), '102,102,102 no longer warns that it renders as black rock')
-  assert(/blocks until dug/i.test(hollow.label), '102,102,102 no longer warns that it blocks')
-  return '10 fog rows all say "blocks until dug"; the 3 air and 2 water colours do not'
 })
