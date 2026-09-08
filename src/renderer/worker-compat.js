@@ -157,6 +157,23 @@
   SMLN.whenWorkerReady(function () {
     SMLN.log('info', 'worker Sandkit reached - corelib and fluxloaderAPI are live in the ' +
       (SMLN.workerKind || 'unknown') + ' worker')
+
+    /*
+     * Announce it to the game side as well.
+     *
+     * A worker's console output does not reliably reach the loader's log, so
+     * the line above is not proof that anything happened - and "no message" is
+     * indistinguishable from "still waiting". This message does reach the
+     * renderer, where SMLN.messaging.onMessage('smln', 'worker-ready', fn) can
+     * see it, which is what makes the capture verifiable at all.
+     */
+    var a = SMLN.game()
+    SMLN.sendGameMessage('smln', 'worker-ready', {
+      kind: SMLN.workerKind || 'unknown',
+      hasApi: !!a,
+      namespaces: a ? Object.keys(a).length : 0,
+    })
+
     fire('cl:raw-api-setup', undefined, true)
   })
 })(typeof self !== 'undefined' ? self : this)
