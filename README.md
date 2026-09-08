@@ -838,8 +838,19 @@ An honest list:
   API. corelib's own worker entry is skipped, because its last line would
   replace that surface with the broken one. What has no equivalent is reported
   through `SMLN.unsupported()` rather than silently doing nothing.
-- **Map mods.** Custom-map blueprints are discovered and reported, but loading
-  them needs game-side support that is not exposed.
+- **Map mods load, and so do the player's own maps.** The support turned out to
+  be exposed all along: the game reads `.custommap` files from `custom_maps`
+  under its user data folder, and four IPC handlers for them sit outside the
+  `MODDING_ENABLED` gate. A map mod's blueprints are assembled into that file
+  and written straight into the folder, and the main menu's Maps button opens
+  SandLoader's own browser with a preview, rather than the game's own screen,
+  which ships switched off and unfinished. A `.custommap` from anywhere else
+  can be brought in from that browser.
+- **Only files SandLoader wrote are ever removed.** A mod's map is named
+  `smln.<modId>.custommap`, and pruning considers nothing else — the player's
+  own maps live in the same folder and are not ours to touch. An imported map
+  is deliberately renamed if its name would look like one of ours, because a
+  name we could have written is a name the pruner may delete.
 - **Renderer hot reload is partial by nature.** SandLoader reclaims what it
   handed out — listeners, timers, messaging handlers, recorded registrations.
   A mod that monkey-patched a game function in place stays patched until the
