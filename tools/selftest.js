@@ -186,6 +186,23 @@ check('patched bundle is syntactically valid', () => {
   return `+${full.length - bundle.length} chars`
 })
 
+check('the maps-menu-open patch rewrites both assignment sites and still parses', () => {
+  // Synthetic stand-in for the two real call sites (onActivate and the inner
+  // onClick) - the same shape smln:mods-menu-open handles for the Mods
+  // button, and required to resolve the same way: both rewritten, routed
+  // through SMLN.mapsUI, and still valid JavaScript afterward.
+  const patch = corePatches.find((p) => p.id === 'smln:maps-menu-open')
+  assert(patch, 'smln:maps-menu-open is missing from corePatches')
+  const src = 'a.customMapsScreen.open=!0,x();b.customMapsScreen.open=!0,y();'
+  const result = engine.apply(src, [patch])
+  assert(result.ok, result.error ? String(result.error) : 'apply failed')
+  const sites = result.source.match(/customMapsScreen\.open=/g) || []
+  assert(sites.length === 2, `expected 2 rewritten sites, found ${sites.length}: ${result.source}`)
+  assert(/mapsUI/.test(result.source), 'the rewrite does not route through SMLN.mapsUI: ' + result.source)
+  new vm.Script(result.source, { filename: 'maps-menu-open.js' })
+  return 'both sites rewritten, routed through mapsUI, still parses'
+})
+
 check('game API surface is still where we expect it', () => {
   for (const probe of ['FH.events.emit', 'FH.elements.createAt', 'FH.ui.toast', 'FH.world.setCellId']) {
     assert(bundle.includes(probe), `${probe} not found in the bundle`)
@@ -1203,6 +1220,51 @@ check('a mod row carries its security class in the margin', () => {
   assert(/#smln-mods \.row\.native\{border-left-color:#f87171/.test(src),
     'the native row edge is not styled red')
   return 'tier reads from the margin; badge text kept'
+})
+
+check('maps overlay lists maps, flags mod-installed ones, and previews only the selection', () => {
+  // list() reads only the metadata line of each .custommap file and is cheap;
+  // load() carries the six full-resolution PNG layers and is not, so it must
+  // only ever be called for whichever map is actually selected - never
+  // eagerly for the whole list.
+  const { S, dom, sandbox } = bootConsole()
+  const loads = []
+  sandbox.electron.customMaps = {
+    list: () => Promise.resolve([
+      { id: 'smln.arena', name: 'Mod Arena', seed: 'abc', createdAt: '2024-01-01T00:00:00.000Z',
+        version: 1, params: { width: 64, height: 32 } },
+      { id: 'player-world', name: 'My World', seed: '', createdAt: '2024-02-02T00:00:00.000Z',
+        version: 1, params: { width: 128, height: 96 } },
+    ]),
+    load: (id) => {
+      loads.push(id)
+      return Promise.resolve({ terrain: { width: 4, height: 4, dataUrl: 'data:image/png;base64,AA==' } })
+    },
+  }
+
+  S.mapsUI.toggle(true)
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try {
+      const panel = dom.document.getElementById('smln-maps')
+      assert(panel, 'maps overlay node missing')
+      const rows = []
+      ;(function walk(n) {
+        for (const c of n.childNodes || []) {
+          if ((c.className || '').split(/\s+/).includes('row')) rows.push(c)
+          walk(c)
+        }
+      })(panel)
+      assert(rows.length === 2, 'expected 2 rows, got ' + rows.length)
+      assert(/(^|\s)mod(\s|$)/.test(rows[0].className),
+        'the smln.-prefixed map was not flagged as coming from a mod: ' + rows[0].className)
+      assert(!/(^|\s)mod(\s|$)/.test(rows[1].className),
+        "the player's own map was flagged as a mod map: " + rows[1].className)
+
+      assert(loads.length === 1 && loads[0] === 'smln.arena',
+        'expected exactly one preview load, for the selected map only: ' + JSON.stringify(loads))
+      resolve('lists both maps, flags the mod-installed one, previews only the selection')
+    } catch (e) { reject(e) }
+  }, 20))
 })
 
 check('mod state round-trips through the main process', () => {
@@ -5769,6 +5831,16 @@ check('a written .custommap is the two-line format the game reads', () => {
     fs.rmSync(root, { recursive: true, force: true })
   }
   return 'metadata on line one, full document on line two, exactly like the game writes it'
+})
+
+check('the loader installs map mods instead of refusing them', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'entry.js'), 'utf8')
+  assert(!/map blueprints need game-side support and are not loaded yet/.test(src),
+    'entry.js still refuses map mods with a reason that is no longer true')
+  assert(/require\('\.\.\/mods\/custom-maps'\)|customMaps\.sync\(/.test(src),
+    'entry.js never calls the map installer')
+  assert(/custom_maps/.test(src), 'entry.js does not name the folder the game reads')
+  return 'the refusal is gone and the installer is wired in'
 })
 
 if (archive) archive.close()

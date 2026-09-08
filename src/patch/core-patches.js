@@ -157,6 +157,52 @@ const corePatches = [
     ],
   },
   {
+    id: 'smln:maps-menu-open',
+    owner: 'smln',
+    description: "Open SandLoader's map browser instead of the game's own (unfinished) one",
+    anchorLiteral: '.customMapsScreen.open',
+    /*
+     * Same shape and same reason as smln:mods-menu-open just above: the
+     * main-menu "Maps" entry sets this flag from two handlers (onActivate and
+     * the inner onClick), so routing the assignment covers both regardless of
+     * which one fires, with no DOM anchor needed.
+     *
+     * The game's own custom-maps screen is real but visibly unfinished in this
+     * build (its "load" button lands on a "coming soon" panel), while the
+     * `window.electron.customMaps` bridge it would use is already live. When
+     * SMLN is present the flag ends up false and our overlay opens instead;
+     * without SMLN the expression is just `true` and the game behaves exactly
+     * as shipped.
+     */
+    find: /\.customMapsScreen\.open=!0/g,
+    replace: () =>
+      `.customMapsScreen.open=(globalThis.${GLOBAL}&&globalThis.${GLOBAL}.mapsUI` +
+      `?(globalThis.${GLOBAL}.mapsUI.toggle(!0),!1):!0)`,
+    expect: 2,
+    required: false,
+    variants: [
+      {
+        // A handler was added or removed, so the count moved. The rewrite is
+        // idempotent per site, so any number of them is fine.
+        label: 'any number of assignment sites',
+        find: /\.customMapsScreen\.open=!0/g,
+        replace: () =>
+          `.customMapsScreen.open=(globalThis.${GLOBAL}&&globalThis.${GLOBAL}.mapsUI` +
+          `?(globalThis.${GLOBAL}.mapsUI.toggle(!0),!1):!0)`,
+        expect: 'any',
+      },
+      {
+        // Un-minified or differently minified boolean: `= true`.
+        label: 'assignment written as = true',
+        find: /\.customMapsScreen\.open\s*=\s*true/g,
+        replace: () =>
+          `.customMapsScreen.open=(globalThis.${GLOBAL}&&globalThis.${GLOBAL}.mapsUI` +
+          `?(globalThis.${GLOBAL}.mapsUI.toggle(!0),!1):!0)`,
+        expect: 'any',
+      },
+    ],
+  },
+  {
     id: 'smln:mods-menu-label',
     owner: 'smln',
     description: 'Rename the main-menu entry to "SandLoader Mods"',

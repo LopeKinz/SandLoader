@@ -72,6 +72,7 @@ const PARTS = [
   'settingsui.js',
   'permui.js',
   'modsui.js',
+  'mapsui.js',
   'hotreload.js',
 ]
 
