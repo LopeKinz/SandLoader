@@ -238,11 +238,20 @@
    * asking for the Sandkit at its own top level would always find nothing, so
    * it asks through whenWorkerReady and is called once the capture has landed.
    */
+  /*
+   * The state is not merely late, it is conditional: the worker builds it when
+   * the game hands it a world, which may be minutes after the worker started or
+   * never, if the player stays in the menu. So this warns once at the quiet
+   * threshold and then keeps watching at a slow interval - measured against the
+   * real game, where a five-second give-up reported "never published" while the
+   * patch had applied and the state simply had not been built yet.
+   */
   var READY_POLL_MS = 10
-  var READY_TIMEOUT_MS = 5000
+  var READY_SLOW_POLL_MS = 500
+  var READY_WARN_MS = 5000
   var readyWaiting = []
   var readyPolling = false
-  var readyGaveUp = false
+  var readyWarned = false
 
   function currentState() {
     return self.__SMLN_WORKER__ ? self.__SMLN_WORKER__.state : undefined
@@ -277,19 +286,17 @@
     }
   }
 
-  function pollReady(deadline) {
+  function pollReady(warnAt) {
     readyPolling = true
     var state = currentState()
     if (state) { readyPolling = false; drainReady(state); return }
-    if (Date.now() > deadline) {
-      readyPolling = false
-      readyGaveUp = true
-      readyWaiting = []
-      log('warn', 'the worker state was never published - worker mods get messaging only ' +
-        '(smln:capture-worker-state did not apply on this build)')
-      return
+    var late = Date.now() > warnAt
+    if (late && !readyWarned) {
+      readyWarned = true
+      log('warn', 'no world yet, so the worker state is not built - mods waiting on ' +
+        'whenWorkerReady() stay queued (this is normal in the menu)')
     }
-    setTimeout(function () { pollReady(deadline) }, READY_POLL_MS)
+    setTimeout(function () { pollReady(warnAt) }, late ? READY_SLOW_POLL_MS : READY_POLL_MS)
   }
 
   function whenWorkerReady(fn) {
@@ -303,9 +310,8 @@
       }
       return
     }
-    if (readyGaveUp) return
     readyWaiting.push(fn)
-    if (!readyPolling) setTimeout(function () { pollReady(Date.now() + READY_TIMEOUT_MS) }, 0)
+    if (!readyPolling) setTimeout(function () { pollReady(Date.now() + READY_WARN_MS) }, 0)
   }
 
   /** Every handler this runtime put into the game's tables, so it can take them back. */
