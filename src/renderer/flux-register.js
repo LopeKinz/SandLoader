@@ -19,12 +19,22 @@
   if (!SMLN || !SMLN.register || SMLN.__fluxContentInstalled) return
   SMLN.__fluxContentInstalled = true
 
-  /** The registry stores plural arrays; register() takes the singular kind. */
+  /*
+   * The registry stores plural arrays, but register() takes a machine id, and
+   * the two do not simply differ by an "s". Read out of the build: the
+   * dispatcher looks the id up in a map holding exactly eight entries -
+   * planterBox, shaker, kineticPress, condenser, steamDryer, synthesizer,
+   * snowmaker, smelter.
+   *
+   * So the grower's id is "planterBox", and there is NO id for contacts at all:
+   * a contact is an element-on-element reaction rather than a machine, and
+   * asking for one answers `Structure recipe ID "contact" is not supported.`
+   * Anything not in this map is reported rather than attempted.
+   */
   var SINGULAR_KIND = {
-    contacts: 'contact',
     shakers: 'shaker',
     kineticPresses: 'kineticPress',
-    growers: 'grower',
+    growers: 'planterBox',
   }
 
   /** Element-valued fields, by the names the game's registry uses. */
@@ -254,6 +264,13 @@
           var resolveName = elementNameResolver(payload.elementTypes, registeredTypes)
           for (var ri = 0; ri < recipes.length; ri++) {
             var rec = recipes[ri]
+            var machineId = SINGULAR_KIND[rec.kind]
+            if (!machineId) {
+              SMLN.log('warn', 'fluxloader recipe "' + rec.id + '" was not registered: ' +
+                'this build has no machine that takes ' + rec.kind + ' recipes, so there is ' +
+                'nothing to register it into')
+              continue
+            }
             var resolved = resolveRecipeElements(rec.def, resolveName)
             if (!resolved.ok) {
               SMLN.log('warn', 'fluxloader recipe "' + rec.id + '" was not registered: ' +
@@ -261,7 +278,7 @@
               continue
             }
             try {
-              api.recipe(SINGULAR_KIND[rec.kind] || rec.kind, resolved.def)
+              api.recipe(machineId, resolved.def)
             } catch (e) {
               SMLN.log('warn', 'fluxloader recipe "' + rec.id + '" was rejected by the game: ' +
                 ((e && e.message) || e))

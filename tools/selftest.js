@@ -5137,16 +5137,14 @@ check('captured recipes reach the game with their element names resolved', () =>
 
   return new Promise((resolve, reject) => setTimeout(() => {
     try {
-      assert(calls.recipes.length === 2,
-        'expected the two resolvable recipes, got ' + calls.recipes.length)
-      const contact = calls.recipes[0]
-      assert(contact.kind === 'contact', 'register() wants the singular kind, got ' + contact.kind)
-      assert(contact.def.inputA === 1 && contact.def.inputB === 3, 'inputs were not resolved')
-      assert(contact.def.outputA === 4, 'the output was not resolved')
-      assert(contact.def.outputB === null, 'a null output must stay null, never undefined')
-      assert(contact.def.orientation === 'stacked', 'non-element fields must survive untouched')
+      // The contact never reaches the game: this build has no machine id for
+      // one, so it is reported instead of attempted.
+      assert(calls.recipes.length === 1,
+        'expected only the press to be registered, got ' + calls.recipes.length)
+      assert(calls.logs.some((l) => /contacts recipes|nothing to register/.test(l)),
+        'the contact recipe was not reported: ' + JSON.stringify(calls.logs))
 
-      const press = calls.recipes[1]
+      const press = calls.recipes[0]
       assert(press.kind === 'kineticPress', 'press kind is ' + press.kind)
       assert(press.def.outputs[0].elementType === 91,
         'a mod element registered this run was not resolved: ' + JSON.stringify(press.def.outputs))
@@ -5154,7 +5152,7 @@ check('captured recipes reach the game with their element names resolved', () =>
 
       assert(calls.logs.some((l) => /Ghost|Nonexistent/.test(l)),
         'the unresolvable recipe was not reported: ' + JSON.stringify(calls.logs))
-      resolve('two recipes registered with type numbers, one refused and reported')
+      resolve('press registered with type numbers; contact and unresolvable name both reported')
     } catch (e) { reject(e) }
   }, 120))
 })

@@ -812,7 +812,11 @@ An honest list:
   nine machine categories — contacts, shakers, kineticPresses, growers,
   condensers, steamDryers, synthesizers, snowmakers and smelters.
   `SMLN.register.recipe()` registers into it, and corelib's four recipe kinds
-  are translated onto the first four. On 0.5.5 and earlier there is no registry
+  are translated onto three of them: shakers, kinetic presses and growers (the
+  game calls the grower machine `planterBox`). Contact recipes - element meets
+  element - have no machine id on this build and cannot be registered at all;
+  they are reported per recipe rather than silently dropped. On 0.5.5 and
+  earlier there is no registry
   at all and `register.recipe()` says so rather than pretending. corelib seeds
   about nine recipes the game already implements natively; those are forwarded
   too, so those reactions exist twice and a weighted output can shift.
