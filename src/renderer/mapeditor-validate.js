@@ -403,8 +403,28 @@ function validate(doc) {
         'terrain', seen.first))
     }
 
-    // Rule 7 - the player is dropped into rock. Survivable, so a warning.
+    // Rule 7a - the spawn is not merely blocked, it is off the map entirely.
+    //
+    // Spawn is fixed: x = width/2 + 78.75 cells, y = 200. The constant does not
+    // shrink with the map, so below about 158 cells wide the spawn column walks
+    // off the right-hand edge, and below 201 tall it is under the floor. This is
+    // an error rather than a warning because the shove-upward rescue that saves a
+    // buried player cannot help someone who was never inside the world.
     const spawn = spawnCell(width)
+    if (spawn.x >= width || spawn.y >= height) {
+      const minWide = 158
+      const minTall = 201
+      problems.push(problem('error', 'spawn-outside',
+        'The player appears at ' + spawn.x + ', ' + spawn.y + ', which is outside a map ' +
+        'this size. The game puts them at a fixed spot that does not scale down with the ' +
+        'map: half the width plus about 79 cells across, and 200 cells down, every time. ' +
+        'A map needs to be at least ' + minWide + ' cells wide and ' + minTall + ' tall for ' +
+        'that spot to exist at all. This one is ' + width + ' by ' + height + '. Make it ' +
+        'bigger - there is no way to move the spawn.',
+        'terrain', null))
+    }
+
+    // Rule 7 - the player is dropped into rock. Survivable, so a warning.
     if (scan.spawnSolid) {
       problems.push(problem('warning', 'spawn-blocked',
         'The player appears at ' + spawn.x + ', ' + spawn.y + ', and that cell is ' +

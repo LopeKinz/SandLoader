@@ -7537,3 +7537,40 @@ check('the palette defaults are the two colours a new map can rely on', () => {
   assert(white && white !== empty && /horizon/i.test(white.note), '255,255,255 does not record its horizon side effect')
   return 'DEFAULT_SOLID is Dirt at #000000, DEFAULT_EMPTY is #990000 with no side effects'
 })
+
+check('a map too small for the game\'s fixed spawn is refused, not just warned about', () => {
+  // The spawn constant does not scale with the map: x = width/2 + 78.75 cells,
+  // y = 200, always. So a small map does not merely bury the player, it puts
+  // them outside the world - which the shove-upward rescue cannot fix. That
+  // makes it an error, unlike a blocked spawn, which is survivable.
+  const sized = (w, h) => ({
+    params: { width: w, height: h },
+    layers: {
+      terrain: mvBuf(w, h, MV_AIR),
+      lights: mvBuf(w, h, null),
+      lightsMeta: mvBuf(w, h, null),
+      sensors: mvBuf(w, h, null),
+      authorization: mvBuf(w, h, null),
+      wall: mvBuf(w, h, null),
+    },
+  })
+
+  const narrow = mvOne(sized(100, 220), 'spawn-outside')
+  assert(narrow, 'a 100-wide map put the player off the map and was not reported')
+  assert(narrow.severity === 'error', 'spawning outside the world was only a warning')
+  assert(/bigger/i.test(narrow.message), 'the message never tells the author to make it bigger')
+
+  assert(mvOne(sized(160, 150), 'spawn-outside'),
+    'a map shorter than the fixed spawn depth was not reported')
+
+  // 158 x 201 is the floor the formula implies; one cell under it in either
+  // direction has to fail, and the floor itself has to pass.
+  assert(mvOne(sized(157, 201), 'spawn-outside'), '157 wide should be one cell too narrow')
+  assert(mvOne(sized(158, 200), 'spawn-outside'), '200 tall should be one cell too short')
+  assert(mvOne(sized(158, 201), 'spawn-outside') === null,
+    'the smallest map the spawn formula allows was rejected')
+  assert(mvOne(sized(240, 240), 'spawn-outside') === null,
+    'a comfortably sized map was rejected')
+
+  return 'below 158 x 201 the fixed spawn falls outside the world, and that is an error'
+})
