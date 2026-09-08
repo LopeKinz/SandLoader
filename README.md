@@ -820,14 +820,24 @@ An honest list:
   at all and `register.recipe()` says so rather than pretending. corelib seeds
   about nine recipes the game already implements natively; those are forwarded
   too, so those reactions exist twice and a weighted output can shift.
-- **Worker entrypoints do not get a Sandkit API yet.** A mod with a
-  `workerEntry` is injected into the simulation workers, but there is no
-  worker-side `sandkit` for it to call, so it logs
-  `worker mod failed: ReferenceError: sandkit is not defined` and stops. That is
-  deliberate: the worker Sandkit surface is not the main one, and handing a mod
-  the main adapter inside a simulation worker would corrupt simulation state.
-  Failing loudly is the honest option until the native worker-entry bridge is
-  wired up. Everything a mod does in the game context is unaffected.
+- **Worker entrypoints get the simulation worker's Sandkit.** The worker builds
+  a full one - `getApi()`, the event and interceptor tables - but the state
+  holding it is module-local, so an injected script could not see it. That, and
+  not a missing API, was all `ReferenceError: sandkit is not defined` ever meant.
+  SandLoader publishes the state and hands it over through
+  `SMLN.whenWorkerReady(fn)`, which waits because mod code runs before the
+  game's worker code does. `SMLN.worker.onEvent` and `SMLN.worker.onInterceptor`
+  register handlers that carry their mod's name into any failure and cannot take
+  a simulation tick down. Only the **simulation worker** builds a Sandkit; a
+  `workerEntry` running in the utility worker still gets messaging and no more.
+- **Fluxloader worker mods are translated, not run.** They call corelib, and
+  corelib's worker API is built from `exposed.raw` - filled by a patch against
+  `js/336.bundle.js`, a chunk Sandustry 0.5.6 no longer emits. Nothing can
+  revive that, so SandLoader publishes `corelib` and `fluxloaderAPI` itself,
+  with the calls the bundled mods make reimplemented against the game's worker
+  API. corelib's own worker entry is skipped, because its last line would
+  replace that surface with the broken one. What has no equivalent is reported
+  through `SMLN.unsupported()` rather than silently doing nothing.
 - **Map mods.** Custom-map blueprints are discovered and reported, but loading
   them needs game-side support that is not exposed.
 - **Renderer hot reload is partial by nature.** SandLoader reclaims what it

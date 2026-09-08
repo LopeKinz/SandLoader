@@ -2740,6 +2740,18 @@ check('the README no longer calls recipes impossible', () => {
   return 'the recipe limitation reflects 0.5.6, trade-off included'
 })
 
+check('the README describes the worker API that now exists', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8')
+  assert(!/there is no\s+worker-side `sandkit` for it to call/.test(readme),
+    'the README still says there is no worker-side sandkit')
+  assert(/whenWorkerReady/.test(readme), 'the README does not name the entry point mods use')
+  assert(/utility worker/i.test(readme),
+    'the README does not say which worker misses out')
+  assert(/336\.bundle\.js/.test(readme),
+    'the README does not say why corelib\'s worker half cannot be run')
+  return 'worker limitation rewritten, with the reason corelib is replaced'
+})
+
 check('the install stays findable while SandLoader is attached to it', () => {
   // Regression: with the attach in place, resources/app.asar is our directory,
   // so every archive check rejected it and locate() returned "not found" - which
