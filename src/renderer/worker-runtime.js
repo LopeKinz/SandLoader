@@ -229,10 +229,92 @@
     }
   }
 
+  /*
+   * The state arrives later than we do.
+   *
+   * The interceptor prepends this runtime and then each worker mod, so both run
+   * before a single line of the game's worker code - and it is the game's code,
+   * patched by smln:capture-worker-state, that publishes the state. A mod
+   * asking for the Sandkit at its own top level would always find nothing, so
+   * it asks through whenWorkerReady and is called once the capture has landed.
+   */
+  var READY_POLL_MS = 10
+  var READY_TIMEOUT_MS = 5000
+  var readyWaiting = []
+  var readyPolling = false
+  var readyGaveUp = false
+
+  function currentState() {
+    return self.__SMLN_WORKER__ ? self.__SMLN_WORKER__.state : undefined
+  }
+
+  function currentSandkit() {
+    var s = currentState()
+    return s ? s.sandkit : undefined
+  }
+
+  function currentApi() {
+    var sk = currentSandkit()
+    if (!sk || typeof sk.getApi !== 'function') return null
+    try {
+      return sk.getApi()
+    } catch (e) {
+      log('error', 'the worker Sandkit refused getApi(): ' + (e && e.message))
+      return null
+    }
+  }
+
+  function drainReady(state) {
+    var waiting = readyWaiting
+    readyWaiting = []
+    for (var i = 0; i < waiting.length; i++) {
+      // One mod throwing must not strand the mods queued behind it.
+      try {
+        waiting[i](state)
+      } catch (e) {
+        log('error', 'a whenWorkerReady handler threw: ' + (e && e.message))
+      }
+    }
+  }
+
+  function pollReady(deadline) {
+    readyPolling = true
+    var state = currentState()
+    if (state) { readyPolling = false; drainReady(state); return }
+    if (Date.now() > deadline) {
+      readyPolling = false
+      readyGaveUp = true
+      readyWaiting = []
+      log('warn', 'the worker state was never published - worker mods get messaging only ' +
+        '(smln:capture-worker-state did not apply on this build)')
+      return
+    }
+    setTimeout(function () { pollReady(deadline) }, READY_POLL_MS)
+  }
+
+  function whenWorkerReady(fn) {
+    if (typeof fn !== 'function') return
+    var state = currentState()
+    if (state) {
+      try {
+        fn(state)
+      } catch (e) {
+        log('error', 'a whenWorkerReady handler threw: ' + (e && e.message))
+      }
+      return
+    }
+    if (readyGaveUp) return
+    readyWaiting.push(fn)
+    if (!readyPolling) setTimeout(function () { pollReady(Date.now() + READY_TIMEOUT_MS) }, 0)
+  }
+
   self.__SMLN_WORKER__ = {
     version: VERSION,
     environment: 'worker',
     workerKind: detectKind(),
+    sandkit: currentSandkit,
+    game: currentApi,
+    whenWorkerReady: whenWorkerReady,
     onGameMessage: onGameMessage,
     offGameMessage: offGameMessage,
     sendGameMessage: sendGameMessage,

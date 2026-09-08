@@ -2525,6 +2525,48 @@ check('the worker capture patch is routed to the worker, not the bundle', () => 
   return 'routed to SIM_WORKER'
 })
 
+check('the worker runtime hands mods the captured Sandkit', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'worker-runtime.js'), 'utf8')
+  const sandbox = {
+    self: null, console, setTimeout, clearTimeout, Date,
+    // The runtime listens for game messages on install; a worker global has
+    // these and a bare vm context does not.
+    addEventListener() {}, removeEventListener() {}, postMessage() {},
+  }
+  sandbox.self = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(src, { filename: 'worker-runtime.js' }).runInContext(sandbox)
+  const SMLN = sandbox.__SMLN_WORKER__
+  assert(SMLN, 'the runtime did not install')
+  assert(typeof SMLN.whenWorkerReady === 'function', 'no whenWorkerReady')
+  assert(!SMLN.sandkit(), 'sandkit() must be empty before the capture')
+
+  // A mod loads before the game's worker code, so the deferral has to survive
+  // being asked first.
+  let seen = null
+  SMLN.whenWorkerReady(function (state) { seen = state })
+  assert(seen === null, 'whenWorkerReady fired before the state existed')
+
+  // What smln:capture-worker-state assigns once the game's module evaluates.
+  const fakeApi = { elements: {} }
+  SMLN.state = { sandkit: { getApi: function () { return fakeApi }, workerEvents: {} } }
+
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 4000
+    const tick = () => {
+      if (seen === null && Date.now() < deadline) return setTimeout(tick, 20)
+      try {
+        assert(seen === SMLN.state, 'whenWorkerReady never fired after the capture')
+        assert(SMLN.sandkit() === SMLN.state.sandkit, 'sandkit() does not return the captured one')
+        assert(SMLN.game() === fakeApi, 'game() does not return getApi()')
+        resolve('deferred until capture, then state, sandkit and game all resolve')
+      } catch (e) { reject(e) }
+    }
+    tick()
+  })
+})
+
 check('the generated stub hands the bootstrap its own directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
   assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),
