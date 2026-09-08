@@ -68,6 +68,23 @@ function check(name, fn) {
 
 function assert(cond, msg) { if (!cond) throw new Error(msg) }
 
+/**
+ * A minimal but structurally valid PNG, so map tests need no image library.
+ * Only the signature and the IHDR matter here - the loader reads dimensions
+ * from IHDR and never decodes the pixels.
+ */
+function makeTinyPng(width, height) {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const ihdr = Buffer.alloc(25)
+  ihdr.writeUInt32BE(13, 0)
+  ihdr.write('IHDR', 4)
+  ihdr.writeUInt32BE(width, 8)
+  ihdr.writeUInt32BE(height, 12)
+  ihdr[16] = 8    // bit depth
+  ihdr[17] = 6    // colour type: RGBA
+  return Buffer.concat([sig, ihdr])
+}
+
 /** A logger that satisfies the compat layer's interface without printing. */
 function testLogger() {
   const noop = () => {}
@@ -2750,6 +2767,75 @@ check('the README describes the worker API that now exists', () => {
   assert(/336\.bundle\.js/.test(readme),
     'the README does not say why corelib\'s worker half cannot be run')
   return 'worker limitation rewritten, with the reason corelib is replaced'
+})
+
+check('a map mod blueprint set becomes a .custommap the game could read', () => {
+  const maps = require('../src/mods/custom-maps')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-map-'))
+  try {
+    // A 2x2 PNG, written by hand so the test needs no image library. The IHDR
+    // carries the dimensions the validator reads.
+    const png = makeTinyPng(2, 2)
+    const other = makeTinyPng(2, 2)
+    fs.writeFileSync(path.join(dir, 'terrain.png'), png)
+    fs.writeFileSync(path.join(dir, 'wall.png'), other)
+
+    const r = maps.assemble({
+      modId: 'demo.maps',
+      name: 'Demo World',
+      seed: 'abc',
+      params: { width: 2, height: 2 },
+      blueprints: {
+        terrain: path.join(dir, 'terrain.png'),
+        wall: path.join(dir, 'wall.png'),
+      },
+    })
+    assert(r.ok, 'assemble failed: ' + r.reason)
+    assert(r.id === 'smln.demo.maps', 'unexpected id: ' + r.id)
+    assert(r.file === 'smln.demo.maps.custommap', 'unexpected file: ' + r.file)
+    assert(/^data:image\/png;base64,/.test(r.doc.terrain), 'terrain is not a data URL')
+    assert(/^data:image\/png;base64,/.test(r.doc.wall), 'wall is not a data URL')
+    assert(r.doc.lights === null, 'an absent layer must be null, not undefined')
+    assert(r.doc.seed === 'abc' && r.doc.params.width === 2, 'seed and params did not travel')
+    assert(typeof r.doc.createdAt === 'string' && r.doc.version, 'metadata is missing')
+    assert(r.doc.name === 'Demo World', 'the name did not travel')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'six fields, data URLs, metadata and a collision-proof id'
+})
+
+check('a blueprint set the game would reject is refused with a reason', () => {
+  const maps = require('../src/mods/custom-maps')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-map-bad-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'terrain.png'), makeTinyPng(4, 4))
+    fs.writeFileSync(path.join(dir, 'wall.png'), makeTinyPng(2, 2))
+    fs.writeFileSync(path.join(dir, 'junk.png'), Buffer.from('not a png at all'))
+
+    const noTerrain = maps.assemble({ modId: 'm', blueprints: { wall: path.join(dir, 'wall.png') } })
+    assert(!noTerrain.ok && /terrain/i.test(noTerrain.reason),
+      'a map with no terrain was accepted: ' + JSON.stringify(noTerrain))
+
+    const mismatched = maps.assemble({
+      modId: 'm',
+      blueprints: { terrain: path.join(dir, 'terrain.png'), wall: path.join(dir, 'wall.png') },
+    })
+    assert(!mismatched.ok && /dimension|size/i.test(mismatched.reason),
+      'layers of different sizes were accepted: ' + JSON.stringify(mismatched))
+
+    const notPng = maps.assemble({ modId: 'm', blueprints: { terrain: path.join(dir, 'junk.png') } })
+    assert(!notPng.ok && /png/i.test(notPng.reason), 'a non-PNG was accepted')
+
+    const missing = maps.assemble({ modId: 'm', blueprints: { terrain: path.join(dir, 'nope.png') } })
+    assert(!missing.ok, 'a missing file was accepted')
+
+    assert(maps.pngSize(Buffer.from('nope')) === null, 'pngSize accepted rubbish')
+    assert(maps.pngSize(makeTinyPng(7, 9)).width === 7, 'pngSize read the wrong width')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+  return 'missing terrain, mismatched sizes, non-PNG and missing file all refused'
 })
 
 check('the loader answers the file-patching question the game asks', () => {
