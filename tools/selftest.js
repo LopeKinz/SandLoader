@@ -485,6 +485,61 @@ check('a corelib soil definition translates, including its HSL colour', () => {
   return 'TrashSoil -> rgba(' + r.def.colors.variants[0].join(',') + ')'
 })
 
+check('corelib recipe shapes translate onto the 0.5.6 categories', () => {
+  const basic = flTranslate.translateRecipe('registerBasicRecipe',
+    { inputTop: 'Sand', inputBottom: 'Water', outputTop: 'WetSand', outputBottom: 'WetSand' })
+  assert(basic.ok, 'basic failed: ' + basic.reason)
+  assert(basic.kind === 'contacts', 'basic went to ' + basic.kind)
+  assert(basic.def.inputA === 'Sand' && basic.def.inputB === 'Water', 'contact inputs are wrong')
+  assert(basic.def.outputA === 'WetSand' && basic.def.outputB === 'WetSand', 'contact outputs are wrong')
+  assert(basic.def.orientation === 'stacked', 'Top/Bottom is positional and must map to stacked')
+
+  // A basic recipe may omit outputBottom; the game accepts null, not undefined.
+  const oneOut = flTranslate.translateRecipe('registerBasicRecipe',
+    { inputTop: 'Spore', inputBottom: 'Water', outputTop: 'WetSpore' })
+  assert(oneOut.ok && oneOut.def.outputB === null, 'a missing output must become null')
+
+  const press = flTranslate.translateRecipe('registerPressRecipe',
+    { input: 'BurntSlag', outputs: [['Spore', 0.5], ['Gold', 0.25]] })
+  assert(press.ok, 'press failed: ' + press.reason)
+  assert(press.kind === 'kineticPresses', 'press went to ' + press.kind)
+  assert(press.def.minimumDownwardVelocity === 0, 'the required velocity field is missing')
+  assert(press.def.outputs.length === 2, 'press outputs were dropped')
+  assert(press.def.outputs[1].name === 'Gold' && press.def.outputs[1].chance === 0.25,
+    'output pairs did not become {name, chance}')
+
+  const grower = flTranslate.translateRecipe('registerGrowerRecipe',
+    { input: 'WetSpore', output: 'Seed' })
+  assert(grower.ok && grower.kind === 'growers', 'grower failed: ' + grower.reason)
+  assert(grower.def.chance === 1, 'grower chance must default to 1')
+
+  const shaker = flTranslate.translateRecipe('registerShakerRecipe',
+    { input: 'WetSand', outputAbove: [['Slag', 1]], outputBelow: [['Gold', 0.25]] })
+  assert(shaker.ok && shaker.kind === 'shakers', 'shaker failed: ' + shaker.reason)
+  assert(Array.isArray(shaker.def.outputsAbove) && shaker.def.outputsAbove[0].name === 'Slag',
+    'the game spells it outputsAbove, plural')
+  assert(shaker.def.outputsBelow[0].chance === 0.25, 'outputsBelow lost its chance')
+
+  return 'contacts, kineticPresses, growers and shakers all translated'
+})
+
+check('a recipe the game would reject is refused before it gets there', () => {
+  assert(!flTranslate.translateRecipe('registerBasicRecipe', { inputTop: 'Sand' }).ok,
+    'a contact with no second input was accepted')
+  assert(!flTranslate.translateRecipe('registerPressRecipe', { input: 'X', outputs: [] }).ok,
+    'a press with no outputs was accepted')
+  assert(!flTranslate.translateRecipe('registerPressRecipe', { input: 'X', outputs: [['Gold', 2]] }).ok,
+    'a chance above 1 was accepted')
+  assert(!flTranslate.translateRecipe('registerShakerRecipe',
+    { input: 'X', outputAbove: [['A', 0.7], ['B', 0.7]] }).ok,
+    'chances totalling more than 1 were accepted')
+  assert(!flTranslate.translateRecipe('registerGrowerRecipe', { input: 'X' }).ok,
+    'a grower with no output was accepted')
+  assert(!flTranslate.translateRecipe('registerConveyorBeltIgnores', 'Water').ok,
+    'an allow-list call was mistaken for a recipe')
+  return 'six invalid shapes refused with reasons'
+})
+
 check('fluxloader modinfo is read into an SMLN mod', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smln-fl-'))
   fs.writeFileSync(path.join(dir, 'modinfo.json'), JSON.stringify({

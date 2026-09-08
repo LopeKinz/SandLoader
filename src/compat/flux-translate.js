@@ -302,9 +302,132 @@ function translateUpgrade(kind, config) {
   return { ok: true, def }
 }
 
+/**
+ * corelib's four recipe methods, and the registry array each one belongs in.
+ *
+ * Sandustry 0.5.6 keeps nine categories; the five with no corelib equivalent -
+ * condensers, steamDryers, synthesizers, snowmakers, smelters - are reachable
+ * only through SMLN.register.recipe() directly.
+ */
+const RECIPE_KIND_BY_FN = {
+  registerBasicRecipe: 'contacts',
+  registerPressRecipe: 'kineticPresses',
+  registerShakerRecipe: 'shakers',
+  registerGrowerRecipe: 'growers',
+}
+
+/** A recipe's element fields stay names here; only the renderer can resolve them. */
+function elementName(value) {
+  return typeof value === 'string' && value ? value : null
+}
+
+/**
+ * `[["Spore", 1], ["Gold", 0.25]]` -> `[{name:'Spore', chance:1}, …]`.
+ *
+ * The game validates chances itself and throws, but its throw arrives without
+ * the mod's name attached - so the same rules are checked here, where the
+ * recipe can be reported against the mod that wrote it.
+ */
+function outputList(pairs, field) {
+  if (pairs === undefined || pairs === null) return { ok: true, list: [] }
+  if (!Array.isArray(pairs)) return { ok: false, reason: `${field} must be an array` }
+  const list = []
+  let total = 0
+  for (const pair of pairs) {
+    const name = elementName(Array.isArray(pair) ? pair[0] : pair && pair.name)
+    const chance = Array.isArray(pair) ? pair[1] : pair && pair.chance
+    if (!name) return { ok: false, reason: `${field} has an entry with no element name` }
+    const c = chance === undefined ? 1 : chance
+    if (typeof c !== 'number' || !isFinite(c) || c < 0 || c > 1) {
+      return { ok: false, reason: `${field}["${name}"].chance must be between 0 and 1, got ${c}` }
+    }
+    total += c
+    list.push({ name, chance: c })
+  }
+  if (total > 1 + 1e-9) {
+    return { ok: false, reason: `${field} chances total ${total}, which is more than 1` }
+  }
+  return { ok: true, list }
+}
+
+/**
+ * Translate one corelib recipe call into the shape 0.5.6's registry stores.
+ *
+ * Element fields stay strings: this runs in the main process, where the live
+ * game API - the only thing that knows the type number of an element a mod
+ * registered this run - does not exist. src/renderer/flux-register.js resolves
+ * them.
+ *
+ * @param {string} fn One of corelib's four recipe method names.
+ * @param {object} config The config corelib was called with.
+ * @returns {{ok:true, kind:string, def:object}|{ok:false, reason:string}}
+ */
+function translateRecipe(fn, config) {
+  const kind = RECIPE_KIND_BY_FN[fn]
+  if (!kind) return { ok: false, reason: `${fn} is not a recipe registration` }
+  const c = config || {}
+
+  if (kind === 'contacts') {
+    // corelib's Top/Bottom is positional, so the contact is a stacked one.
+    const inputA = elementName(c.inputTop)
+    const inputB = elementName(c.inputBottom)
+    if (!inputA || !inputB) {
+      return { ok: false, reason: 'a contact recipe needs both inputTop and inputBottom' }
+    }
+    return {
+      ok: true,
+      kind,
+      def: {
+        inputA,
+        inputB,
+        outputA: elementName(c.outputTop),
+        outputB: elementName(c.outputBottom),
+        orientation: 'stacked',
+      },
+    }
+  }
+
+  const input = elementName(c.input)
+  if (!input) return { ok: false, reason: `a ${kind} recipe needs an input element name` }
+
+  if (kind === 'growers') {
+    const output = elementName(c.output)
+    if (!output) return { ok: false, reason: 'a grower recipe needs an output element name' }
+    const chance = c.chance === undefined ? 1 : c.chance
+    if (typeof chance !== 'number' || !isFinite(chance) || chance < 0 || chance > 1) {
+      return { ok: false, reason: `grower chance must be between 0 and 1, got ${chance}` }
+    }
+    return { ok: true, kind, def: { input, output, chance } }
+  }
+
+  if (kind === 'kineticPresses') {
+    const outputs = outputList(c.outputs, 'outputs')
+    if (!outputs.ok) return { ok: false, reason: outputs.reason }
+    if (!outputs.list.length) return { ok: false, reason: 'a press recipe needs at least one output' }
+    // The game requires this field and corelib has no equivalent. Zero is the
+    // permissive value - any downward velocity qualifies - which is what a
+    // corelib press meant when it did not talk about velocity at all.
+    const velocity = typeof c.minimumDownwardVelocity === 'number' && c.minimumDownwardVelocity >= 0
+      ? c.minimumDownwardVelocity
+      : 0
+    return { ok: true, kind, def: { input, minimumDownwardVelocity: velocity, outputs: outputs.list } }
+  }
+
+  // shakers - the game spells these plural, corelib does not.
+  const above = outputList(c.outputAbove, 'outputAbove')
+  if (!above.ok) return { ok: false, reason: above.reason }
+  const below = outputList(c.outputBelow, 'outputBelow')
+  if (!below.ok) return { ok: false, reason: below.reason }
+  if (!above.list.length && !below.list.length) {
+    return { ok: false, reason: 'a shaker recipe needs at least one output' }
+  }
+  return { ok: true, kind, def: { input, outputsAbove: above.list, outputsBelow: below.list } }
+}
+
 module.exports = {
   toVariants,
   matterTypeToNumber, nameKeyFor, rgbaToMetaColor, hslToRgba,
   translateElement, translateSoil,
   translateBlock, translateTech, translateUpgrade,
+  translateRecipe, RECIPE_KIND_BY_FN,
 }
