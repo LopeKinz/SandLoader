@@ -911,6 +911,12 @@ function loadElectronEntrypoints(mods, ctx, logger) {
       blocks: content.captured.blocks,
       tech: content.captured.tech,
       upgrades: content.captured.upgrades,
+      recipes: content.captured.recipes,
+      // Recipes name their elements; the renderer has to turn those names into
+      // type numbers, and it is an IIFE with no require() and no enum tables of
+      // its own. The vanilla map is small and static, so it rides along - the
+      // renderer overlays the mod elements it registered in the same pass.
+      elementTypes: gameEnums.ElementByName,
       unsupported: content.captured.unsupported,
     }))
   }

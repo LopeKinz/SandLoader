@@ -19,6 +19,81 @@
   if (!SMLN || !SMLN.register || SMLN.__fluxContentInstalled) return
   SMLN.__fluxContentInstalled = true
 
+  /** The registry stores plural arrays; register() takes the singular kind. */
+  var SINGULAR_KIND = {
+    contacts: 'contact',
+    shakers: 'shaker',
+    kineticPresses: 'kineticPress',
+    growers: 'grower',
+  }
+
+  /** Element-valued fields, by the names the game's registry uses. */
+  var RECIPE_SCALAR_FIELDS = ['inputA', 'inputB', 'outputA', 'outputB', 'input', 'output']
+  var RECIPE_LIST_FIELDS = ['outputs', 'outputsAbove', 'outputsBelow']
+
+  /**
+   * Turn a translated recipe's element names into type numbers.
+   *
+   * An unresolvable name fails the whole recipe. Handing the registry
+   * `elementType: undefined` would store a recipe that silently never fires,
+   * which is worse for the player than being told it was skipped.
+   */
+  function resolveRecipeElements(def, resolve) {
+    var out = {}
+    for (var key in def) {
+      if (Object.prototype.hasOwnProperty.call(def, key)) out[key] = def[key]
+    }
+
+    for (var i = 0; i < RECIPE_SCALAR_FIELDS.length; i++) {
+      var f = RECIPE_SCALAR_FIELDS[i]
+      if (!(f in out)) continue
+      if (out[f] === null || out[f] === undefined) { out[f] = null; continue }
+      var n = resolve(out[f])
+      if (typeof n !== 'number') {
+        return { ok: false, reason: 'no element is named "' + out[f] + '" (field ' + f + ')' }
+      }
+      out[f] = n
+    }
+
+    for (var j = 0; j < RECIPE_LIST_FIELDS.length; j++) {
+      var lf = RECIPE_LIST_FIELDS[j]
+      if (!Array.isArray(out[lf])) continue
+      var list = []
+      for (var k = 0; k < out[lf].length; k++) {
+        var entry = out[lf][k]
+        var t = resolve(entry.name)
+        if (typeof t !== 'number') {
+          return { ok: false, reason: 'no element is named "' + entry.name + '" (in ' + lf + ')' }
+        }
+        list.push({ elementType: t, chance: entry.chance })
+      }
+      out[lf] = list
+    }
+
+    return { ok: true, def: out }
+  }
+
+  /**
+   * Build the name lookup: the vanilla table the main process sent, overlaid
+   * with the mod elements the game gave a type number to in this same pass.
+   * enums.ElementByName is keyed lowercase, so every lookup is normalised.
+   */
+  function elementNameResolver(vanilla) {
+    var names = {}
+    var v = vanilla || {}
+    for (var vn in v) {
+      if (Object.prototype.hasOwnProperty.call(v, vn)) names[String(vn).toLowerCase()] = v[vn]
+    }
+    var mods = (SMLN.sandkit && SMLN.sandkit.mods && SMLN.sandkit.mods.elements) || {}
+    for (var mn in mods) {
+      if (!Object.prototype.hasOwnProperty.call(mods, mn)) continue
+      var me = mods[mn]
+      var mt = me && (me.elementType || (me.element && me.element.elementType))
+      if (typeof mt === 'number') names[String(mn).toLowerCase()] = mt
+    }
+    return function (name) { return names[String(name).toLowerCase()] }
+  }
+
   SMLN.whenReady(function () {
     if (typeof SMLN.callMain !== 'function') return
     SMLN.callMain('smln:flux-content').then(function (reply) {
@@ -135,9 +210,38 @@
           'exposes no way to add upgrades, so they cannot appear in the upgrade menu')
       }
 
+      /*
+       * Recipes come last: they name elements, and a corelib recipe usually
+       * names a corelib element that had to be registered first.
+       */
+      var recipes = payload.recipes || []
+      if (recipes.length) {
+        var live = SMLN.sandkit && SMLN.sandkit.structures && SMLN.sandkit.structures.recipes
+        if (!live || typeof live.register !== 'function') {
+          SMLN.log('warn', 'fluxloader: ' + recipes.length + ' recipe(s) were not registered - ' +
+            'this build has no recipe registry (it arrived in Sandustry 0.5.6)')
+        } else {
+          var resolveName = elementNameResolver(payload.elementTypes)
+          for (var ri = 0; ri < recipes.length; ri++) {
+            var rec = recipes[ri]
+            var resolved = resolveRecipeElements(rec.def, resolveName)
+            if (!resolved.ok) {
+              SMLN.log('warn', 'fluxloader recipe "' + rec.id + '" was not registered: ' +
+                resolved.reason)
+              continue
+            }
+            try {
+              api.recipe(SINGULAR_KIND[rec.kind] || rec.kind, resolved.def)
+            } catch (e) {
+              SMLN.log('warn', 'fluxloader recipe "' + rec.id + '" was rejected by the game: ' +
+                ((e && e.message) || e))
+            }
+          }
+        }
+      }
+
       // Say what could not be done and why, rather than leaving the player to
-      // discover the missing content in-game. On 0.5.5 this is every recipe a
-      // mod declared: the build has no recipe registry to put them in.
+      // discover the missing content in-game.
       for (var k = 0; k < unsupported.length; k++) {
         var u = unsupported[k]
         SMLN.log('warn', 'fluxloader ' + u.kind + ' "' + u.id +

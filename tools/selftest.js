@@ -5059,6 +5059,76 @@ check('the renderer bridge registers captured content through SMLN', () => {
   }, 20))
 })
 
+check('captured recipes reach the game with their element names resolved', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'flux-register.js'), 'utf8')
+  const calls = { recipes: [], logs: [] }
+  const SMLN = {
+    log: (level, msg) => calls.logs.push(level + ': ' + msg),
+    whenReady: (fn) => fn(),
+    // The live registry has to be present, or the bridge correctly refuses.
+    sandkit: {
+      structures: { recipes: { register: () => true } },
+      // A mod element registered moments earlier in the same pass.
+      mods: { elements: { CompressedTrash: { elementType: 91 } } },
+    },
+    callMain: (channel) => Promise.resolve(channel === 'smln:flux-content' ? {
+      ok: true,
+      value: {
+        elements: [],
+        soils: [],
+        // enums.ElementByName is keyed lowercase; the resolver must normalise.
+        elementTypes: { sand: 1, water: 3, wetsand: 4 },
+        recipes: [
+          { id: 'Sand', kind: 'contacts', def: {
+            inputA: 'Sand', inputB: 'Water', outputA: 'WetSand', outputB: null,
+            orientation: 'stacked' } },
+          { id: 'Trash', kind: 'kineticPresses', def: {
+            input: 'Sand', minimumDownwardVelocity: 0,
+            outputs: [{ name: 'CompressedTrash', chance: 0.65 }] } },
+          { id: 'Ghost', kind: 'growers', def: {
+            input: 'Nonexistent', output: 'WetSand', chance: 1 } },
+        ],
+        unsupported: [],
+      },
+    } : null),
+    register: {
+      as: () => ({
+        element: () => Promise.resolve({}),
+        terrain: () => Promise.resolve({}),
+        recipe: (kind, def) => { calls.recipes.push({ kind, def }); return Promise.resolve({}) },
+      }),
+    },
+  }
+  const sandbox = { globalThis: null, __SMLN__: SMLN, console }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(src, { filename: 'flux-register.js' }).runInContext(sandbox)
+
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try {
+      assert(calls.recipes.length === 2,
+        'expected the two resolvable recipes, got ' + calls.recipes.length)
+      const contact = calls.recipes[0]
+      assert(contact.kind === 'contact', 'register() wants the singular kind, got ' + contact.kind)
+      assert(contact.def.inputA === 1 && contact.def.inputB === 3, 'inputs were not resolved')
+      assert(contact.def.outputA === 4, 'the output was not resolved')
+      assert(contact.def.outputB === null, 'a null output must stay null, never undefined')
+      assert(contact.def.orientation === 'stacked', 'non-element fields must survive untouched')
+
+      const press = calls.recipes[1]
+      assert(press.kind === 'kineticPress', 'press kind is ' + press.kind)
+      assert(press.def.outputs[0].elementType === 91,
+        'a mod element registered this run was not resolved: ' + JSON.stringify(press.def.outputs))
+      assert(press.def.outputs[0].chance === 0.65, 'the chance was lost')
+
+      assert(calls.logs.some((l) => /Ghost|Nonexistent/.test(l)),
+        'the unresolvable recipe was not reported: ' + JSON.stringify(calls.logs))
+      resolve('two recipes registered with type numbers, one refused and reported')
+    } catch (e) { reject(e) }
+  }, 40))
+})
+
 check('captured content is exposed to the renderer over IPC', () => {
   // Sandkit lives in the renderer, so the definitions captured in the main
   // process have to cross the boundary. corelib already crosses it the same
