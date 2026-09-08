@@ -2752,6 +2752,45 @@ check('the README describes the worker API that now exists', () => {
   return 'worker limitation rewritten, with the reason corelib is replaced'
 })
 
+check('the loader answers the file-patching question the game asks', () => {
+  // Without this the game takes its "no file patching" branch and builds its
+  // workers from webpack chunk URLs, which no interceptor can see - so the
+  // worker runtime is never injected and the capture patch never applies.
+  const entry = require('../src/main/entry')
+  assert(typeof entry._answerFilePatchingQuery === 'function',
+    'entry.js does not export _answerFilePatchingQuery')
+
+  const listeners = {}
+  const fakeIpc = {
+    removeAllListeners(channel) { delete listeners[channel] },
+    on(channel, fn) { listeners[channel] = fn },
+  }
+
+  let active = false
+  entry._answerFilePatchingQuery(fakeIpc, () => active)
+  const handler = listeners['is-file-patching-active-sync']
+  assert(typeof handler === 'function', 'no handler was registered on the channel')
+
+  // Asked while the interceptor is not up, the honest answer is no.
+  let event = {}
+  handler(event)
+  assert(event.returnValue === false, 'answered yes with no interceptor: ' + event.returnValue)
+
+  // The predicate is read when the renderer asks, not when we register - the
+  // interceptor is installed on app-ready, which is after this runs.
+  active = true
+  event = {}
+  handler(event)
+  assert(event.returnValue === true, 'answered no with the interceptor up: ' + event.returnValue)
+
+  // The game registers its own handler, wired to MODDING_ENABLED, which is
+  // false. Ours only wins if that one is gone.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'entry.js'), 'utf8')
+  assert(/removeAllListeners\(\s*FILE_PATCHING_CHANNEL\s*\)/.test(src),
+    "the game's own handler is not removed, so its false would win")
+  return 'answers false without an interceptor, true with one, and displaces the game handler'
+})
+
 check('the install stays findable while SandLoader is attached to it', () => {
   // Regression: with the attach in place, resources/app.asar is our directory,
   // so every archive check rejected it and locate() returned "not found" - which

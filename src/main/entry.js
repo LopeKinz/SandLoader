@@ -1512,6 +1512,26 @@ async function initialize(hostAPI) {
   }
 }
 
+const FILE_PATCHING_CHANNEL = 'is-file-patching-active-sync'
+
+/**
+ * Take over the game's answer to "is a file-patching loader active?".
+ *
+ * `isActive` is read when the renderer asks, not when this registers: the
+ * interceptor is installed on app-ready, which happens after startManager
+ * runs, so answering eagerly would answer no every time.
+ *
+ * @param {{removeAllListeners:Function, on:Function}} ipcMain
+ * @param {() => boolean} isActive
+ */
+function answerFilePatchingQuery(ipcMain, isActive) {
+  ipcMain.removeAllListeners(FILE_PATCHING_CHANNEL)
+  ipcMain.on(FILE_PATCHING_CHANNEL, (event) => {
+    event.returnValue = !!isActive()
+  })
+  return true
+}
+
 async function startManager() {
   const logger = runtime.logger
   try {
@@ -1553,6 +1573,33 @@ async function startManager() {
 
     // Start the game before ready to satisfy protocol.registerSchemesAsPrivileged
     await runtime.host.startGame({ applyPatches: passthrough, unmodded: false })
+
+    /*
+     * The game asks whether a file-patching loader is active before it builds
+     * its workers:
+     *
+     *   if (!window.electron?.isFilePatchingActiveSync?.())
+     *     return new Worker(new URL(i.p + i.u(147), i.b), {name:"manager-worker"})
+     *
+     * Answered no, it loads them from webpack chunk URLs - which no file
+     * interceptor can see, so nothing SandLoader injects reaches a worker. Its
+     * own answer is `protocolInterceptorSetup && _workshopPatchedSources.size`,
+     * and protocolInterceptorSetup is only ever set inside the MODDING_ENABLED
+     * branch, which is false on 0.5.6. So it always says no.
+     *
+     * This runs after startGame(), which is what required the game's main.js -
+     * so its handler exists by now and ours is the one that survives.
+     */
+    try {
+      const { ipcMain } = require('electron')
+      answerFilePatchingQuery(ipcMain, () => !!(runtime.interceptor && runtime.interceptor.ok))
+      logger.info('answering is-file-patching-active-sync, so the game loads its workers ' +
+        'from the files the interceptor serves')
+    } catch (e) {
+      logger.warn('could not answer is-file-patching-active-sync: ' + (e && e.message) +
+        ' - worker mods will not load')
+    }
+
     return { success: true }
   } catch (e) {
     const err = toSmlnError(e, "startManager")
@@ -1639,6 +1686,7 @@ const smln = {
   _handleRpc: handleRpc,
   _assemble: assemble,
   _modSummary: modSummary,
+  _answerFilePatchingQuery: answerFilePatchingQuery,
   _bootReport: bootReport,
 }
 
