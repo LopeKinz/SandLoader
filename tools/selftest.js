@@ -2610,6 +2610,84 @@ check('worker event handlers are attributed, isolated and reclaimable', () => {
   return 'two handlers registered, a throw isolated and attributed, one reclaimed'
 })
 
+check('the worker shim translates corelib calls onto the game API', () => {
+  const runtime = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'worker-runtime.js'), 'utf8')
+  const compat = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'worker-compat.js'), 'utf8')
+  const sandbox = {
+    self: null, console, setTimeout, clearTimeout, Date,
+    addEventListener() {}, removeEventListener() {}, postMessage() {},
+  }
+  sandbox.self = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(runtime, { filename: 'worker-runtime.js' }).runInContext(sandbox)
+  new vm.Script(compat, { filename: 'worker-compat.js' }).runInContext(sandbox)
+
+  const calls = []
+  const api = {
+    elements: {
+      createAt: (st, x, y, t) => { calls.push(['createAt', x, y, t]); return true },
+      removeAt: (st, x, y) => { calls.push(['removeAt', x, y]); return true },
+      move: (st, fx, fy, tx, ty) => { calls.push(['move', fx, fy, tx, ty]); return true },
+      getInfoAtPos: (st, x, y) => ({ elementType: 4, x, y }),
+      getElementIdFromType: (st, t) => (t === 4 ? 'wetSand' : null),
+    },
+  }
+  sandbox.__SMLN_WORKER__.state = { sandkit: { getApi: () => api, workerEvents: {} } }
+
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 4000
+    const tick = () => {
+      if (!sandbox.corelib && Date.now() < deadline) return setTimeout(tick, 20)
+      try {
+        assert(sandbox.corelib, 'no corelib global was published')
+        assert(sandbox.fluxloaderAPI, 'no fluxloaderAPI global was published')
+
+        assert(sandbox.corelib.utils.getParticleNameFromNumber(4) === 'wetSand',
+          'the element name did not translate')
+        assert(sandbox.corelib.utils.getCellAtPos(3, 5).elementType === 4,
+          'getCellAtPos did not translate')
+
+        sandbox.corelib.simulation.setCell(1, 2, 7)
+        assert(calls.some((c) => c[0] === 'createAt' && c[3] === 7),
+          'setCell did not reach createAt: ' + JSON.stringify(calls))
+        // Type 0 is "empty" in corelib's vocabulary, which is a removal here.
+        sandbox.corelib.simulation.setCell(1, 2, 0)
+        assert(calls.some((c) => c[0] === 'removeAt'), 'setCell(..., 0) did not remove')
+
+        sandbox.corelib.simulation.moveCell(1, 2, 3, 4)
+        assert(calls.some((c) => c[0] === 'move'), 'moveCell did not translate')
+
+        // refinement assigns into blockRecipes, so it has to exist.
+        assert(sandbox.corelib.blockRecipes !== undefined, 'blockRecipes must exist to be assignable')
+
+        // A call the game refuses is reported, never a silent no-op.
+        api.elements.move = () => { throw new Error('nope') }
+        assert(sandbox.corelib.simulation.moveCell(0, 0, 1, 1) === false,
+          'a refused call did not report failure')
+        const unsupported = sandbox.__SMLN_WORKER__.unsupported()
+        assert(unsupported.some((u) => /moveCell/.test(u.call)),
+          'the refused call was not recorded: ' + JSON.stringify(unsupported))
+
+        // fluxloaderAPI.events must tolerate the shapes the mods use.
+        let fired = 0
+        sandbox.fluxloaderAPI.events.registerEvent('cl:custom')
+        sandbox.fluxloaderAPI.events.on('cl:custom', () => { fired++ })
+        sandbox.fluxloaderAPI.events.tryTrigger('cl:custom')
+        assert(fired === 1, 'the event did not fire')
+        sandbox.fluxloaderAPI.events.tryTrigger('never-registered')
+
+        const entrySrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'entry.js'), 'utf8')
+        assert(/corelib worker entry skipped/.test(entrySrc),
+          "corelib's worker entry is still injected and would clobber the shim")
+        resolve('corelib calls translated, events delivered, refusals recorded')
+      } catch (e) { reject(e) }
+    }
+    tick()
+  })
+})
+
 check('the generated stub hands the bootstrap its own directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
   assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),

@@ -1134,12 +1134,25 @@ function assemble() {
           }
         }
         if (mod.entrypoints.worker) {
-          try {
-            runtime.workerScripts[SIM_WORKER].push(
-              flCompat.wrapEntrypoint(mod, 'worker', fs.readFileSync(mod.entrypoints.worker, 'utf8')))
-          } catch (e) {
-            note(new SmlnError('E_MOD_LOAD', `fluxloader mod "${mod.id}": ${e.message}`, { detail: { mod: mod.id } }),
-              'fluxloader', mod.id)
+          if (mod.id === 'corelib') {
+            /*
+             * corelib's worker half builds its API from `exposed.raw`, filled
+             * by a patch against js/336.bundle.js - a chunk this build no
+             * longer emits. Running it would fail on its first call and, worse,
+             * its last line is `globalThis.corelib = new CoreLib()`, which would
+             * replace the translated surface with the broken one. See
+             * src/renderer/worker-compat.js.
+             */
+            logger.info('fluxloader: corelib worker entry skipped - SandLoader supplies the ' +
+              'translated worker surface instead')
+          } else {
+            try {
+              runtime.workerScripts[SIM_WORKER].push(
+                flCompat.wrapEntrypoint(mod, 'worker', fs.readFileSync(mod.entrypoints.worker, 'utf8')))
+            } catch (e) {
+              note(new SmlnError('E_MOD_LOAD', `fluxloader mod "${mod.id}": ${e.message}`, { detail: { mod: mod.id } }),
+                'fluxloader', mod.id)
+            }
           }
         }
       }

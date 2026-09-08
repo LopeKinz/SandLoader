@@ -211,11 +211,16 @@ function build(opts = {}) {
 function buildWorker(workerScripts) {
   const chunks = ['/* --- SMLN worker runtime (injected) --- */']
   chunks.push(globalAssign('__SMLN_VERSION__', VERSION))
-  try {
-    chunks.push(';try{\n' + fs.readFileSync(path.join(__dirname, 'worker-runtime.js'), 'utf8') +
-      '\n}catch(e){console.error("[SMLN] worker runtime failed to install:",e)}')
-  } catch (e) {
-    chunks.push('/* worker-runtime.js unavailable: ' + (e.code || e.message) + ' */')
+  // The compat shim publishes corelib and fluxloaderAPI; it goes in right
+  // after the runtime it depends on and before any mod source, so a mod
+  // finds both globals already there.
+  for (const file of ['worker-runtime.js', 'worker-compat.js']) {
+    try {
+      chunks.push(';try{\n' + fs.readFileSync(path.join(__dirname, file), 'utf8') +
+        '\n}catch(e){console.error("[SMLN] ' + file + ' failed to install:",e)}')
+    } catch (e) {
+      chunks.push('/* ' + file + ' unavailable: ' + (e.code || e.message) + ' */')
+    }
   }
   for (const src of workerScripts || []) {
     chunks.push(';try{\n' + src + '\n}catch(e){console.error("[SMLN] worker mod failed:",e)}')
