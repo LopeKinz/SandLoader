@@ -2387,6 +2387,39 @@ check('no stray debug logging survives in the bootstrap', () => {
   return 'appendFileSync debug trace removed'
 })
 
+check('the getApi anchor covers a registry assigned from an identifier', () => {
+  const patch = corePatches.find((p) => p.id === 'smln:sandkit-get-api')
+  assert(patch, 'the getApi patch is gone')
+
+  // 0.5.6 stopped assigning an object literal: it builds the registry first
+  // and assigns the identifier. `verify` alone would not catch a miss here,
+  // because the variants carry expect:'any' and zero matches passes that - so
+  // apply it and look at what actually came out.
+  const shape056 = 'var M={};var E={mods:{elements:{}}};E.jsonConfigs=1,M.sandkit=E,f();'
+  const out = engine.apply(shape056, [patch])
+  assert(out.outcomes[0].status === 'applied',
+    'the 0.5.6 assignment shape did not match: ' + (out.outcomes[0].reason || out.outcomes[0].status))
+  assert(/getApi/.test(out.source), 'the patch applied but emitted no getApi')
+
+  // It has to stay valid JavaScript, and getApi has to be reachable where the
+  // game looks for it - on the object that ended up at state.sandkit.
+  const sandbox = { globalThis: null, f: function () {} }
+  sandbox.globalThis = sandbox
+  vm.createContext(sandbox)
+  new vm.Script(out.source + ';globalThis.__probe=M.sandkit').runInContext(sandbox)
+  assert(typeof sandbox.__probe.getApi === 'function',
+    'state.sandkit.getApi is not a function after patching')
+
+  // and the 0.5.5 literal shape must keep working.
+  const shape055 = 'var g={};g.sandkit={mods:{elements:{},keyBindings:{}}},x=1;'
+  const old = engine.apply(shape055, [patch])
+  assert(old.outcomes[0].status === 'applied',
+    'the object-literal shape broke: ' + (old.outcomes[0].reason || old.outcomes[0].status))
+  assert(/getApi/.test(old.source), 'the literal shape applied but emitted no getApi')
+
+  return 'identifier assignment and object literal both patched, getApi callable'
+})
+
 check('the generated stub hands the bootstrap its own directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'install.js'), 'utf8')
   assert(/\.boot\(\{\s*appDir:\s*__dirname\s*\}\)/.test(src),
@@ -2918,14 +2951,31 @@ check('the getApi patch applies once and yields a working Sandkit API', () => {
 
   // And the emitted method must actually return the game's FH, with the
   // game's own registries left intact beside it.
-  const start = out.source.indexOf('sandkit={mods:{items:')
-  const snippet = out.source.slice(start, out.source.indexOf('null}}', start) + 6)
+  //
+  // Which snippet to lift depends on the shape the build emitted: up to 0.5.5
+  // the registry is an object literal assigned to `sandkit`, and getApi goes
+  // inside it. 0.5.6 assigns an identifier and getApi is appended beside the
+  // assignment - there is no literal to slice out, and slicing for one anyway
+  // is how this check started handing vm a fragment beginning at index -1.
   const ctx = {}
   vm.createContext(ctx)
-  vm.runInContext(
-    'globalThis.__SMLN__={game:{elements:{},structures:{}}};' +
-    'var g={};g.' + snippet + ';' +
-    'api=g.sandkit.getApi();regs=!!(g.sandkit.mods.elements&&g.sandkit.keyBindings)', ctx)
+  const preamble = 'globalThis.__SMLN__={game:{elements:{},structures:{}}};'
+  const literalStart = out.source.indexOf('sandkit={mods:{items:')
+  if (literalStart !== -1) {
+    const snippet = out.source.slice(literalStart, out.source.indexOf('null}}', literalStart) + 6)
+    vm.runInContext(preamble + 'var g={};g.' + snippet + ';' +
+      'api=g.sandkit.getApi();regs=!!(g.sandkit.mods.elements&&g.sandkit.keyBindings)', ctx)
+  } else {
+    // The identifier form appends only a property, so the registries cannot be
+    // disturbed by construction; what has to be proved is that the emitted
+    // method is real and returns the API.
+    const emitted = out.source.match(/([A-Za-z_$][\w$]*)\.getApi=\1\.getApi\|\|(function\(\)\{[^]*?\|\|null\})/)
+    assert(emitted, 'the identifier form emitted no recognisable getApi')
+    vm.runInContext(preamble +
+      'var E={mods:{elements:{}},keyBindings:{}};var g={};' +
+      'g.sandkit=E,E.getApi=E.getApi||' + emitted[2] + ';' +
+      'api=g.sandkit.getApi();regs=!!(g.sandkit.mods.elements&&g.sandkit.keyBindings)', ctx)
+  }
   assert(ctx.api && ctx.regs, 'the patched object lost its registries or returns no API')
   return 'applied once, bundle still parses, getApi() returns FH with registries intact'
 })

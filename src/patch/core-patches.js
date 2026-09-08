@@ -225,12 +225,29 @@ const corePatches = [
      * somehow absent, because those calls are the game's, not ours - breaking
      * them would break vanilla gameplay, which outranks loading any mod.
      */
-    find: /sandkit=\{(mods:\{[^]{0,400}?keyBindings:\{\})\}/g,
+    /*
+     * Two shapes, because the game changed which one it emits.
+     *
+     * Up to 0.5.5 the registry was an object literal assigned straight to
+     * `sandkit`, and the capture is its body, re-emitted with getApi appended.
+     * 0.5.6 builds the object first and assigns only the identifier:
+     *
+     *   …keyBindings:{}});E.jsonConfigs=x,M.sandkit=E,…
+     *
+     * A literal-only pattern misses that entirely, which left the game's own
+     * 45 getApi call sites pointing at undefined - every mod registration on
+     * the build, dead. The second branch anchors on the assignment instead, so
+     * how the object got built stops mattering, and `getApi||` leaves a build
+     * that starts defining its own alone.
+     */
+    find: /sandkit=(?:\{(mods:\{[^]{0,400}?keyBindings:\{\})\}|([A-Za-z_$][\w$]*)(?=[,;]))/g,
     replace: (...args) => {
-      const [, body] = args
-      return `sandkit={${body},getApi:function(){` +
+      const [, body, id] = args
+      const impl = `function(){` +
         `var g=globalThis.${GLOBAL};` +
-        `return (g&&g.game)||(g&&g.state&&g.state.FH)||null}}`
+        `return (g&&g.game)||(g&&g.state&&g.state.FH)||null}`
+      if (body) return `sandkit={${body},getApi:${impl}}`
+      return `sandkit=${id},${id}.getApi=${id}.getApi||${impl}`
     },
     expect: 1,
     // Not required: a build that starts defining getApi itself is a fixed
