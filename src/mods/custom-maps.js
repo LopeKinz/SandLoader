@@ -24,6 +24,9 @@ const LAYERS = ['terrain', 'lights', 'lightsMeta', 'sensors', 'authorization', '
 const PREFIX = 'smln.'
 const EXT = '.custommap'
 
+/** The game truncates a map file name at 200 characters, and the extension counts. */
+const MAX_ID = 180
+
 /**
  * Width and height from a PNG's IHDR, or null if it is not a PNG.
  *
@@ -106,14 +109,30 @@ function assemble(mapSpec) {
   doc.version = 1
   doc.createdAt = new Date().toISOString()
 
-  // The game's own save routine writes metadata on the first line and the
-  // full document on the second, and its two readers split on that exact
-  // boundary - so a single-JSON file loads far enough to appear in the
-  // browser, then fails the moment it is opened.
-  const metadata = { id: doc.id, name: doc.name, seed: doc.seed, createdAt: doc.createdAt, version: doc.version, params: doc.params }
-  const fileText = JSON.stringify(metadata) + '\n' + JSON.stringify(doc)
+  return { ok: true, id, file: id + EXT, doc, fileText: serialise(doc) }
+}
 
-  return { ok: true, id, file: id + EXT, doc, fileText }
+/**
+ * The two lines the game reads, from a finished document.
+ *
+ * The game's own save routine writes metadata on the first line and the full
+ * document on the second, and its two readers split on that exact boundary -
+ * so a single-JSON file loads far enough to appear in the browser, then fails
+ * the moment it is opened.
+ *
+ * Every path that writes a `.custommap` from scratch goes through here, so the
+ * editor and the mod installer cannot drift into two spellings of the same
+ * format.
+ *
+ * @param {object} doc  the six layers plus id, name, seed, createdAt, version, params
+ * @returns {string}
+ */
+function serialise(doc) {
+  const metadata = {
+    id: doc.id, name: doc.name, seed: doc.seed,
+    createdAt: doc.createdAt, version: doc.version, params: doc.params,
+  }
+  return JSON.stringify(metadata) + '\n' + JSON.stringify(doc)
 }
 
 /** Is this a file this module wrote? Nothing else may ever be deleted. */
@@ -152,7 +171,7 @@ function sync(mapsDir, specs) {
     }
     try {
       fs.writeFileSync(path.join(mapsDir, built.file), built.fileText)
-      keep[built.file] = true
+      keep[built.file.toLowerCase()] = true
       installed.push(built.file)
     } catch (e) {
       failed.push({ modId: spec.modId, reason: 'could not write ' + built.file + ': ' + e.message })
@@ -162,7 +181,7 @@ function sync(mapsDir, specs) {
   let entries = []
   try { entries = fs.readdirSync(mapsDir) } catch (_e) { entries = [] }
   for (const name of entries) {
-    if (!ours(name) || keep[name]) continue
+    if (!ours(name) || keep[name.toLowerCase()]) continue
     try {
       fs.rmSync(path.join(mapsDir, name), { force: true })
       removed.push(name)
@@ -196,6 +215,18 @@ function inspect(fileText) {
   }
   if (!meta || typeof meta !== 'object' || !doc || typeof doc !== 'object') {
     return { ok: false, reason: 'this is not a map file' }
+  }
+
+  // The game's own Custom Maps list renders `params.width` and `params.height`
+  // without a guard, so a file missing them passes every check here and then
+  // takes that screen down. `id` is checked for the same reason the importer
+  // rewrites it: the game opens a map by asking for `<id>.custommap`.
+  if (typeof meta.id !== 'string' || !meta.id) {
+    return { ok: false, reason: 'this map has no id, so the game cannot open it' }
+  }
+  if (!meta.params || typeof meta.params !== 'object' ||
+      !meta.params.width || !meta.params.height) {
+    return { ok: false, reason: 'this map has no size in its metadata; the game reads it unguarded and would crash' }
   }
 
   const missing = LAYERS.filter((layer) => {
@@ -234,11 +265,7 @@ function importFile(mapsDir, srcPath) {
   const seen = inspect(fileText)
   if (!seen.ok) return seen
 
-  const base = path.basename(String(srcPath))
-  const stem = base.slice(-EXT.length) === EXT ? base.slice(0, -EXT.length) : base
-  let safe = stem.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').replace(/[-.]+$/, '')
-  while (safe.indexOf(PREFIX) === 0) safe = safe.slice(PREFIX.length)
-  if (!safe) safe = 'imported-map'
+  const safe = mapId(path.basename(String(srcPath)), 'imported-map')
 
   try {
     fs.mkdirSync(mapsDir, { recursive: true })
@@ -265,4 +292,138 @@ function importFile(mapsDir, srcPath) {
   return { ok: true, id, name, file }
 }
 
-module.exports = { assemble, sync, importFile, inspect, pngSize, LAYERS, PREFIX, EXT }
+/**
+ * Turn any proposed name into an id the game can open and we may not prune.
+ *
+ * One rule, used by both the importer and the editor's save, because the two
+ * failure modes it avoids are not obvious enough to re-derive:
+ *
+ *   - The id doubles as the file name (`<id>.custommap`), so anything outside
+ *     the safe set is folded to a dash.
+ *   - PREFIX marks a file `sync()` may delete. An imported or authored map is
+ *     not a mod's map and must survive that mod being removed, so a leading
+ *     prefix is stripped, and the result is re-checked with `ours()` itself -
+ *     "smln" alone would otherwise become smln.custommap and get pruned.
+ *   - The game truncates a map file name at 200 characters when it looks one
+ *     up, so a longer name imports, lists, and then fails to open.
+ *
+ * @param {string} raw  a file name, a map id, or an author's title
+ * @param {string} fallback  used when nothing usable survives
+ * @returns {string}
+ */
+function mapId(raw, fallback) {
+  const base = String(raw || '')
+  const stem = base.slice(-EXT.length) === EXT ? base.slice(0, -EXT.length) : base
+  let safe = stem.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').replace(/[-.]+$/, '')
+  while (safe.indexOf(PREFIX) === 0) safe = safe.slice(PREFIX.length)
+  if (!safe) safe = fallback
+  if (safe.length > MAX_ID) safe = safe.slice(0, MAX_ID).replace(/[-.]+$/, '') || fallback
+  while (ours(safe + EXT)) safe = 'map-' + safe
+  return safe
+}
+
+/**
+ * Write a map the in-game editor authored.
+ *
+ * The editor hands over the six layers already encoded, because that is the
+ * shape a canvas produces (`toDataURL`) and the shape the game reads - there
+ * is no PNG file on disk in between. Everything else is the same contract
+ * `assemble` honours, through the same serialiser.
+ *
+ * Sizes are checked against each PNG's own IHDR rather than trusted: the game
+ * sizes each layer's canvas from the recorded width/height and then draws the
+ * image at 0,0 without scaling, so a disagreement is not an error anywhere -
+ * it is a silently clipped or transparently padded world.
+ *
+ * A save with an `id` overwrites that map, because editing a map and saving it
+ * somewhere else is not editing. A save without one derives an id from the
+ * name and steps aside from any file already there.
+ *
+ * @param {string} mapsDir  `<userData>/custom_maps`
+ * @param {{id?:string|null, name?:string, seed?:string, params?:object,
+ *          createdAt?:string,
+ *          layers:Record<string,{width:number,height:number,dataUrl:string}>}} spec
+ * @returns {{ok:true, id:string, name:string, file:string}|{ok:false, reason:string}}
+ */
+function saveDocument(mapsDir, spec) {
+  const s = spec || {}
+  const layers = s.layers && typeof s.layers === 'object' ? s.layers : {}
+  const HEAD = 'data:image/png;base64,'
+
+  const missing = LAYERS.filter((layer) => {
+    const l = layers[layer]
+    return !l || typeof l !== 'object' || typeof l.dataUrl !== 'string' || !l.width || !l.height
+  })
+  if (missing.length) {
+    return { ok: false, reason: 'a map needs all six layers; missing or malformed: ' + missing.join(', ') }
+  }
+
+  const doc = {}
+  let size = null
+  for (const layer of LAYERS) {
+    const l = layers[layer]
+    const width = Math.trunc(l.width)
+    const height = Math.trunc(l.height)
+    if (!(width > 0) || !(height > 0)) return { ok: false, reason: `${layer} has no size` }
+    if (l.dataUrl.slice(0, HEAD.length) !== HEAD) {
+      return { ok: false, reason: `${layer} is not a PNG data URL` }
+    }
+    const dims = pngSize(Buffer.from(l.dataUrl.slice(HEAD.length), 'base64'))
+    if (!dims) return { ok: false, reason: `${layer} is not a PNG` }
+    if (dims.width !== width || dims.height !== height) {
+      return {
+        ok: false,
+        reason: `${layer} says it is ${width}x${height} but its image is ${dims.width}x${dims.height}`,
+      }
+    }
+    if (!size) size = dims
+    else if (dims.width !== size.width || dims.height !== size.height) {
+      return {
+        ok: false,
+        reason: `${layer} has dimensions ${dims.width}x${dims.height} but terrain is ` +
+          `${size.width}x${size.height}; every layer must describe the same world`,
+      }
+    }
+    doc[layer] = { width, height, dataUrl: l.dataUrl }
+  }
+
+  try {
+    fs.mkdirSync(mapsDir, { recursive: true })
+  } catch (e) {
+    return { ok: false, reason: 'could not open the maps folder: ' + e.message }
+  }
+
+  const named = typeof s.name === 'string' && s.name.trim() ? s.name.trim() : ''
+  let id
+  if (s.id) {
+    id = mapId(s.id, 'untitled-map')
+  } else {
+    const stem = mapId(named || 'untitled-map', 'untitled-map')
+    id = stem
+    for (let n = 2; fs.existsSync(path.join(mapsDir, id + EXT)); n++) id = stem + '-' + n
+  }
+
+  doc.id = id
+  doc.name = named || id
+  doc.seed = typeof s.seed === 'string' ? s.seed : ''
+  // The pixels are the only size the game reads; params is metadata the
+  // browser shows, so it is made to agree with them rather than believed.
+  doc.params = Object.assign({}, s.params && typeof s.params === 'object' ? s.params : null,
+    { width: size.width, height: size.height })
+  doc.version = 1
+  doc.createdAt = typeof s.createdAt === 'string' && s.createdAt ? s.createdAt : new Date().toISOString()
+
+  const file = id + EXT
+  try {
+    fs.writeFileSync(path.join(mapsDir, file), serialise(doc))
+  } catch (e) {
+    return { ok: false, reason: 'could not write into the maps folder: ' + e.message }
+  }
+
+  return { ok: true, id, name: doc.name, file }
+}
+
+module.exports = {
+  assemble, sync, importFile, inspect, pngSize, serialise, mapId, saveDocument,
+  LAYERS, PREFIX, EXT,
+}

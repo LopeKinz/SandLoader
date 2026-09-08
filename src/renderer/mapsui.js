@@ -77,7 +77,9 @@
     "font-family:'SMLN Play',system-ui,sans-serif;font-size:14px;line-height:1.55;color:#e2e8f0}",
     '#smln-maps.open{display:flex}',
 
-    '#smln-maps .panel{width:min(1040px,95vw);max-height:86vh;display:flex;flex-direction:column;',
+    // position:relative so the new-map prompt can cover the panel and only
+    // the panel.
+    '#smln-maps .panel{position:relative;width:min(1040px,95vw);max-height:86vh;display:flex;flex-direction:column;',
     'background:rgba(8,12,17,.97);border:1px solid rgba(100,116,139,.68);',
     'border-radius:0 8px 0 8px;box-shadow:0 4px 12px rgba(0,0,0,.28);overflow:hidden}',
 
@@ -168,6 +170,33 @@
     'border-radius:0 4px 0 4px;transition:background .12s ease-out}',
     '#smln-maps .play:hover{background:rgba(255,231,0,.16)}',
     '#smln-maps .play[disabled]{opacity:.4;cursor:default;background:transparent}',
+
+    // Edit sits beside Play but is not the primary action on this screen, so
+    // it carries the neutral border rather than the accent.
+    '#smln-maps .edit{margin-top:14px;margin-left:10px;cursor:pointer;',
+    'border:1px solid rgba(100,116,139,.68);background:transparent;color:#e2e8f0;',
+    'font:inherit;font-size:13px;letter-spacing:.06em;text-transform:uppercase;',
+    'padding:10px 22px;border-radius:0 4px 0 4px}',
+    '#smln-maps .edit:hover{background:rgba(148,163,184,.12)}',
+
+    // --- the new-map prompt: a card over the panel, so the list and the
+    // preview stay where they were rather than being replaced by a form.
+    '#smln-maps .prompt{position:absolute;inset:0;display:flex;align-items:center;',
+    'justify-content:center;background:rgba(3,6,10,.8);z-index:1}',
+    '#smln-maps .prompt .card{width:min(420px,90%);padding:22px 24px;',
+    'background:rgba(8,12,17,.99);border:1px solid rgba(100,116,139,.68);',
+    'border-radius:0 8px 0 8px}',
+    '#smln-maps .prompt h3{margin:0 0 14px;font-size:13px;font-weight:700;letter-spacing:.14em;',
+    'text-transform:uppercase;color:#ffe700}',
+    '#smln-maps .prompt label{display:block;color:#94a3b8;font-size:11px;letter-spacing:.09em;',
+    'text-transform:uppercase;margin:12px 0 4px}',
+    '#smln-maps .prompt input{width:100%;box-sizing:border-box;background:rgba(2,6,10,.7);',
+    'border:1px solid rgba(100,116,139,.5);color:#f1f5f9;font:inherit;font-size:13px;',
+    'padding:7px 9px;border-radius:0 4px 0 4px}',
+    '#smln-maps .prompt input:focus{outline:none;border-color:rgba(255,231,0,.45)}',
+    '#smln-maps .prompt .pair{display:flex;gap:12px}',
+    '#smln-maps .prompt .pair>div{flex:1}',
+    '#smln-maps .prompt .row{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}',
 
     '#smln-maps footer{padding:13px 24px;border-top:1px solid rgba(100,116,139,.34);',
     'background:rgba(2,6,10,.5);display:flex;justify-content:space-between;align-items:center;gap:16px}',
@@ -262,7 +291,7 @@
       renderStage()
       return
     }
-    Promise.resolve(api.list()).then(function (result) {
+    return Promise.resolve(api.list()).then(function (result) {
       entries = Array.isArray(result) ? result : []
       listError = null
       say('')
@@ -582,18 +611,25 @@
       if (!r || r.cancelled) return
       var failed = (r && r.failed) || []
       var imported = (r && r.imported) || []
+      // The refresh clears the status line on its way through, so the outcome
+      // is said after it lands - otherwise a refused file's reason appears and
+      // is wiped a round-trip later, and the player never learns which file
+      // was refused or why.
+      var refreshed = Promise.resolve()
       if (imported.length) {
         // Show what just arrived rather than leaving the old selection in place.
         selectedId = imported[imported.length - 1].id
-        loadList()
+        refreshed = Promise.resolve(loadList())
       }
-      if (failed.length) {
-        say(failed.length === 1
-          ? failed[0].file + ': ' + failed[0].reason
-          : tx('maps.importFailed', failed.length + ' file(s) could not be imported', { count: failed.length }))
-      } else if (imported.length) {
-        say(tx('maps.imported', imported.length + ' map(s) imported', { count: imported.length }))
-      }
+      return refreshed.then(function () {
+        if (failed.length) {
+          say(failed.length === 1
+            ? failed[0].file + ': ' + failed[0].reason
+            : tx('maps.importFailed', failed.length + ' file(s) could not be imported', { count: failed.length }))
+        } else if (imported.length) {
+          say(tx('maps.imported', imported.length + ' map(s) imported', { count: imported.length }))
+        }
+      })
     }).catch(function (e) {
       say((e && e.message) || 'the import failed')
     }).then(function () { button.disabled = false })
