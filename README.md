@@ -808,12 +808,14 @@ An honest list:
   turns it on, and if a later build enables it that deserves designing for
   properly rather than bolting on.
 
-- **Recipes.** Sandustry 0.5.5 has no recipe registry at all — `recipes`
-  appears nowhere in the build's API object, and `api.structures.recipes`
-  exists only in the newer Sandkit v1.
-  `SMLN.register.recipe()` feature-detects it and reports that it is
-  unavailable on this build rather than pretending to have registered
-  something.
+- **Recipes work on 0.5.6, and only there.** 0.5.6 added a recipe registry with
+  nine machine categories — contacts, shakers, kineticPresses, growers,
+  condensers, steamDryers, synthesizers, snowmakers and smelters.
+  `SMLN.register.recipe()` registers into it, and corelib's four recipe kinds
+  are translated onto the first four. On 0.5.5 and earlier there is no registry
+  at all and `register.recipe()` says so rather than pretending. corelib seeds
+  about nine recipes the game already implements natively; those are forwarded
+  too, so those reactions exist twice and a weighted output can shift.
 - **Worker entrypoints do not get a Sandkit API yet.** A mod with a
   `workerEntry` is injected into the simulation workers, but there is no
   worker-side `sandkit` for it to call, so it logs

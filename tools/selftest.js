@@ -2515,6 +2515,18 @@ check('the README no longer promises an attach that does not exist', () => {
   return 'promise, version and limitations all updated'
 })
 
+check('the README no longer calls recipes impossible', () => {
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8')
+  assert(!/has no recipe registry at all/.test(readme),
+    'the README still says the game has no recipe registry at all')
+  assert(/kineticPresses|nine machine categories/i.test(readme),
+    'the README does not say what the 0.5.6 registry offers')
+  // The trade-off the forwarding decision costs must not go unmentioned.
+  assert(/exist twice|weighted output/i.test(readme),
+    'the README does not admit that corelib seeds duplicate vanilla reactions')
+  return 'the recipe limitation reflects 0.5.6, trade-off included'
+})
+
 check('the install stays findable while SandLoader is attached to it', () => {
   // Regression: with the attach in place, resources/app.asar is our directory,
   // so every archive check rejected it and locate() returned "not found" - which

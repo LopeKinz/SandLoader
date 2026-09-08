@@ -863,13 +863,17 @@
       } catch (_) { /* frozen namespace */ }
     }
 
-    // --- structures.recipes: a recipe table the vanilla machines never had.
+    // --- structures.recipes: a stand-in for builds older than 0.5.6.
     /*
-     * This build has no recipe registry at all - the vanilla machines' inputs
-     * are hardcoded - so registering a recipe cannot make the game's own
-     * smelter consume it. What it can do is keep the table and let the
-     * registering mod drive it, which is what the callers already do with
-     * their own machines.
+     * 0.5.6 ships a real registry, and on that build this whole branch stands
+     * down - the `!api.structures.recipes` guard below is what does it, and
+     * SMLN.register.recipe() then reaches the game's own table.
+     *
+     * On 0.5.5 and earlier there is nothing to register into: the vanilla
+     * machines' inputs are hardcoded, so registering a recipe cannot make the
+     * game's own smelter consume it. What this table can do is let the
+     * registering mod drive its own machines, which is what the callers
+     * already do.
      *
      * Recorded honestly: `list()` returns what was registered so a mod (or the
      * console) can see it, and the shortfall is logged once rather than
