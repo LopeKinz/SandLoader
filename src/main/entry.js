@@ -52,6 +52,7 @@ const modStorage = require('../mods/storage')
 const netcap = require('../mods/netcap')
 const sandbox = require('../mods/sandbox')
 const watcher = require('../mods/watcher')
+const customMaps = require('../mods/custom-maps')
 const interceptor = require('./interceptor')
 const { corePatches, workerPatches } = require('../patch/core-patches')
 const autoheal = require('../patch/autoheal')
@@ -1025,6 +1026,9 @@ function assemble() {
   roots.forEach(ensureDir)
   const flRoots = fluxloaderRoots(hostPaths)
 
+  /* Map mods, installed together after the loop so pruning sees the full set. */
+  const mapSpecs = []
+
   // ---- native SMLN mods
   try {
     const discovered = modLoader.discover(roots, logger.child('mods'))
@@ -1224,7 +1228,13 @@ function assemble() {
           }
         }
         if (mod.map) {
-          logger.warn(`${mod.id} is a map mod; map blueprints need game-side support and are not loaded yet`)
+          mapSpecs.push({
+            modId: mod.id,
+            name: mod.name,
+            seed: mod.map.seed,
+            params: mod.map.params,
+            blueprints: mod.map.blueprints || {},
+          })
         }
       }
 
@@ -1245,6 +1255,31 @@ function assemble() {
     }
   } catch (e) {
     note(toSmlnError(e, 'official mod support'), 'official')
+  }
+
+  /*
+   * Map mods, at last.
+   *
+   * The blueprints were always read and always dropped, because "loading them
+   * needs game-side support that is not exposed". It is exposed: the game lists
+   * <userData>/custom_maps itself, loads a .custommap by id and starts it by
+   * navigating to custom_map=<id>. So the maps are written there, and the ones
+   * belonging to mods that are gone are removed - only ever the files this
+   * loader wrote.
+   */
+  if (hostPaths && hostPaths.userData) {
+    const mapsDir = path.join(hostPaths.userData, 'custom_maps')
+    const outcome = customMaps.sync(mapsDir, mapSpecs)
+    for (const bad of outcome.failed) {
+      note(new SmlnError('E_MOD_LOAD', `map mod "${bad.modId}": ${bad.reason}`,
+        { detail: { mod: bad.modId } }), 'map', bad.modId, 'warn')
+    }
+    if (outcome.installed.length || outcome.removed.length) {
+      logger.info(`custom maps: ${outcome.installed.length} installed, ` +
+        `${outcome.removed.length} removed (${mapsDir})`)
+    }
+  } else if (mapSpecs.length) {
+    logger.warn('map mods found but the host gave no userData path, so there is nowhere to install them')
   }
 
   // ---- mark whatever came from the Steam Workshop
