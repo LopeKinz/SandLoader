@@ -20,6 +20,7 @@ experimental modded branch ships a different Sandkit generation and is not suppo
 ```
 Press  ^  (or F1) in game        →  console
 Main menu → "SandLoader Mods"    →  install / enable / remove mods
+Main menu → "Maps"               →  browse, import, edit and play maps
 ```
 
 ---
@@ -36,6 +37,10 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 - [Writing mods](docs/WRITING-MODS.md)
 - [Modding reference](docs/MODDING-REFERENCE.md) — how Sandustry looks on the
   inside, and all three mod formats that run on it
+- [Custom maps](#custom-maps) — the `.custommap` format, where maps live, and
+  how a mod ships one
+- [The map editor](#the-map-editor) — draw a playable map in game, and the
+  limits that shape it
 - [Missions and story](#missions-and-story) — objectives, speakers and story
   beats a mod can add, and how they reach across mods
 - [How it works](#how-it-works) · [Project layout](#project-layout)
@@ -573,6 +578,248 @@ like any other software you install.
 
 ---
 
+## Custom maps
+
+Main menu → **Maps** opens SandLoader's own map browser: every `.custommap` the
+game can see, a preview of whichever one is selected, and a **Play** button. The
+game has a custom-maps screen of its own in this build, but its load action only
+shows a "coming soon" panel, so this is not overriding something that already
+worked.
+
+Two kinds of map share one folder, and each row says which it is: a map mod's,
+written by SandLoader, and the player's own — saved by the game, or brought in
+with **Import map…** from anywhere on disk.
+
+**The support was there all along.** The game reads `.custommap` files from
+`custom_maps` under its user data folder, and the four IPC handlers that save,
+load, list and delete them sit **outside** the build's `MODDING_ENABLED` gate.
+Nothing had to be added to the game and nothing had to be patched into it. What
+was missing was anything that wrote the file.
+
+### What a `.custommap` is
+
+Two lines. The first is metadata — id, name, seed, recorded size. The second is
+the whole document, carrying **six layers**, each one `{width, height, dataUrl}`
+with a base64 PNG in the data URL. The game's own save routine writes it that
+way and its two readers split on exactly that boundary, so a file written as a
+single JSON object lists perfectly and then fails the moment it is opened.
+
+| Layer | What the game does with it |
+|---|---|
+| `terrain` | One pixel is one world cell. RGB is looked up in a palette to decide what that cell is made of, and the world's size *is* this image's size — there is no scaling step. |
+| `lights` | Every pixel that is not transparent becomes a point light on that cell, coloured by its own RGB. |
+| `lightsMeta` | A per-pixel override for the light at the same coordinate: its brightness and its size. |
+| `sensors` | Artifact markers. |
+| `authorization` | A per-cell restriction zone — no jetpack, no grabbing, no building, no digging, and the combinations of those. |
+| `wall` | The cosmetic backdrop drawn behind the world. Collision never reads it. |
+
+**All six are mandatory.** The game's loader awaits all six at once with no
+undefined-guard, so a file missing one does not lose that layer — it fails to
+load at all, with a generic `TypeError` and no friendly message. A blank
+stand-in would be a guess about what an invented layer means to the game, so
+SandLoader refuses an incomplete set rather than padding it.
+
+### A map that ships with a mod
+
+A mod names its six blueprints in its manifest; SandLoader assembles them into
+the file the game already reads and writes it straight into `custom_maps`. There
+is no separate map format to learn and no packaging step.
+
+```json
+{
+  "id": "canyon",
+  "name": "Canyon",
+  "version": "1.0.0",
+  "map": {
+    "blueprints": {
+      "terrain":       "map/terrain.png",
+      "lights":        "map/lights.png",
+      "lightsMeta":    "map/lights-meta.png",
+      "sensors":       "map/sensors.png",
+      "authorization": "map/zones.png",
+      "wall":          "map/wall.png"
+    }
+  }
+}
+```
+
+The map appears in the browser tagged **Mod**, under the mod's own name, and
+leaves with the mod when it is disabled or removed.
+
+### Only files SandLoader wrote are ever pruned
+
+A mod's map is named `smln.<modId>.custommap`, and pruning considers nothing
+else — the player's own maps live in the same folder and are not ours to remove.
+
+An imported map is therefore **deliberately renamed** if its name would look
+like one of ours. A file called `smln.custommap` would otherwise be deleted on
+the next launch, as the leftover map of a mod that is no longer installed. The
+id inside the file is rewritten to match its new name at the same time, because
+the game opens a map by asking for `<id>.custommap`, and a file whose name and
+id disagree lists perfectly and then fails the moment it is started.
+
+### The flight ceiling scales with the map
+
+The game refuses to let the player hover inside a fixed **600-pixel** strip at
+the top of the world, and puts a collision ceiling at **550**. Both numbers were
+chosen for the vanilla world, which is 3840 cells — **15,360 pixels** — tall,
+where 600 pixels is a **3.9%** band across the top.
+
+Neither number scales. On a custom map they are the same two absolutes, so a
+320×240 map had **62.5% of its height** as a no-fly zone. SandLoader scales the
+strip to the map's own height, keeping the proportion the vanilla world has; a
+map at least as tall as the vanilla world keeps the game's own numbers
+untouched.
+
+Measured: that same 320×240 map goes from 62.5% to **3.9%**, and a player hovers
+where the game previously refused.
+
+### Two limits, stated plainly
+
+- **A custom map reloaded from a save gets the vanilla ceiling.** Whether a
+  world is a custom map is read from `custom_map=` in the game's own URL, which
+  is the only record of it — the state carries no marker for it anywhere. A
+  custom map saved and reloaded through the game's save system comes back under
+  `load=` instead, and **there is no state-side signal to tell it apart from the
+  vanilla world**, so the fixed 600-pixel strip applies again. Documented, not
+  fixed: fixing it properly needs a marker written into the save.
+- **The `wall` layer's encoding is unverified.** Its decoder was never found in
+  the bundle. The editor offers a free colour and a live count against the
+  254-value ceiling that layer's palette has room for, and invents no meaning
+  for what those colours look like in the world.
+
+---
+
+## The map editor
+
+Create a map from nothing at a size you choose, paint it, check it, save it,
+play it — all inside the game, with no external tool and no file to
+hand-assemble. It opens from the same Maps browser: **New map…** in its footer,
+or **Edit** beside Play on a map that already exists.
+
+### The size floor is 158 × 201 cells
+
+Not a preference and not a round number. The game drops the player at one fixed
+position and never looks to see what is there:
+
+```js
+// the branch a .custommap always takes
+x = (widthInCells / 2) * cellSize + 315   // half the width, plus about 79 cells across
+y = 200 * cellSize                        // row 200, whatever the map's height
+```
+
+There is no scan for open ground, no fallback and no second attempt. A map
+narrower than 158 cells puts that x past its own right edge; a map shorter than
+201 cells has no row 200 at all. Either way the player starts *outside the
+world*. So the editor will not create a document below that size, the resize
+dialog refuses one, and the validator reports it as an error rather than a
+suggestion. There is no way to move the spawn.
+
+### The ceiling is total cells, not cells per axis
+
+The game's own per-axis limit is **16,383** cells, because a shared mouse
+position is carried in a `Uint16` of world pixels and anything past that wraps
+around — clicks, digging and building would all land somewhere other than where
+the player aimed. But both axes at that limit at once would be **268 million
+cells**, which is not a map anything can hold. A per-axis rule is the wrong
+shape for the real constraint.
+
+Measured, not estimated: **8000×4000** — 32 million cells — opened in **5.0 s**
+and saved a **4.4 MB** file, while driving the renderer to **1.78 GB** with a
+**3.08 GB** peak. The editor caps at half of that: **16 million cells**, however
+they are shaped.
+
+Both size dialogs show a **live memory figure** while a size is being typed —
+about **34 bytes a cell**, measured against a 1162 MB baseline — so what a size
+will cost is visible before it is committed rather than discovered afterwards. A
+refused size says so, and says which of the two rules refused it.
+
+### The palette says what the player gets, not what the colour is called
+
+This exists because a test map built from two colours the format documents came
+out unplayable, and neither colour did what its name suggested.
+
+- **`102,102,102` is not background rock.** It is **Fog**, the sealed-pocket
+  material. The palette entry really does say `{bg: Stone, fg: Fog}`, but the
+  terrain resolver reads only `.fg` and throws the rest away, so no background
+  stone is ever placed. Fog is solid on load; break a single cell of it and an
+  unbounded flood fill walks every connected fog cell and turns *the whole mass*
+  to open air.
+- **`34,34,34` is bedrock** — solid, collidable and permanently un-minable. It
+  carries no hit points, so the game's own destructibility test is false for it
+  and no tool ever damages it.
+
+So every row in the picker is labelled by outcome: *Solid rock (needs a drill)*,
+*Bedrock (permanent floor)*, *Crackstone (needs dynamite)*, *Open air*. Every
+fog row says **"blocks until dug"** in its *label* and not only in its note, so
+nobody scanning the list for air can reach for one blind.
+
+**Alpha 0 is not air either.** A fully transparent terrain pixel does not
+resolve to empty space — it decodes to Fog, the same collidable, flooding
+material. Every terrain pixel must be opaque. So the eraser writes the palette's
+real empty colour rather than clearing to transparency, a blank document starts
+full of that colour rather than blank, and a see-through pixel is an error at
+save time, not a warning.
+
+### Six layers, six different surfaces
+
+The same bytes mean different things in different layers: a colour that is solid
+rock in `terrain` is a brightness and a size in `lightsMeta`. Offering the terrain palette
+whatever layer was selected meant an author could pick a rock colour and write a
+number they never typed and could not see. So each layer gets the surface its
+own decoder deserves.
+
+| Layer | Surface | Why that one |
+|---|---|---|
+| `terrain` | the palette | A fixed table of the colours the resolver recognises, labelled by what each one gives the player. |
+| `lights` | a colour picker | The pixel's RGB *is* the light's colour, straight through. Any colour is legitimate, so there is no table to offer. |
+| `lightsMeta` | two numeric fields | It is two numbers wearing a colour's clothes: R is brightness × 100, G is size ÷ 4, B is unused. A **zero means "keep the default"**, not zero — the decoder tests each channel before it uses it. |
+| `sensors` | two entries | Only pure red and pure yellow mean anything. Every other opaque colour silently becomes Artifact 1, so two entries is the honest surface and anything else is reported. |
+| `authorization` | twelve numbered zones | Each one labelled by what it forbids rather than by its number. An unrecognised colour is zone 0, which restricts nothing at all. |
+| `wall` | a free colour, with a count | A live count of distinct colours against the **254**-value ceiling that layer's palette has room for. |
+
+Two things on this screen are **unverified**, and the interface says so. The
+`wall` layer's encoding — its decoder was never found, so nothing there claims
+to know what its colours mean. And the **1.1× brightness special case**: the
+lights decoder singles out `58,211,204` and raises that light's brightness to
+1.1, which the interface states but nobody has confirmed the game honours in
+play.
+
+### Tools, transforms, and what a save refuses
+
+Brush, eraser, fill, line, box and eyedropper, with undo and redo over all of
+them. Resize, crop, mirror and shift run on **all six layers together, as one
+undo step**, because the six have to stay the same size as each other: a layer
+whose size disagrees with the terrain layer is read at the wrong offset from the
+second row onward, so what was drawn on it slides further sideways with every
+row down the map, smearing diagonally across the world without a word of
+complaint. The spawn cell — the one thing in the world an author cannot see and cannot move — is
+drawn on the canvas as a marker.
+
+Before a save, the map is checked against rules written for a mapmaker rather
+than for a debugger. Each names something the player will experience, in the
+words someone holding a brush would use, because none of it is visible until a
+map is loaded.
+
+**Errors — the map will not play.** No terrain layer; a size the game cannot
+carry; layers that disagree about how big the world is; a recorded size that
+does not match the terrain layer; see-through terrain pixels; a colour that
+makes the game abandon the map on load; a spawn outside the world; more wall
+colours than the backdrop's palette can hold.
+
+**Warnings — it will play and disappoint.** A spawn buried in solid rock; fog
+the author may not have meant, with the size of its largest connected patch; a
+terrain layer that is all one colour, or has nothing solid in it at all;
+artifact and zone colours that will silently become something else; light
+settings with no light underneath them.
+
+**Errors block a save; warnings do not.** A map that will not open is refused. A
+map that will open and disappoint is reported and then saved anyway — the author
+is the one who knows whether a wall of fog is a mistake or the whole point of
+the map.
+
+---
+
 ## Missions and story
 
 A mod can put objectives into the game's mission panel and beats into its story
@@ -1104,6 +1351,17 @@ An honest list:
   own maps live in the same folder and are not ours to touch. An imported map
   is deliberately renamed if its name would look like one of ours, because a
   name we could have written is a name the pruner may delete.
+- **A custom map reloaded from a save gets the vanilla flight ceiling.** The
+  no-fly strip at the top of the world is scaled to a custom map's own height,
+  but only when the game is opening one: the test is `custom_map=` in the
+  game's URL, which is the only record that a world is a custom map. Reloading
+  one through the game's save system brings it back under `load=`, and no
+  state-side signal distinguishes it from the vanilla world, so the fixed
+  600-pixel strip applies again. See [Custom maps](#custom-maps).
+- **The `wall` layer's encoding is unverified.** Its decoder was never found in
+  the bundle, so the [map editor](#the-map-editor) offers a free colour and a
+  live count against the 254-value ceiling, and invents no meaning for what
+  those colours look like in the world.
 - **Renderer hot reload is partial by nature.** SandLoader reclaims what it
   handed out — listeners, timers, messaging handlers, recorded registrations.
   A mod that monkey-patched a game function in place stays patched until the

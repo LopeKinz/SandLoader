@@ -214,6 +214,8 @@ i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pr
       <h6>Using it</h6>
       <a href="#/docs#console" data-nav>The console</a>
       <a href="#/docs#mods" data-nav>Managing mods</a>
+      <a href="#/docs#maps" data-nav>Custom maps</a>
+      <a href="#/docs#editor" data-nav>The map editor</a>
       <a href="#/docs#achievements" data-nav>Achievements</a>
       <h6>Authoring</h6>
       <a href="#/mods" data-nav>Making mods →</a>
@@ -384,6 +386,226 @@ sim speed 5</code></pre></div>
       build actually offers — statically, so calls on code paths that never execute are still
       seen. A mod needing a namespace this build lacks is flagged <em>before</em> you enable it,
       rather than throwing in a tooltip an hour later.</p>
+
+      <h2 id="maps">Custom maps</h2>
+      <p>Main menu &rarr; <strong>Maps</strong> opens SandLoader's own browser: every
+      <code>.custommap</code> the game can see, a preview of whichever one is selected, and a
+      <strong>Play</strong> button. The game has a custom-maps screen of its own in this build, but
+      its load action only shows a &ldquo;coming soon&rdquo; panel, so this is not overriding
+      something that already worked.</p>
+      <p>Two kinds of map share one folder, and each row says which it is: a map mod's, written by
+      SandLoader, and the player's own &mdash; saved by the game, or brought in with <strong>Import
+      map&hellip;</strong> from anywhere on disk.</p>
+
+      <div class="note good">
+        <span class="lbl">The support was there all along</span>
+        <p>The game reads <code>.custommap</code> files from <code>custom_maps</code> under its
+        user-data folder, and the four IPC handlers that save, load, list and delete them sit
+        <strong>outside</strong> the build's <code>MODDING_ENABLED</code> gate. Nothing had to be
+        added to the game and nothing had to be patched into it. What was missing was anything
+        that wrote the file.</p>
+      </div>
+
+      <h3>What a <code>.custommap</code> is</h3>
+      <p>Two lines. The first is metadata &mdash; id, name, seed, recorded size. The second is the
+      whole document, carrying <strong>six layers</strong>, each one
+      <code>{width, height, dataUrl}</code> with a base64 PNG in the data URL. The game's own save
+      routine writes it that way and its two readers split on exactly that boundary, so a file
+      written as a single JSON object lists perfectly and then fails the moment it is opened.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Layer</th><th>What the game does with it</th></tr></thead>
+        <tbody>
+          <tr><td><code>terrain</code></td><td>One pixel is one world cell. RGB is looked up in a palette to decide what that cell is made of, and the world's size <em>is</em> this image's size &mdash; there is no scaling step.</td></tr>
+          <tr><td><code>lights</code></td><td>Every pixel that is not transparent becomes a point light on that cell, coloured by its own RGB.</td></tr>
+          <tr><td><code>lightsMeta</code></td><td>A per-pixel override for the light at the same coordinate: its brightness and its size.</td></tr>
+          <tr><td><code>sensors</code></td><td>Artifact markers.</td></tr>
+          <tr><td><code>authorization</code></td><td>A per-cell restriction zone &mdash; no jetpack, no grabbing, no building, no digging, and the combinations of those.</td></tr>
+          <tr><td><code>wall</code></td><td>The cosmetic backdrop drawn behind the world. Collision never reads it.</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>All six are mandatory.</strong> The game's loader awaits all six at once with no
+      undefined-guard, so a file missing one does not lose that layer &mdash; it fails to load at
+      all, with a generic <code>TypeError</code> and no friendly message. A blank stand-in would be
+      a guess about what an invented layer means to the game, so SandLoader refuses an incomplete
+      set rather than padding it.</p>
+
+      <h3>A map that ships with a mod</h3>
+      <p>A mod names its six blueprints in its manifest; SandLoader assembles them into the file
+      the game already reads and writes it straight into <code>custom_maps</code>. There is no
+      separate map format to learn and no packaging step.</p>
+      <div class="codewrap"><pre><code>{
+  <span class="t-key">"id"</span>: <span class="t-str">"canyon"</span>,
+  <span class="t-key">"name"</span>: <span class="t-str">"Canyon"</span>,
+  <span class="t-key">"version"</span>: <span class="t-str">"1.0.0"</span>,
+  <span class="t-key">"map"</span>: {
+    <span class="t-key">"blueprints"</span>: {
+      <span class="t-key">"terrain"</span>:       <span class="t-str">"map/terrain.png"</span>,
+      <span class="t-key">"lights"</span>:        <span class="t-str">"map/lights.png"</span>,
+      <span class="t-key">"lightsMeta"</span>:    <span class="t-str">"map/lights-meta.png"</span>,
+      <span class="t-key">"sensors"</span>:       <span class="t-str">"map/sensors.png"</span>,
+      <span class="t-key">"authorization"</span>: <span class="t-str">"map/zones.png"</span>,
+      <span class="t-key">"wall"</span>:          <span class="t-str">"map/wall.png"</span>
+    }
+  }
+}</code></pre></div>
+      <p>The map appears in the browser tagged <strong>Mod</strong>, under the mod's own name, and
+      leaves with the mod when it is disabled or removed.</p>
+
+      <div class="note warn">
+        <span class="lbl">Only files SandLoader wrote are ever pruned</span>
+        <p>A mod's map is named <code>smln.&lt;modId&gt;.custommap</code>, and pruning considers
+        nothing else &mdash; the player's own maps live in the same folder and are not ours to
+        remove. An imported map is therefore <strong>deliberately renamed</strong> if its name
+        would look like one of ours: a file called <code>smln.custommap</code> would otherwise be
+        deleted on the next launch, as the leftover map of a mod that is no longer installed. The
+        id inside the file is rewritten to match, because the game opens a map by asking for
+        <code>&lt;id&gt;.custommap</code> and a file whose name and id disagree lists perfectly and
+        then fails the moment it is started.</p>
+      </div>
+
+      <h3>The flight ceiling scales with the map</h3>
+      <p>The game refuses to let the player hover inside a fixed <strong>600-pixel</strong> strip
+      at the top of the world, and puts a collision ceiling at <strong>550</strong>. Both numbers
+      were chosen for the vanilla world, which is 3840 cells &mdash; <strong>15,360 pixels</strong>
+      &mdash; tall, where 600 pixels is a <strong>3.9%</strong> band across the top. Neither number
+      scales. On a custom map they are the same two absolutes, so a 320&times;240 map had
+      <strong>62.5% of its height</strong> as a no-fly zone.</p>
+      <p>SandLoader scales the strip to the map's own height, keeping the proportion the vanilla
+      world has. A map at least as tall as the vanilla world keeps the game's own numbers
+      untouched.</p>
+      <div class="note good">
+        <span class="lbl">Measured in the running game</span>
+        <p>That same 320&times;240 map goes from 62.5% to <strong>3.9%</strong>, and a player
+        hovers where the game previously refused.</p>
+      </div>
+      <div class="note warn">
+        <span class="lbl">A map reloaded from a save gets the vanilla ceiling</span>
+        <p>Whether a world is a custom map is read from <code>custom_map=</code> in the game's own
+        URL, which is the only record of it &mdash; the state carries no marker for it anywhere. A
+        custom map saved and reloaded through the game's save system comes back under
+        <code>load=</code> instead, and <strong>there is no state-side signal to tell it apart from
+        the vanilla world</strong>, so it gets the vanilla ceiling back. Documented, not fixed:
+        fixing it properly needs a marker written into the save.</p>
+      </div>
+
+      <h2 id="editor">The map editor</h2>
+      <p>Create a map from nothing at a size you choose, paint it, check it, save it, play it
+      &mdash; all inside the game, with no external tool and no file to hand-assemble. It opens
+      from the same Maps browser: <strong>New map&hellip;</strong> in its footer, or
+      <strong>Edit</strong> beside Play on a map that already exists.</p>
+
+      <h3>The size floor is 158 &times; 201 cells</h3>
+      <p>Not a preference and not a round number. The game drops the player at one fixed position
+      and never looks to see what is there:</p>
+      <div class="codewrap"><pre><code><span class="t-com">// the branch a .custommap always takes</span>
+x = (widthInCells / <span class="t-num">2</span>) * cellSize + <span class="t-num">315</span>   <span class="t-com">// half the width, plus about 79 cells across</span>
+y = <span class="t-num">200</span> * cellSize                     <span class="t-com">// row 200, whatever the map's height</span></code></pre></div>
+      <p>There is no scan for open ground, no fallback and no second attempt. A map narrower than
+      158 cells puts that x past its own right edge; a map shorter than 201 cells has no row 200 at
+      all. Either way the player starts <em>outside the world</em>. So the editor will not create a
+      document below that size, the resize dialog refuses one, and the validator reports it as an
+      error rather than a suggestion. There is no way to move the spawn.</p>
+
+      <h3>The ceiling is total cells, not cells per axis</h3>
+      <p>The game's own per-axis limit is <strong>16,383</strong> cells, because a shared mouse
+      position is carried in a <code>Uint16</code> of world pixels and anything past that wraps
+      around &mdash; clicks, digging and building would all land somewhere other than where the
+      player aimed. But both axes at that limit at once would be <strong>268 million cells</strong>,
+      which is not a map anything can hold. A per-axis rule is the wrong shape for the real
+      constraint.</p>
+      <div class="note good">
+        <span class="lbl">Measured, not estimated</span>
+        <p><strong>8000&times;4000</strong> &mdash; 32 million cells &mdash; opened in
+        <strong>5.0 s</strong> and saved a <strong>4.4 MB</strong> file, while driving the renderer
+        to <strong>1.78 GB</strong> with a <strong>3.08 GB</strong> peak. The editor caps at half of
+        that: <strong>16 million cells</strong>, however they are shaped.</p>
+      </div>
+      <p>Both size dialogs show a <strong>live memory figure</strong> while a size is being typed
+      &mdash; about <strong>34 bytes a cell</strong>, measured against a 1162 MB baseline &mdash; so
+      what a size will cost is visible before it is committed rather than discovered afterwards. A
+      refused size says so, and says which of the two rules refused it.</p>
+
+      <h3>The palette says what the player gets, not what the colour is called</h3>
+      <p>This exists because a test map built from two colours the format documents came out
+      unplayable, and neither colour did what its name suggested.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Colour</th><th>Reads like</th><th>What the player actually gets</th></tr></thead>
+        <tbody>
+          <tr><td><code>102,102,102</code></td><td>background rock</td><td><strong>Fog</strong> &mdash; the sealed-pocket material. The palette entry really does say <code>{bg: Stone, fg: Fog}</code>, but the terrain resolver reads only <code>.fg</code> and throws the rest away, so no background stone is ever placed. Fog is solid on load; break a single cell of it and an unbounded flood fill walks every connected fog cell and turns <em>the whole mass</em> to open air.</td></tr>
+          <tr><td><code>34,34,34</code></td><td>dark stone</td><td><strong>Bedrock</strong> &mdash; solid, collidable and permanently un-minable. It carries no hit points, so the game's own destructibility test is false for it and no tool ever damages it.</td></tr>
+        </tbody>
+      </table></div>
+      <p>So every row in the picker is labelled by outcome: <em>Solid rock (needs a drill)</em>,
+      <em>Bedrock (permanent floor)</em>, <em>Crackstone (needs dynamite)</em>, <em>Open air</em>.
+      Every fog row says <strong>&ldquo;blocks until dug&rdquo;</strong> in its <em>label</em> and
+      not only in its note, so nobody scanning the list for air can reach for one blind.</p>
+      <div class="note warn">
+        <span class="lbl">Alpha 0 is not air either</span>
+        <p>A fully transparent terrain pixel does not resolve to empty space &mdash; it decodes to
+        Fog, the same collidable, flooding material. <strong>Every terrain pixel must be
+        opaque.</strong> So the eraser writes the palette's real empty colour rather than clearing
+        to transparency, a blank document starts full of that colour rather than blank, and a
+        see-through pixel is an error at save time, not a warning.</p>
+      </div>
+
+      <h3>Six layers, six different surfaces</h3>
+      <p>The same bytes mean different things in different layers: a colour that is solid rock in
+      <code>terrain</code> is a brightness and a size in <code>lightsMeta</code>. Offering the terrain palette
+      whatever layer was selected meant an author could pick a rock colour and write a number they
+      never typed and could not see. So each layer gets the surface its own decoder deserves.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Layer</th><th>Surface</th><th>Why that one</th></tr></thead>
+        <tbody>
+          <tr><td><code>terrain</code></td><td>the palette</td><td>A fixed table of the colours the resolver recognises, labelled by what each one gives the player.</td></tr>
+          <tr><td><code>lights</code></td><td>a colour picker</td><td>The pixel's RGB <em>is</em> the light's colour, straight through. Any colour is legitimate, so there is no table to offer.</td></tr>
+          <tr><td><code>lightsMeta</code></td><td>two numeric fields</td><td>It is two numbers wearing a colour's clothes: R is brightness &times; 100, G is size &divide; 4, B is unused. A <strong>zero means &ldquo;keep the default&rdquo;</strong>, not zero &mdash; the decoder tests each channel before it uses it.</td></tr>
+          <tr><td><code>sensors</code></td><td>two entries</td><td>Only pure red and pure yellow mean anything. Every other opaque colour silently becomes Artifact 1, so two entries is the honest surface and anything else is reported.</td></tr>
+          <tr><td><code>authorization</code></td><td>twelve numbered zones</td><td>Each one labelled by what it forbids rather than by its number. An unrecognised colour is zone 0, which restricts nothing at all.</td></tr>
+          <tr><td><code>wall</code></td><td>a free colour, with a count</td><td>A live count of distinct colours against the <strong>254</strong>-value ceiling that layer's palette has room for.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note warn">
+        <span class="lbl">Two things here are unverified, and the interface says so</span>
+        <p><strong>The <code>wall</code> layer's encoding.</strong> Its decoder was never found. The
+        editor offers a free colour and the 254 count, and invents no semantics for what those
+        colours look like. If someone reads that decoder, this is the paragraph that changes.</p>
+        <p><strong>The 1.1&times; brightness special case.</strong> The lights decoder singles out
+        <code>58,211,204</code> and raises that light's brightness to 1.1. The interface states it;
+        nobody has confirmed the game honours it in play.</p>
+      </div>
+
+      <h3>Tools, transforms, and what a save refuses</h3>
+      <p>Brush, eraser, fill, line, box and eyedropper, with undo and redo over all of them.
+      Resize, crop, mirror and shift run on <strong>all six layers together, as one undo
+      step</strong>, because the six have to stay the same size as each other: a layer whose size disagrees with
+      the terrain layer is read at the wrong offset from the second row onward, so what was drawn
+      on it slides further sideways with every row down the map, smearing diagonally across the
+      world without a word of complaint. The spawn cell &mdash; the one thing in the world an
+      author cannot see and cannot move &mdash; is drawn on the canvas as a marker.</p>
+      <p>Before a save, the map is checked against rules written for a mapmaker rather than for a
+      debugger. Each names something the player will experience, in the words someone holding a
+      brush would use, because none of it is visible until a map is loaded.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Errors &mdash; the map will not play</th><th>Warnings &mdash; it will play and disappoint</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>No terrain layer; a size the game cannot carry; layers that disagree about how big
+            the world is; a recorded size that does not match the terrain layer; see-through
+            terrain pixels; a colour that makes the game abandon the map on load; a spawn outside
+            the world; more wall colours than the backdrop's palette can hold.</td>
+            <td>A spawn buried in solid rock; fog the author may not have meant, with the size of
+            its largest connected patch; a terrain layer that is all one colour, or has nothing
+            solid in it at all; artifact and zone colours that will silently become something else;
+            light settings with no light underneath them.</td>
+          </tr>
+        </tbody>
+      </table></div>
+      <div class="note good">
+        <span class="lbl">Errors block a save; warnings do not</span>
+        <p>A map that will not open is refused. A map that will open and disappoint is reported and
+        then saved anyway &mdash; the author is the one who knows whether a wall of fog is a
+        mistake or the whole point of the map.</p>
+      </div>
 
       <h2 id="achievements">Achievements</h2>
       <p>Sandustry refuses to unlock achievements on a save that has been cheated on or modded.
@@ -715,6 +937,10 @@ ctx.logger       <span class="t-com">// namespaced to your id</span></code></pre
 SMLN.register.<span class="t-fn">recipe</span>(<span class="t-str">'smelter'</span>, { id: <span class="t-str">'my-alloy'</span> })
   .<span class="t-fn">catch</span>((e) =&gt; SMLN.<span class="t-fn">log</span>(<span class="t-str">'warn'</span>, e.message))
   <span class="t-com">// "this Sandustry build has no recipe registry …"</span></code></pre></div>
+
+      <p>Not all content is a registry entry. A mod can also ship a whole world &mdash; six
+      blueprint PNGs named in its manifest, which SandLoader assembles into the file the game
+      already reads. See <a href="#/docs#maps" data-nav>custom maps</a>.</p>
 
       <h2 id="missions">Missions &amp; story</h2>
       <p>A mod can put objectives into the game's mission panel and beats into its story chain.
@@ -1277,6 +1503,16 @@ docs/         mod authoring guide</code></pre></div>
         tables and holds its ordering, but reaching a mod's beat needs play up to a factory rank
         nobody has reached yet. The mission half has been watched completing in the running
         game.</li>
+        <li><strong>A custom map reloaded from a save gets the vanilla flight ceiling.</strong>
+        The <a href="#/docs#maps" data-nav>scaled no-fly strip</a> keys off <code>custom_map=</code>
+        in the game&rsquo;s URL, which is the only record that a world is a custom map. Reloading one
+        through the game&rsquo;s save system brings it back under <code>load=</code>, and there is no
+        state-side signal to tell it apart from the vanilla world, so the fixed 600-pixel strip
+        applies again. Documented, not fixed.</li>
+        <li><strong>The <code>wall</code> layer&rsquo;s encoding is unverified.</strong> Its decoder
+        was never found in the bundle, so the <a href="#/docs#editor" data-nav>map editor</a> offers
+        a free colour and a live count against the 254-value ceiling, and invents no meaning for
+        what those colours look like in the world.</li>
         <li><strong>Renderer hot reload is partial by nature.</strong> SandLoader reclaims what
         it handed out — listeners, timers, messaging handlers, recorded registrations. A mod that
         monkey-patched a game function in place stays patched until the window reloads, and the
