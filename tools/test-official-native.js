@@ -71,8 +71,22 @@ function testOfficialDiscoveryShape() {
     writeMod(root, 'fixture.shape')
     const r = official.readMod(root)
     assert(r.ok, 'official fixture was rejected')
-    assert(r.mod.entry === undefined, 'official main entry still exposes the legacy renderer injection field')
-    assert(r.mod.workerEntry === undefined, 'official worker entry still exposes the legacy raw worker injection field')
+    // `entry` and `workerEntry` drive execution: entry.js injects them through
+    // the prelude, wrapped in SMLN.official.execute().
+    //
+    // They were once forced to undefined, on the theory that the native bridge
+    // staging into <userData>/mods would run them instead. It does not.
+    // Sandustry has no loader of its own for local mods - it delegates to
+    // whatever occupies the Workshop slot, which is SandLoader. So forcing them
+    // off meant staging reported success, the manager showed "Enabled", and
+    // nothing ever ran: the "enabled but not loaded" bug.
+    //
+    // This check used to assert they were undefined, and stayed red from the
+    // day that bug was fixed. It now pins the contract that replaced it.
+    assert(r.mod.entry && r.mod.entry.endsWith('main.js'),
+      'official main entry is not set, so nothing will execute the mod')
+    assert(r.mod.workerEntry && r.mod.workerEntry.endsWith('worker.js'),
+      'official worker entry is not set, so its worker half will not run')
     assert(r.mod.nativeEntry && r.mod.nativeEntry.endsWith('main.js'), 'native main entry path was not retained')
     assert(r.mod.nativeWorkerEntry && r.mod.nativeWorkerEntry.endsWith('worker.js'), 'native worker path was not retained')
   } finally {
