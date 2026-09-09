@@ -207,7 +207,14 @@
       var answered = false
 
       var m = modal({
-        title: t(rev.headlineKey || 'perm.installTitle'),
+        // The name has to travel with the key. Both installTitle and its
+        // update sibling read {name}, and calling t() without params left the
+        // most consequential dialog in the loader asking whether to install
+        // '{name}' - literally - so the one thing a player must know before
+        // granting a mod native code was the one thing it did not say.
+        title: t(rev.headlineKey || 'perm.installTitle',
+          { name: (rev.mod && rev.mod.name) || (rev.mod && rev.mod.id) || '?',
+            version: (rev.mod && rev.mod.version) || '' }),
         // Closing without choosing is a "no", never a silent yes.
         onClose: function () { if (!answered) { answered = true; resolve(false) } },
       })

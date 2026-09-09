@@ -9129,3 +9129,29 @@ check('the view is re-derived only over the rectangle a tool reported dirty', ()
       return 'a dab left the far corner untouched; a transform rebuilt all of it'
     })
 })
+
+check('the install prompt says which mod it is asking about', () => {
+  // The one dialog where the mod's identity is the whole decision. The title
+  // key carries {name}, and t() was called without params, so every mod was
+  // announced as `Install "{name}"?` - in both shipped locales.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'permui.js'), 'utf8')
+  const at = src.indexOf("t(rev.headlineKey")
+  assert(at > 0, 'the review title no longer comes from headlineKey')
+  const call = src.slice(at, at + 260)
+  assert(/name:/.test(call), 'the review title is built without a name, so {name} stays literal')
+
+  const locales = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'locales.js'), 'utf8')
+  // Every key that title can resolve to must be fed what it interpolates, and
+  // every locale must carry it - a placeholder left in one language only shows
+  // up for the players who speak it.
+  for (const key of ['perm.installTitle']) {
+    const rows = locales.split('\n').filter((l) => l.includes("'" + key + "'"))
+    assert(rows.length >= 2, key + ' is missing from a locale')
+    for (const row of rows) {
+      assert(/\{name\}/.test(row), key + ' lost its {name} in one locale: ' + row.trim())
+    }
+  }
+  return 'the title is given the name it interpolates, in every locale that has the key'
+})
