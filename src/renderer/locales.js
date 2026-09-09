@@ -273,6 +273,17 @@
     'mods.workshopManaged': 'Managed by Steam. Disable it here, or unsubscribe in Steam to remove it.',
     'mods.workshopUpdated': 'Steam last updated this on {at}.',
     'mods.workshopOpenFailed': 'Could not open Steam: {error}',
+
+    // ---------------------------------------------------------- maps.* (map browser overlay)
+    // Only the export strings so far. The rest of mapsui.js still leans on
+    // tx()'s English fallback, which is a debt, not a decision - a key added
+    // here is a key every language gets, and one left out is English for
+    // everyone forever.
+    'maps.export': 'Export map...',
+    'maps.exportUnavailable': 'exporting needs the loader bridge',
+    'maps.exportNoSelection': 'select a map first, then export it',
+    'maps.exportFailed': 'the export failed',
+    'maps.exported': 'saved to {file}',
   }
 
   var de = {
@@ -513,6 +524,13 @@
     'mods.workshopManaged': 'Wird von Steam verwaltet. Hier deaktivieren, oder in Steam abbestellen zum Entfernen.',
     'mods.workshopUpdated': 'Steam hat das zuletzt am {at} aktualisiert.',
     'mods.workshopOpenFailed': 'Steam konnte nicht geoeffnet werden: {error}',
+
+    // ---------------------------------------------------------- maps.*
+    'maps.export': 'Karte exportieren ...',
+    'maps.exportUnavailable': 'zum Exportieren fehlt die Loader-Brücke',
+    'maps.exportNoSelection': 'wähle erst eine Karte aus, dann exportiere sie',
+    'maps.exportFailed': 'Export fehlgeschlagen',
+    'maps.exported': 'gespeichert unter {file}',
   }
 
   global.__SMLN_LOCALES__ = { en: en, de: de }

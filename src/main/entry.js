@@ -477,6 +477,68 @@ const rpcRegistry = {
   register(action, handler) { runtime.rpcActions.set(action, handler) },
 }
 
+const EXPORT_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+const EXPORT_MAX_STEM = 120
+
+/**
+ * The file name to offer when a player exports a map.
+ *
+ * This is not `custom-maps.mapId()` and must not become it. That function
+ * makes an *id*: something the game can look up, so it folds everything
+ * outside `[A-Za-z0-9._-]` to a dash. This makes a name a person reads in
+ * their downloads folder and attaches to a message, so spaces, accents and
+ * apostrophes survive - the file is never opened by the game under this name,
+ * only imported, and the importer derives a fresh id from it anyway.
+ *
+ * What it does refuse is narrow and all of it earned:
+ *
+ *   - A leading `smln.` comes off. That prefix marks a file SandLoader wrote
+ *     for a mod and may prune (see custom-maps.js `ours()`); a copy the player
+ *     owns is theirs and should not wear a marker that invites deletion.
+ *   - `<>:"/\|?*` and control characters are illegal in a Windows file name
+ *     and `/` in every other one, so they become spaces rather than making the
+ *     save dialog reject its own suggestion.
+ *   - Windows silently drops a trailing dot or space and then cannot find the
+ *     file it just wrote, so both are trimmed off the end.
+ *   - CON, PRN, AUX, NUL, COM1-9 and LPT1-9 are device names on Windows at
+ *     every extension, so they are stepped aside from rather than used.
+ *   - A single path component tops out at 255 on NTFS and ext4 alike, and the
+ *     copy may still be put in a deep folder or a zip, so the stem is capped
+ *     well under that. Slicing UTF-16 can leave a lone high surrogate, which
+ *     is not a character any filesystem will store, so it goes too.
+ *
+ * @param {string} displayName  the map's own name, as its metadata records it
+ * @returns {string}  a bare file name, extension included; never a path
+ */
+function exportFileName(displayName) {
+  const ext = customMaps.EXT
+  let stem = String(displayName == null ? '' : displayName)
+
+  while (stem.slice(0, customMaps.PREFIX.length).toLowerCase() === customMaps.PREFIX) {
+    stem = stem.slice(customMaps.PREFIX.length)
+  }
+  // A map literally named "world.custommap" must not export as
+  // "world.custommap.custommap".
+  if (stem.slice(-ext.length).toLowerCase() === ext) stem = stem.slice(0, -ext.length)
+
+  stem = stem
+    .replace(/\p{Cc}+/gu, ' ')
+    .replace(/[<>:"/\\|?*]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[.\s]+/, '')
+    .replace(/[.\s]+$/, '')
+
+  if (stem.length > EXPORT_MAX_STEM) {
+    stem = stem.slice(0, EXPORT_MAX_STEM)
+      .replace(/[\uD800-\uDBFF]$/, '')
+      .replace(/[.\s]+$/, '')
+  }
+
+  if (!stem) stem = 'custom-map'
+  if (EXPORT_RESERVED.test(stem.split('.')[0])) stem = 'map-' + stem
+  return stem + ext
+}
+
 async function handleRpc(msg) {
   const p = msg.payload || {}
   const logger = runtime.logger.child('rpc')
@@ -734,6 +796,82 @@ async function handleRpc(msg) {
         }
       }
       return { ok: imported.length > 0, imported, failed }
+    }
+
+    /*
+     * The other half of the loop: a map the player made, back out as a file.
+     *
+     * Everything that can refuse happens before the dialog opens. Being asked
+     * where to save something and only then told it could not be saved is the
+     * worst order for this: the player has already chosen a folder, a name and
+     * probably a person to send it to. So a map that is gone, unreadable, or
+     * would not load is refused while the list is still in front of them.
+     *
+     * The file is copied, not rebuilt. Re-serialising the parsed document
+     * would produce bytes that are probably identical - and "probably" is not
+     * a good enough guarantee for a file about to be handed to someone else,
+     * who would be the one to discover the difference.
+     */
+    case 'exportCustomMap': {
+      const hp = runtime.host && runtime.host.paths
+      if (!hp || !hp.userData) return { ok: false, reason: 'the maps folder is unknown on this install' }
+      const mapsDir = path.resolve(path.join(hp.userData, 'custom_maps'))
+
+      const id = typeof p.id === 'string' ? p.id.trim() : ''
+      if (!id) return { ok: false, reason: 'no map was chosen to export' }
+
+      // The id comes from the renderer and doubles as a file name, so it is
+      // resolved and then checked to still be in the maps folder: "../" must
+      // read nothing.
+      const src = path.resolve(mapsDir, id + customMaps.EXT)
+      if (path.dirname(src) !== mapsDir) {
+        return { ok: false, reason: `"${id}" is not the name of a map in the maps folder` }
+      }
+
+      let bytes
+      try {
+        bytes = fs.readFileSync(src)
+      } catch (e) {
+        const reason = e && e.code === 'ENOENT'
+          ? `there is no map called "${id}" any more - it may have been deleted or renamed`
+          : `that map could not be read: ${(e && e.message) || e}`
+        logger.warn(`custom map export refused: ${reason}`)
+        return { ok: false, reason }
+      }
+
+      const seen = customMaps.inspect(bytes.toString('utf8'))
+      if (!seen.ok) {
+        logger.warn(`custom map ${id} is not exportable: ${seen.reason}`)
+        return { ok: false, reason: `this map would not load, so exporting it would only pass the problem on: ${seen.reason}` }
+      }
+
+      const { dialog } = require('electron')
+      const picked = await dialog.showSaveDialog(runtime.gameWindow || undefined, {
+        title: 'Export custom map',
+        // A bare name, so the dialog opens wherever the player last saved
+        // something rather than somewhere this process chose for them.
+        defaultPath: exportFileName(seen.meta.name || seen.meta.id || id),
+        filters: [{ name: 'Sandustry map', extensions: ['custommap'] }],
+        // showOverwriteConfirmation is the dialog's own "replace it?" prompt.
+        // Named here because it is only the default on some platforms, and
+        // silently replacing a file is not ours to decide.
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+      })
+      if (picked.canceled || !picked.filePath) return { ok: false, cancelled: true }
+
+      // Exactly where the dialog said, and exactly the bytes that were
+      // inspected - not a re-read, which could have changed underneath us
+      // since.
+      try {
+        fs.writeFileSync(picked.filePath, bytes)
+      } catch (e) {
+        const reason = `${path.basename(picked.filePath)} could not be written: ${(e && e.message) || e}`
+        logger.warn(`custom map export failed: ${reason}`)
+        return { ok: false, reason }
+      }
+
+      logger.info(`exported custom map "${seen.meta.name || id}" to ${picked.filePath}`)
+      return { ok: true, file: picked.filePath }
     }
 
     case 'saveCustomMap': {
@@ -1805,6 +1943,7 @@ const smln = {
   _modSummary: modSummary,
   _answerFilePatchingQuery: answerFilePatchingQuery,
   _bootReport: bootReport,
+  _exportFileName: exportFileName,
 }
 
 module.exports = smln

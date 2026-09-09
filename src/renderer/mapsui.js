@@ -203,6 +203,10 @@
     '#smln-maps footer{padding:13px 24px;border-top:1px solid rgba(100,116,139,.34);',
     'background:rgba(2,6,10,.5);display:flex;justify-content:space-between;align-items:center;gap:16px}',
     '#smln-maps footer .note{color:#f87171;font-size:11.5px;flex:1;min-width:0}',
+    // The note is the one place the footer speaks, and it speaks in red -
+    // which is right for a refusal and wrong for "saved to ...". A success
+    // says the same thing in the neutral grey the rest of the chrome uses.
+    '#smln-maps footer .note.ok{color:#94a3b8}',
     '#smln-maps .close,#smln-maps .import{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
     'color:#e2e8f0;font:inherit;font-size:12px;padding:7px 20px;border-radius:0 4px 0 4px}',
     '#smln-maps .close:hover,#smln-maps .import:hover{background:rgba(148,163,184,.12)}',
@@ -252,6 +256,13 @@
     importBtn.className = 'import'
     importBtn.textContent = tx('maps.import', 'Import map...')
     importBtn.addEventListener('click', function () { importMaps(importBtn) })
+    // Beside Import, sharing its style, because they are the same gesture in
+    // two directions - and it acts on the selection, so it starts disabled.
+    var exportBtn = document.createElement('button')
+    exportBtn.className = 'import export'
+    exportBtn.disabled = true
+    exportBtn.textContent = tx('maps.export', 'Export map...')
+    exportBtn.addEventListener('click', function () { exportMap(exportBtn) })
     var newBtn = document.createElement('button')
     newBtn.className = 'import'
     newBtn.textContent = tx('maps.newMap', 'New map...')
@@ -259,6 +270,7 @@
     footer.appendChild(note)
     footer.appendChild(newBtn)
     footer.appendChild(importBtn)
+    footer.appendChild(exportBtn)
     footer.appendChild(close)
 
     panel.appendChild(header)
@@ -277,6 +289,7 @@
     overlay._stage = stage
     overlay._note = note
     overlay._panel = panel
+    overlay._export = exportBtn
 
     renderList()
     renderStage()
@@ -459,9 +472,17 @@
     overlay._prompt = null
   }
 
-  function say(text) {
+  /** @param {string} text @param {boolean} [ok] true for an outcome that went right. */
+  function say(text, ok) {
     if (!overlay) return
+    overlay._note.className = ok ? 'note ok' : 'note'
     overlay._note.textContent = text || ''
+  }
+
+  /** Export acts on the selection, so it is dead whenever there isn't one. */
+  function syncExport() {
+    if (!overlay || !overlay._export) return
+    overlay._export.disabled = !entryFor(selectedId)
   }
 
   // ------------------------------------------------------------- fetching
@@ -621,6 +642,9 @@
   /** Everything to the right: the preview canvas, the details, and Play. */
   function renderStage() {
     if (!overlay) return
+    // Every path that changes the selection comes through here, so this is the
+    // one place the footer's selection-dependent button has to be kept honest.
+    syncExport()
     var stage = overlay._stage
     while (stage.firstChild) stage.removeChild(stage.firstChild)
 
@@ -824,6 +848,44 @@
     }).catch(function (e) {
       say((e && e.message) || 'the import failed')
     }).then(function () { button.disabled = false })
+  }
+
+  /**
+   * Copy the selected map back out, to wherever the player wants it.
+   *
+   * The mirror of importMaps(), and for the same reasons: the renderer has no
+   * save dialog, and the bytes worth exporting are the ones already on disk -
+   * pulling six PNG layers through IPC only to write them back out would be a
+   * re-encoding wearing a copy's name.
+   *
+   * Main answers with four different outcomes and each is said differently.
+   * The one that says nothing is the cancel: the player closed the dialog on
+   * purpose, and telling them so would be the overlay narrating their own
+   * click. It does clear the line, so a refusal from a previous attempt does
+   * not sit there looking like the result of this one.
+   */
+  function exportMap(button) {
+    if (!SMLN || typeof SMLN.callMain !== 'function') {
+      say(tx('maps.exportUnavailable', 'exporting needs the loader bridge'))
+      return
+    }
+    var m = entryFor(selectedId)
+    if (!m) {
+      say(tx('maps.exportNoSelection', 'select a map first, then export it'))
+      return
+    }
+    button.disabled = true
+    say('')
+    Promise.resolve(SMLN.callMain('exportCustomMap', { id: m.id })).then(function (r) {
+      if (!r || r.cancelled) return
+      if (!r.ok) {
+        say(r.reason || tx('maps.exportFailed', 'the export failed'))
+        return
+      }
+      say(tx('maps.exported', 'saved to ' + r.file, { file: r.file }), true)
+    }).catch(function (e) {
+      say((e && e.message) || tx('maps.exportFailed', 'the export failed'))
+    }).then(function () { syncExport() })
   }
 
   // --------------------------------------------------------------- toggle
