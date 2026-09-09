@@ -180,6 +180,43 @@
    * 4000x4000 or 8000x2000, and refuses with the number rather than freezing.
    */
   var MAX_CELLS = 16000000
+
+  /*
+   * What a map of a given size costs while it is open, in bytes per cell.
+   *
+   * Measured on this machine rather than derived: at the main menu with no
+   * editor the renderer process held 1162 MB; opening a 4000x2000 map - eight
+   * million cells - took it to 1420 MB, and the GPU process rose 27 MB at the
+   * same time. That is 284 MB for eight million cells, about 34 bytes each.
+   *
+   * The arithmetic underneath agrees, which is why the number is believable
+   * rather than a coincidence: six layer canvases plus one derived display
+   * canvas at four bytes a pixel is 28, and the rest is the allocator's.
+   *
+   * It is deliberately the cost of HOLDING a map, not of saving one. Saving
+   * encodes six PNGs and needs more again, briefly; the dialogs say so in
+   * words rather than pretending to a second number nobody measured.
+   */
+  var BYTES_PER_CELL = 34
+
+  /** A size in bytes as something a person reads without counting digits. */
+  function humanBytes(n) {
+    if (!isFinite(n) || n <= 0) return '0 MB'
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB'
+    if (n < 1024 * 1024 * 1024) return Math.round(n / (1024 * 1024)) + ' MB'
+    return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+  }
+
+  /** What a w x h map will occupy while open, as a sentence for a dialog. */
+  function memoryEstimate(w, h) {
+    if (!(w > 0) || !(h > 0)) return ''
+    var cells = w * h
+    return tx('editor.memoryEstimate',
+      humanBytes(cells * BYTES_PER_CELL) + ' of memory while open (' +
+      (cells >= 1e6 ? Math.round(cells / 1e5) / 10 + ' million' : cells.toLocaleString()) +
+      ' cells). Saving needs more again for a moment.',
+      { size: humanBytes(cells * BYTES_PER_CELL) })
+  }
   var DEFAULT_SIZE = { width: 640, height: 400 }
 
   /**
@@ -605,6 +642,8 @@
     '#smln-mapedit .dialog .pair>div{flex:1}',
     '#smln-mapedit .dialog .hint{margin-top:12px;color:#94a3b8;font-size:11px;line-height:1.5}',
     '#smln-mapedit .dialog .hint.refused{color:#f87171}',
+    '#smln-mapedit .dialog .cost{margin-top:10px;color:#94a3b8;font-size:11.5px}',
+    '#smln-mapedit .dialog .cost.over{color:#f87171}',
     '#smln-mapedit .dialog input.bad{border-color:#f87171}',
     '#smln-mapedit .dialog .row{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}',
     '#smln-mapedit .anchors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:150px}',
@@ -2021,6 +2060,21 @@
     })
     card.appendChild(grid)
 
+    // What this size will cost, updated while the author types rather than
+    // discovered after the map is open and the machine is swapping.
+    var cost = document.createElement('div')
+    cost.className = 'cost'
+    function showCost() {
+      var w = Math.round(Number(widthInput.value))
+      var h = Math.round(Number(heightInput.value))
+      cost.textContent = memoryEstimate(w, h)
+      cost.className = 'cost' + (w > 0 && h > 0 && w * h > MAX_CELLS ? ' over' : '')
+    }
+    widthInput.addEventListener('input', showCost)
+    heightInput.addEventListener('input', showCost)
+    showCost()
+    card.appendChild(cost)
+
     var hint = document.createElement('div')
     hint.className = 'hint'
     hint.textContent = minimumSentence()
@@ -2700,6 +2754,7 @@
         minHeight: MIN_HEIGHT,
         maxSize: MAX_SIZE,
         maxCells: MAX_CELLS,
+        bytesPerCell: BYTES_PER_CELL,
         defaultWidth: DEFAULT_SIZE.width,
         defaultHeight: DEFAULT_SIZE.height,
         reason: minimumSentence(),

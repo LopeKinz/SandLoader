@@ -384,6 +384,30 @@
 
     var row = document.createElement('div')
     row.className = 'row'
+    // The cost of the size being typed, from the editor's own measured figure
+    // rather than a second guess kept in this file.
+    var cost = document.createElement('div')
+    cost.className = 'hint cost'
+    function showCost() {
+      var w = parseInt(widthInput.value, 10)
+      var h = parseInt(heightInput.value, 10)
+      var per = limits.bytesPerCell || 34
+      if (!(w > 0) || !(h > 0)) { cost.textContent = ''; return }
+      var bytes = w * h * per
+      var size = bytes < 1073741824
+        ? Math.round(bytes / 1048576) + ' MB'
+        : (bytes / 1073741824).toFixed(1) + ' GB'
+      cost.textContent = tx('maps.newCost',
+        size + ' of memory while open (' + Math.round(w * h / 1e5) / 10 +
+        ' million cells). Saving needs more again for a moment.', { size: size })
+      cost.className = 'hint cost' +
+        (limits.maxCells && w * h > limits.maxCells ? ' err' : '')
+    }
+    widthInput.addEventListener('input', showCost)
+    heightInput.addEventListener('input', showCost)
+    showCost()
+    card.appendChild(cost)
+
     var cancel = document.createElement('button')
     cancel.className = 'close'
     cancel.textContent = tx('maps.cancel', 'Cancel')
