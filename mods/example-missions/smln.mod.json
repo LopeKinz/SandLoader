@@ -1,0 +1,8 @@
+{
+  "id": "example-missions",
+  "name": "Missions Example",
+  "version": "1.0.0",
+  "priority": 100,
+  "renderer": "renderer.js",
+  "optionalDependencies": ["gas-pipes"]
+}

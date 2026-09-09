@@ -6511,10 +6511,16 @@ function bootStory(opts = {}) {
     messages: [{ text: { key: 'story|steps|' + id + '|message1' }, showObjective: true }],
     objective,
   })
+  // Overridable because the ids differ by build: `reach_factory_tier_2` is a
+  // save-migration alias on 0.5.6, where the step itself is called
+  // `establish_wet_sand_processing`. A check that exercises a real mod's
+  // `after` needs the ids that build actually ships.
+  const stepIds = opts.stepIds ||
+    ['reach_factory_tier_2', 'investigate_anomaly', 'resume_factory_expansion']
   const vanillaSteps = () => [
-    vanillaStep('reach_factory_tier_2', { type: 'factoryLevel', target: 2 }),
-    vanillaStep('investigate_anomaly', { type: 'waypoint', radius: 600 }),
-    vanillaStep('resume_factory_expansion', { type: 'factoryLevel', target: 4 }),
+    vanillaStep(stepIds[0], { type: 'factoryLevel', target: 2 }),
+    vanillaStep(stepIds[1], { type: 'waypoint', radius: 600 }),
+    vanillaStep(stepIds[2], { type: 'factoryLevel', target: 4 }),
   ]
   let stepList = vanillaSteps()
 
@@ -6638,6 +6644,9 @@ function bootStory(opts = {}) {
 
   const S = sandbox.__SMLN__
   env.S = S
+  // The VM context itself, so a check can run a real mod's entrypoint through
+  // the real sandbox wrapper inside it rather than approximating one.
+  env.sandbox = sandbox
   env.qs = qs
   env.i18n = i18n
   env.active = active
@@ -9217,4 +9226,244 @@ check('the mods overlay has no string that silently stays English', () => {
       'the dependency chip says "needs:" again beside "needs approval": ' + row.trim())
   }
   return asked.size + ' keys asked for, every one answered in both locales'
+})
+
+// ------------------------------------------------ the missions example mod
+/**
+ * Where the shipped mission/story example lives, and how the loader would read
+ * it. Shared by the checks below so a rename shows up in one place.
+ */
+const MISSIONS_DIR = path.join(__dirname, '..', 'mods', 'example-missions')
+
+function missionsExample() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(MISSIONS_DIR, 'smln.mod.json'), 'utf8'))
+  const v = modLoader.validate(manifest, MISSIONS_DIR)
+  assert(v.ok, 'the missions example manifest does not validate: ' + (v.ok ? '' : v.error.message))
+  return { manifest, mod: v.mod, source: fs.readFileSync(v.mod.renderer, 'utf8') }
+}
+
+/**
+ * Run the example the way the loader runs it: through the real sandbox
+ * wrapper, inside the story harness's own VM, so `SMLN` is the same capability
+ * facade the game hands it and `SMLN.story` is the real SDK over fake tables.
+ */
+function loadMissionsExample(env) {
+  const sandboxMod = require('../src/mods/sandbox')
+  const example = missionsExample()
+  // console.js is not one of the parts this harness boots, and the facade only
+  // offers `registerCommand` when the console has installed one. The example
+  // adds a command like every other example here, so the console's contract is
+  // stubbed rather than the mod bent around its absence.
+  env.commands = []
+  env.S.registerCommand = (spec) => { env.commands.push(spec); return spec }
+  const wrapped = sandboxMod.wrapRendererMod({
+    modId: example.mod.id,
+    capability: example.mod.capability,
+    source: example.source,
+  })
+  new vm.Script(wrapped, { filename: 'example-missions.js' }).runInContext(env.sandbox)
+  return example
+}
+
+/** The step ids this build actually ships, in order. See bootStory's stepIds. */
+const REAL_STEP_IDS = [
+  'establish_wet_sand_processing',
+  'investigate_anomaly',
+  'establish_burnt_residue_processing',
+]
+
+check('the missions example manifest declares every mod its content asks for', () => {
+  const { manifest, mod, source } = missionsExample()
+  assert(mod.id === 'example-missions', 'the example changed id to ' + mod.id)
+  assert(mod.capability.tier === 'sandboxed',
+    'the missions example is no longer sandboxed - writing missions needs no permission')
+  assert(mod.renderer, 'the missions example has no renderer entrypoint, so it does nothing')
+
+  // `requires` on a registration and the manifest's dependencies answer two
+  // different questions - whether this piece of content registers, and whether
+  // the mod loads at all - but a mod that names another mod in one and not the
+  // other tells the manager and the player two different stories.
+  const declaredRaw = [].concat(manifest.dependencies || [], manifest.optionalDependencies || [])
+  const declared = new Set(declaredRaw.filter((d) => typeof d === 'string'))
+  for (const field of ['dependencies', 'optionalDependencies']) {
+    const v = manifest[field]
+    if (v && !Array.isArray(v)) for (const id of Object.keys(v)) declared.add(id)
+  }
+
+  const asked = new Set()
+  const re = /requires:\s*\[([^\]]*)\]/g
+  let m
+  while ((m = re.exec(source))) {
+    for (const raw of m[1].split(',')) {
+      const id = raw.trim().replace(/^['"]|['"]$/g, '')
+      if (id) asked.add(id)
+    }
+  }
+  assert(asked.size > 0, 'the example no longer demonstrates a `requires` dependency')
+  const undeclared = [...asked].filter((id) => !declared.has(id))
+  assert(!undeclared.length,
+    'the example registers content requiring ' + undeclared.join(', ') +
+    ' but its manifest never names them')
+
+  return 'sandboxed, one renderer entrypoint, and ' + [...asked].join(', ') + ' declared both ways'
+})
+
+check('the missions example loads against a fake SMLN and registers what the README claims', () => {
+  const env = bootStory({
+    mods: [{ id: 'example-missions', enabled: true }, { id: 'gas-pipes', enabled: true }],
+    stepIds: REAL_STEP_IDS,
+  })
+  const published = []
+  env.S.on('example-missions:quota-met', (payload) => published.push(payload))
+
+  loadMissionsExample(env)
+  const threw = env.logs.filter((l) => /example-missions.*threw/.test(l))
+  assert(!threw.length, 'the example threw while loading: ' + threw.join(' | '))
+
+  // The speaker, in the table the patch adopts, wearing this mod's own colour.
+  const speakers = env.speakerTable()
+  const face = speakers['example-missions:surveyor']
+  assert(face, 'the speaker is missing; registered: ' + env.S.__story.speakers().join(', '))
+  assert(/^data:image\/svg\+xml,/.test(face.portrait),
+    'the portrait is not the inline data URL the file documents: ' + face.portrait)
+  assert(face.borderColor === '#8ec5ff' && face.labelColor === '#8ec5ff', 'the speaker lost its colour')
+  assert(speakers.zoe && speakers.pri, "the example disturbed the game's own speakers")
+
+  // The objective, in the game's own definition table, namespaced, and with the
+  // predicate deliberately NOT handed to the game's evaluator.
+  const def = env.qs['example-missions:first-quota']
+  assert(def, "the objective is not in the game's table")
+  assert(!def.check, "the mod's predicate was written into the game's table")
+  assert(!env.qs['first-quota'], 'something registered under a bare, unnamespaced id')
+  assert(env.i18n.en && env.i18n.en[def.titleKey], 'the objective title never reached i18n')
+
+  // The beat, one place after the step it names, with the chain leading through
+  // it - which is what `after` claims to do.
+  const order = env.steps.map((s) => s.id)
+  assert(order[0] === REAL_STEP_IDS[0], "the fake's vanilla order changed: " + order.join(' -> '))
+  assert(order[1] === 'example-missions:briefing',
+    'the beat did not land after the step it names: ' + order.join(' -> '))
+  const beat = env.steps[1]
+  assert(beat.messages.length === 2, 'the beat lost a message')
+  assert(beat.messages[0].speaker === 'example-missions:surveyor', "the mod's speaker was not namespaced")
+  assert(beat.messages[1].speaker === 'zoe', 'a bare vanilla speaker was namespaced into the mod')
+  assert(beat.objective && beat.objective.type === 'custom', 'the beat is not driven by the SDK')
+
+  // The `requires` beat, which registers here because gas-pipes is present.
+  assert(order.indexOf('example-missions:pipe-talk') > order.indexOf('example-missions:briefing'),
+    'the gas-pipes beat is missing or out of order: ' + order.join(' -> '))
+
+  // The predicate is one a player can actually satisfy, and the SDK is what
+  // runs it - nothing in the game ever looks at it.
+  env.state.store.resources = { gold: 10 }
+  env.S.__story.tick()
+  assert(!env.S.__story.completed().length, 'the quota completed before the player met it')
+  env.state.store.resources.gold = 250
+  env.S.__story.tick()
+  assert(env.S.__story.completed().indexOf('example-missions:first-quota') >= 0,
+    'the quota did not complete when the player met it')
+  assert(env.state.store[env.S.__story.storeKey].completed['example-missions:first-quota'],
+    'the completion was not written into the saved record')
+
+  // And the event the README says any other mod can complete on.
+  assert(published.length === 1, 'the example published its event ' + published.length + ' time(s)')
+  assert(published[0] && published[0].threshold === 250,
+    'the event carried: ' + JSON.stringify(published[0]))
+
+  assert(env.commands.length === 1 && env.commands[0].name === 'missions',
+    'the example no longer adds its console command')
+
+  env.S.__story.stop()
+  return 'speaker, objective, beat at index 1, the gas-pipes beat, a completion and its event'
+})
+
+check('the missions example refuses its gas-pipes beat when gas-pipes is absent', () => {
+  // The point of `requires`, and why it is worth a check of its own: the mod
+  // still loads, its own content still registers, and the one piece that needed
+  // another mod is refused by name instead of becoming a story beat the player
+  // reaches and cannot explain.
+  const env = bootStory({
+    mods: [{ id: 'example-missions', enabled: true }],
+    stepIds: REAL_STEP_IDS,
+  })
+  loadMissionsExample(env)
+
+  const order = env.steps.map((s) => s.id)
+  assert(order.indexOf('example-missions:briefing') === 1,
+    "the mod's own beat did not survive: " + order.join(' -> '))
+  assert(order.indexOf('example-missions:pipe-talk') < 0,
+    'the gas-pipes beat registered with gas-pipes absent: ' + order.join(' -> '))
+  assert(env.qs['example-missions:first-quota'], 'the refusal took the objective down with it')
+
+  const named = env.logs.filter((l) => /gas-pipes/.test(l) && /example-missions/.test(l))
+  assert(named.length, 'the refusal never named both mods: ' + env.logs.join(' | '))
+  assert(named.some((l) => /E_STORY_MISSING_DEPENDENCY/.test(l)),
+    'the refusal carried no error code: ' + named.join(' | '))
+
+  env.S.__story.stop()
+  return "the beat is refused by name; the objective and the mod's own beat are untouched"
+})
+
+check('the README documents the story surface story-sdk.js actually exports', () => {
+  // Prose can describe a signature that no longer exists and nothing notices.
+  // This compares the two directly, in both directions, so the section cannot
+  // drift away from the file it documents.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'story-sdk.js'), 'utf8')
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8')
+
+  const params = (s) => s.split(',').map((p) => p.trim()).filter(Boolean).join(', ')
+  const real = new Map()
+  let m
+  // The members of `var story = {...}`, then the ones attached to it afterwards.
+  const inLiteral = /^ {6}([A-Za-z]\w*): function \(([^)]*)\)/gm
+  while ((m = inLiteral.exec(src))) real.set(m[1], params(m[2]))
+  const attached = /^ {4}story\.([A-Za-z]\w*) = function \(([^)]*)\)/gm
+  while ((m = attached.exec(src))) real.set(m[1], params(m[2]))
+  assert(real.size >= 8,
+    'found only ' + real.size + ' methods in story-sdk.js - the scan is broken, not the docs')
+
+  const documented = new Map()
+  // Only the signature block starts a line with `story.`; every other mention
+  // in the section is inside a sentence, a table cell or an indented example.
+  const sig = /^story\.([A-Za-z]\w*)\(([^)]*)\)/gm
+  while ((m = sig.exec(readme))) documented.set(m[1], params(m[2].replace(/\?/g, '')))
+
+  const undocumented = [...real.keys()].filter((k) => !documented.has(k))
+  assert(!undocumented.length,
+    'story-sdk.js exports these and the README never gives their signature: ' + undocumented.join(', '))
+  const invented = [...documented.keys()].filter((k) => !real.has(k))
+  assert(!invented.length,
+    'the README documents these and story-sdk.js does not export them: ' + invented.join(', '))
+  const wrong = [...real.entries()]
+    .filter(([k, p]) => documented.get(k) !== p)
+    .map(([k, p]) => 'story.' + k + '(' + documented.get(k) + ') documented, (' + p + ') shipped')
+  assert(!wrong.length, wrong.join('; '))
+  assert(/story\.modId/.test(readme), 'the README no longer names story.modId')
+
+  // The three literals the section states as facts about how the SDK behaves.
+  for (const literal of ['smlnStory', 'smln:story-speakers', 'auralite:productionChanged']) {
+    assert(src.includes("'" + literal + "'"), 'story-sdk.js no longer defines ' + literal)
+    assert(readme.includes(literal), 'the README no longer names ' + literal)
+  }
+
+  // Every error code the section quotes must still be one the SDK raises.
+  const codes = new Set(readme.match(/E_STORY_[A-Z_]+/g) || [])
+  assert(codes.size >= 4, 'the README quotes only ' + codes.size + ' error codes')
+  for (const code of codes) {
+    assert(src.includes("'" + code + "'"), 'the README quotes ' + code + ', which the SDK does not raise')
+  }
+
+  // The two vocabularies the section reproduces field by field.
+  for (const kind of ['factoryLevel', 'waypoint', 'objective', 'event', 'check']) {
+    assert(src.includes('cw.' + kind),
+      'the README documents completeWhen.' + kind + ', which the SDK does not read')
+  }
+  for (const field of ['text', 'speaker', 'showObjective', 'style', 'characterSwitch', 'type', 'completedText', 'params']) {
+    assert(readme.includes('`' + field + '`'),
+      'the README no longer documents the message field ' + field)
+    assert(src.includes('m.' + field),
+      'the README documents the message field ' + field + ', which the SDK ignores')
+  }
+
+  return real.size + ' signatures, ' + codes.size + ' error codes and both field vocabularies match the source'
 })

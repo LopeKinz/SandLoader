@@ -32,6 +32,8 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 - [Writing mods](docs/WRITING-MODS.md)
 - [Modding reference](docs/MODDING-REFERENCE.md) — how Sandustry looks on the
   inside, and all three mod formats that run on it
+- [Missions and story](#missions-and-story) — objectives, speakers and story
+  beats a mod can add, and how they reach across mods
 - [How it works](#how-it-works) · [Project layout](#project-layout)
 - [Security model](#security-model)
 - [When the game updates](#it-re-checks-itself-when-the-game-updates)
@@ -559,6 +561,243 @@ A mod is arbitrary code with full Node access, exactly like this loader. The
 installer rejects archives without a valid manifest and refuses any that try to
 write outside the mods folder, but it cannot judge what the code does. Treat mods
 like any other software you install.
+
+---
+
+## Missions and story
+
+A mod can put objectives into the game's mission panel and beats into its story
+chain. Neither table has a registry API — they are module-scope literals the
+game assumes it is the only writer of — so the SDK's whole job is to put a mod's
+entry in, keep it there, and supply the four things the game does not: running
+the predicate, remembering the completion, keeping ids apart, and refusing
+content whose mod is absent.
+
+It hangs off the per-mod facade. Inside a renderer mod `SMLN` *is* that facade,
+so `SMLN.story` is the whole surface:
+
+```js
+SMLN.story.speaker('surveyor', { name: 'MARA', portrait: PORTRAIT, color: '#8ec5ff' })
+
+SMLN.story.objective({
+  id: 'first-quota',
+  title: 'Fill the survey quota',
+  description: 'Hold 250 gold at one time.',
+  check: function (state) { return state.store.resources.gold >= 250 },
+})
+
+SMLN.story.step({
+  id: 'briefing',
+  after: 'establish_wet_sand_processing',
+  messages: [
+    { speaker: 'surveyor', text: 'Core sample says this seam runs deep.' },
+    { speaker: 'zoe', text: 'File it once the sand is moving.', showObjective: true },
+  ],
+  completeWhen: { objective: 'first-quota' },
+})
+```
+
+A commented, loadable version of exactly that — plus all three cross-mod
+mechanisms and a console command to watch it work — is
+[`mods/example-missions/`](mods/example-missions/).
+
+### The surface
+
+```
+story.modId                        this mod's namespace, as a string
+
+story.objective(def)               -> boolean
+story.complete(id)                 -> boolean
+story.isComplete(id)               -> boolean
+
+story.speaker(id, def)             -> boolean
+story.step(def)                    -> boolean
+story.isStepComplete(id)           -> boolean
+
+story.emit(name, payload)          -> publishes <modId>:name
+story.on(event, fn)                -> off()
+```
+
+`false` from a registration means refused, always with a named error carrying
+the mod id and a code — `E_STORY_BAD_ID`, `E_STORY_MISSING_DEPENDENCY`,
+`E_STORY_DUPLICATE_ID`, `E_STORY_NO_PORTRAIT`, `E_STORY_NO_SPEAKER_TABLE` and so
+on. It goes to the log *and* to the in-game Problems panel, because a refusal
+only a log file ever sees is invisible to exactly the person it is for. `true`
+means registered, or queued until the game has started; either way the
+definition was accepted, and a refusal at flush time is still reported against
+the mod by name. **Nothing here throws at a mod** — a bad definition must not
+abort the mod that wrote it.
+
+**`objective(def)`**
+
+| Field | Required | |
+|---|---|---|
+| `id` | **yes** | Bare. Registers as `<modId>:<id>`; a `:` written by hand is refused. |
+| `title` | no | Literal text, or an i18n key — any string containing a `\|`. |
+| `description` | no | Same. |
+| `check` | no | `(state) => boolean`, run by the SDK about once a second. |
+| `next` | no | Ids chained onto the active list when this one completes. |
+| `requires` | no | Mod ids that must be installed **and** enabled. |
+
+**`speaker(id, def)`**
+
+| Field | Required | |
+|---|---|---|
+| `portrait` | **yes** | A `data:` URL, or a path to one of this mod's own assets. Anything else is left to resolve under the game's `dist/`, the way its own portraits do, and that is said out loud in the log. |
+| `name` | no | Literal text or an i18n key. Defaults to the bare id. |
+| `color` | no | Frame and label colour. Defaults to the game's own `#ffe700`. |
+| `borderColor`, `labelColor` | no | Override `color` one at a time. |
+| `requires` | no | As above. |
+
+**`step(def)`**
+
+| Field | Required | |
+|---|---|---|
+| `id` | **yes** | Bare, namespaced like everything else. |
+| `messages` | **yes** | At least one — the messages are the beat. |
+| `after`, `before` | no | Which step this one sits next to. |
+| `completeWhen` | no | What finishes it; see below. |
+| `objectiveLabel`, `objectiveDescription` | no | Literal text or an i18n key. |
+| `blocksFactoryLevel`, `requireAccept`, `notificationDelayMs` | no | Passed through to the game's own fields of those names. |
+| `requires` | no | As above. |
+
+A message keeps the game's own field names, because they are the vocabulary its
+own steps are written in: `text`, `speaker`, `showObjective`, `style`
+(`{color, italic}`), `characterSwitch`, `type`, `completedText`, `params`. If no
+message carries `showObjective`, the SDK puts it on the last one — a step that
+never becomes current can never complete, and the chain stops dead behind it.
+
+`completeWhen` takes one of:
+
+| | Run by | |
+|---|---|---|
+| `{ factoryLevel: N }` | the game | data the game already completes on its own |
+| `{ waypoint: { x, y, radius } }` | the game | the position is written into the same save key the game's own steps use |
+| `{ objective: 'id' }` | the SDK | bare means this mod's, `mod:id` means someone else's |
+| `{ event: 'mod:name' }` | the SDK | remembered in memory only — a world reload forgets that it fired |
+| `{ check: fn }`, or a bare function | the SDK | |
+| *omitted* | the SDK | a dialogue-only beat, finished the moment the player has read it |
+
+### Ids are namespaced, always
+
+`objective({ id: 'first-quota' })` from `example-missions` registers as
+`example-missions:first-quota`. Two mods cannot collide in a table the game
+believes it owns alone, the author of a broken objective is in the log line
+without a lookup, and a cross-mod reference has to name the mod it means — which
+is what makes the next section honest rather than accidental.
+
+Vanilla ids stay bare. A bare id the game already owns — `find_fluxite`,
+`establish_wet_sand_processing` — means the game's own and cannot be shadowed;
+any other bare id means the calling mod's. Writing a `:` into a registration id
+is refused, because that is the one way a mod could aim at another namespace by
+hand.
+
+### Reaching across mods
+
+Three ways, in increasing order of coupling.
+
+| | Write | Reach for it when |
+|---|---|---|
+| **Declared dependency** | `requires: ['gas-pipes']` | the content makes no sense without the other mod. Absent or disabled, it is not registered at all, and the log names both mods and which of the two it was. The mod itself still loads — this is per-registration, unlike the manifest's `dependencies`. |
+| **Reference by id** | `completeWhen: { objective: 'other.mod:their-goal' }`, `after: 'other.mod:their-step'`, `next: ['other.mod:their-goal']` | the two pieces genuinely belong to one chain. A reference nothing ever registers is reported once, by name, instead of waited on forever. |
+| **Event** | `story.emit('reactor-online')` publishes `<modId>:reactor-online`; anyone finishes on `completeWhen: { event: 'my.mod:reactor-online' }` | the emitting mod should not have to know who is listening. This is what lets a mission pack ship for a machine mod that has never heard of it. |
+
+Ordering is by declaration, never by load order: a step naming an `after` that
+has not registered yet waits for it, and the queue is retried until it stops
+moving, so a chain of mod steps lands whichever order the mods loaded in. After
+five ticks the reference is declared missing, reported once by name, and the
+step is appended to the end rather than dropped. Load order is not something a
+mod author can control, so it must not be something they have to reason about.
+
+### Why the SDK runs its own predicates
+
+`check` is a field the game already has, and its evaluator is generic — but that
+evaluator fires at only three event sites, and seven of the twelve shipped
+objectives are completed by hard-coded calls elsewhere. A mod's predicate left
+in the game's table would sit there unevaluated forever. So the SDK keeps the
+predicate itself and ticks it, about once a second and deliberately not per
+frame, because a mod's predicate must not become a cost the simulation pays.
+
+A mod's `check` is therefore **never written into the game's table**. The shipped
+evaluator does not catch, so a predicate left there would throw inside the game's
+own tech-unlock handler. Inside the SDK it is wrapped: a throw is logged against
+the mod that wrote it, and after three throws that one predicate is switched off
+and reported rather than throwing every second for the rest of the session. One
+bad mod does not take the others down.
+
+Step predicates ride the same tick with one difference: when one turns true the
+SDK does not complete the step itself. It emits the game's own
+`auralite:productionChanged`, whose only listener in the whole 4.3 MB bundle
+re-evaluates the current step — so the chain advance, the next box, the
+factory-level unblock and the waypoint cleanup are the vanilla ones, because
+they *are* the vanilla path. The cost, stated plainly: a future build that adds
+a second listener to that event would see it fired for a reason that is not
+auralite.
+
+### Why completion is recorded separately
+
+The game deletes a completed objective from `store.objectives.active` about five
+seconds later, and again at world load, and keeps no completed-set anywhere at
+all. Left to that, a mod's objective would un-complete itself.
+
+That deletion is left strictly alone — it is the game's behaviour and its reasons
+are not ours to guess. Instead the SDK keeps its own record in the saved half of
+the state, under `store.smlnStory`, re-read whenever the state or its store is
+replaced, which is what a world load looks like from here. It is re-read as a
+replacement and never as a union: two saves have two different sets of finished
+missions, and carrying one into the other would hand a player completions they
+never earned. `isComplete()` answers from that record, which is why it is the
+right thing to ask and `store.objectives.active` is not.
+
+Unloading a mod takes its objectives out of the game's table *and* out of the
+active list — an id left in the active list of a save whose mod is gone is
+permanent, because the game refuses to complete an id its table no longer
+defines. The saved record is deliberately kept: a player who turns a mod off and
+on again must not have to replay its missions.
+
+### The speaker patch
+
+The dialogue box reads its portrait, label and frame colour out of one
+module-scope table with no accessor, no export and no write site, and it picks
+with `speaker in table ? speaker : "zoe"` — so a speaker nobody registered is
+silently drawn as ZOE. One core patch, `smln:story-speakers`, rewrites that
+declaration so the same object also has an identity on the global, and
+`speaker()` writes into it there.
+
+That patch is declared `required: false`. On a build that reshapes the literal
+it costs mod portraits and nothing else: the anchor reports itself broken,
+`speaker()` refuses by name with `E_STORY_NO_SPEAKER_TABLE` rather than
+registering a face that would never be worn, and objectives, steps, ordering and
+completion all still work. A step whose message names a speaker nobody
+registered is reported too, because the game's own answer to that is to draw ZOE
+and say nothing.
+
+### Limits, stated plainly
+
+- **A step inserted after a step the player has already completed is never
+  reached.** Chaining is array order and, in an existing save, the chain has
+  already run past that index. A new world plays the beat; an old one does not,
+  and nothing in the SDK can change that.
+- **`{ event: … }` completion is remembered in memory only.** A world reload
+  forgets that the event fired.
+- **The save round trip is inferred, not measured.** The save is written
+  wholesale with no field whitelist, so `store.smlnStory` does travel out to
+  disk; that the same key comes back on load follows from that same shape and
+  has not been watched happening.
+- **A `data:` URL portrait has not been seen rendering, and a mod's beat has not
+  been seen on screen.** The table writes, the namespacing, the ordering, the
+  refusals and the completion record are covered by `tools/selftest.js` against
+  fakes of both tables, and the mission half has been watched registering and
+  completing in the running game. The pixels have not been watched.
+- **Two writers on one table.** The SDK writes only its own namespaced ids and
+  never reorders or removes a vanilla entry, but a game update that starts
+  rebuilding either table would drop mod content at that moment. The anchors
+  report it.
+- **Additive only, and no rewards.** Vanilla objectives and steps are never
+  replaced or rewritten, branching has no field that expresses it, and the
+  objective table has no reward field — completion sets a flag and chains
+  successors. A mod that wants to give something does it from its own handler on
+  `story.on('story:complete', …)`.
 
 ---
 

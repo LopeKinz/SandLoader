@@ -8,6 +8,7 @@ Thumbs.db
 # Local mods that are not part of the project
 mods/*
 !mods/example-hello/
+!mods/example-missions/
 
 # Fetched by install.js, not part of the source tree.
 vendor/
