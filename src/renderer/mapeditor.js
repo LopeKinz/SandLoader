@@ -582,6 +582,8 @@
     '#smln-mapedit .dialog .pair{display:flex;gap:12px}',
     '#smln-mapedit .dialog .pair>div{flex:1}',
     '#smln-mapedit .dialog .hint{margin-top:12px;color:#94a3b8;font-size:11px;line-height:1.5}',
+    '#smln-mapedit .dialog .hint.refused{color:#f87171}',
+    '#smln-mapedit .dialog input.bad{border-color:#f87171}',
     '#smln-mapedit .dialog .row{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}',
     '#smln-mapedit .anchors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:150px}',
     '#smln-mapedit .anchors button{padding:8px 0;font-size:11px}',
@@ -1992,14 +1994,39 @@
     hint.textContent = minimumSentence()
     card.appendChild(hint)
 
+    /*
+     * The refusal has to LOOK like one.
+     *
+     * This hint already carries the minimum-size sentence at rest, so writing a
+     * near-identical sentence into the same grey paragraph changes almost
+     * nothing on screen - the button appears to do nothing at all. Measured in
+     * the running game: entering 100 x 150 and pressing Resize was
+     * indistinguishable from a dead button.
+     */
+    function refuseResize(message, bad) {
+      hint.textContent = message
+      hint.className = 'hint refused'
+      for (var i = 0; i < bad.length; i++) bad[i].className = 'bad'
+    }
+
+    function clearRefusal() {
+      hint.className = 'hint'
+      widthInput.className = ''
+      heightInput.className = ''
+    }
+    widthInput.addEventListener('input', clearRefusal)
+    heightInput.addEventListener('input', clearRefusal)
+
     dialogButtons(card, tx('editor.apply', 'Resize'), function () {
       var w = Math.round(Number(widthInput.value))
       var h = Math.round(Number(heightInput.value))
-      if (!isFinite(w) || !isFinite(h) || w < MIN_WIDTH || h < MIN_HEIGHT ||
-          w > MAX_SIZE || h > MAX_SIZE) {
-        hint.textContent = tx('editor.resizeRefused',
+      var bad = []
+      if (!isFinite(w) || w < MIN_WIDTH || w > MAX_SIZE) bad.push(widthInput)
+      if (!isFinite(h) || h < MIN_HEIGHT || h > MAX_SIZE) bad.push(heightInput)
+      if (bad.length) {
+        refuseResize(tx('editor.resizeRefused',
           'Between ' + MIN_WIDTH + ' × ' + MIN_HEIGHT + ' and ' + MAX_SIZE + ' × ' + MAX_SIZE +
-          ' cells. ' + minimumSentence())
+          ' cells. ' + minimumSentence()), bad)
         return
       }
       closeDialog()
