@@ -127,6 +127,17 @@ function excerpt(source, index) {
  *   overlap           Two patches from different owners rewrote intersecting
  *                     regions of the file.
  *
+ * These sit downstream of a policy that is not theirs to overturn.
+ * `interceptor.js` runs `conflicts.preflight` before any of this, and that
+ * refuses a file outright when two owners' spans intersect in the original
+ * text, serving it unmodified so the game still boots. So `duplicate-anchor`
+ * is the one of the three that always gets to speak - it runs at load time,
+ * before the interceptor exists - while `overlap` and `superseded` report on
+ * what the preflight let through. Each carries a note at its own report site
+ * saying exactly what that is. Neither is dead code, and neither is a second
+ * opinion on whether the file should load: the preflight refuses a file, and
+ * these explain one.
+ *
  * Two rules hold throughout.
  *
  * *Different owners only.* A mod patching its own anchor twice is its own
@@ -365,6 +376,27 @@ function makeTracker(source, patches, opts) {
         // belongs to this same mod. That is its own business, not a conflict.
         if (!culprit) return
 
+        // Reachability, honestly: in the running game this fires less often
+        // than it looks, and it is not dead. `interceptor.js` runs
+        // `conflicts.preflight` first, and that refuses a file outright when
+        // two owners' match spans intersect in the *original* text - which is
+        // how an anchor usually gets eaten, so that road never reaches here.
+        // What does reach here:
+        //
+        //   - a pair the preflight deliberately waived, where both patches set
+        //     `allowOverlap`. Nothing else reports on those, so this is the
+        //     only account of what the waiver actually cost;
+        //   - an anchor destroyed from outside its own match span. The
+        //     preflight compares `m[0]` spans, so a lookahead, a lookbehind or
+        //     a \b that reaches into text another mod rewrote is invisible to
+        //     it and lands squarely here. That is exactly the case the
+        //     `culprit` fallback above exists for: no range covers the anchor,
+        //     yet it is gone, and the wording stays at "very likely why";
+        //   - any caller of `apply` that does not preflight - the self-test
+        //     today, and whatever calls it next.
+        //
+        // Do not delete this branch on the reasoning that the preflight has it
+        // covered. The preflight refuses a file; it never explains one.
         found.push({
           kind: 'superseded',
           target: file,
@@ -405,6 +437,36 @@ function makeTracker(source, patches, opts) {
             }
             if (!hit) continue
 
+            // Reachability, honestly: `interceptor.js` runs
+            // `conflicts.preflight` before this, over the same original-text
+            // spans, and refuses the whole file when two owners intersect. So
+            // in the running game the ordinary cross-owner overlap is caught
+            // and stopped upstream and never arrives here at all.
+            //
+            // Three things still do arrive, and they are why this stays:
+            //
+            //   - a pair the preflight waived because both patches set
+            //     `allowOverlap`. That waiver is the one case where two mods
+            //     knowingly share a region and the file is served anyway, and
+            //     this is the only thing that says afterwards what the sharing
+            //     did - who ran first, and whose text ships;
+            //   - pairs the preflight cannot rule on, because it weighs every
+            //     patch that *matches* while this weighs only the ones that
+            //     actually *applied*. A patch inside a skipped atomic group
+            //     matches and never runs; pairing it would be a lie;
+            //   - any caller of `apply` that does not preflight.
+            //
+            // What does NOT arrive, despite sounding like it should: a patch
+            // whose replacement introduces text a later patch then matches.
+            // Ranges here are measured in the original source, which is the
+            // only frame every patch in a run shares, so a match that exists
+            // only in another patch's output has no range to intersect and
+            // pairs with nothing. That collision surfaces as `superseded` on
+            // whoever lost the anchor, not as an overlap. Measuring it
+            // properly would mean tracking every edit's position and length
+            // through the whole run - buildable, but it would be the detector
+            // and not the patcher deciding how text gets replaced, which is a
+            // trade this file has deliberately not made.
             const file = targetOf(first.patch, fallbackTarget)
             found.push({
               kind: 'overlap',
