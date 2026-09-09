@@ -540,6 +540,7 @@
     '#smln-mapedit .view.pan{cursor:grab}',
     '#smln-mapedit .busy{position:absolute;inset:0;display:flex;align-items:center;',
     'justify-content:center;color:#94a3b8;font-size:13px;text-align:center;padding:0 30px}',
+    '#smln-mapedit .busy[hidden]{display:none}',
 
     // --- problems
     '#smln-mapedit .issues{flex:none;width:320px;display:none;flex-direction:column;min-height:0;',
@@ -860,6 +861,7 @@
     stage.appendChild(canvas)
     var busy = document.createElement('div')
     busy.className = 'busy'
+    busy.hidden = true
     stage.appendChild(busy)
 
     var issues = document.createElement('div')
@@ -1308,9 +1310,18 @@
     overlay._note.classList.toggle('err', !!isError)
   }
 
+  /*
+   * Shown only while it has something to say.
+   *
+   * It covers the whole stage and takes pointer events, which is right while a
+   * map is loading and wrong every other moment: left in place with empty text
+   * it is an invisible sheet over the canvas that swallows every click, so the
+   * brush records a stroke and paints nothing. That shipped.
+   */
   function busy(text) {
     if (!overlay) return
     overlay._busy.textContent = text || ''
+    overlay._busy.hidden = !text
   }
 
   function setTool(id) {

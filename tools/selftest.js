@@ -9467,3 +9467,33 @@ check('the README documents the story surface story-sdk.js actually exports', ()
 
   return real.size + ' signatures, ' + codes.size + ' error codes and both field vocabularies match the source'
 })
+
+check('nothing invisible sits over the canvas when the editor is idle', () => {
+  // The busy overlay covers the whole stage and takes pointer events, which is
+  // right while a map loads and wrong at every other moment. Left visible with
+  // empty text it was a transparent sheet over the canvas: every click landed
+  // on it, so a stroke recorded an undo step and painted nothing. Invisible to
+  // the eye, total to the mouse, and no test saw it because the tests dispatch
+  // straight at the canvas the way the mouse cannot.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
+
+  const at = src.indexOf('function busy(text)')
+  assert(at > 0, 'the busy overlay no longer has a single setter')
+  const body = src.slice(at, at + 320)
+  assert(/hidden\s*=\s*!text/.test(body),
+    'busy() sets its text but never hides itself, so it covers the canvas forever')
+
+  // display:flex beats [hidden] unless something says otherwise.
+  assert(/\.busy\[hidden\]\{display:none\}/.test(src),
+    'the busy overlay is display:flex, so [hidden] alone will not hide it')
+
+  // It must start hidden: an editor that has never loaded anything has nothing
+  // to say, and that is the state it opens in.
+  const built = src.indexOf("busy.className = 'busy'")
+  assert(built > 0, 'the busy element is no longer built here')
+  assert(/busy\.hidden\s*=\s*true/.test(src.slice(built, built + 160)),
+    'the busy overlay is built visible, so a fresh editor opens with a sheet over it')
+
+  return 'busy() hides itself, [hidden] wins over display:flex, and it starts hidden'
+})
