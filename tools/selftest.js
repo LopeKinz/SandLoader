@@ -9526,3 +9526,145 @@ check('the editor refuses a map bigger than it can hold, by cells not by axis', 
     'the new-map refusal never says how many cells were asked for')
   return 'capped at ' + Math.round(cap / 1e6) + ' million cells, enforced in both dialogs'
 })
+
+// ------------------------------------------------- flight ceiling
+check('both flight-ceiling anchors resolve exactly once in the shipped bundle', () => {
+  // The game keeps a no-fly strip along the top of the world and reads its
+  // height out of `store.world.externalMap`, falling back to a fixed 600 (soft,
+  // hovering cancelled) and 550 (hard, the collision ceiling) pixels. Those two
+  // fallbacks are the only thing SandLoader rewrites, so if either anchor stops
+  // resolving the fix is gone and nothing else is.
+  const patches = ['smln:top-bound-soft', 'smln:top-bound-hard'].map((id) => {
+    const p = corePatches.find((x) => x.id === id)
+    assert(p, id + ' is missing from corePatches')
+    // A reshaped literal must cost the ceiling and nothing else: the game still
+    // works with its own number, so this may never fail a launch.
+    assert(p.required === false, id + ' is required, so a reshaped literal would block the game')
+    return p
+  })
+
+  for (const o of engine.verify(bundle, patches)) {
+    assert(o.status === 'applied' && o.matches === 1,
+      o.id + ': ' + o.matches + ' match(es) in the shipped bundle' + (o.reason ? ' - ' + o.reason : ''))
+  }
+
+  const out = engine.apply(bundle, patches)
+  assert(out.ok, out.error ? String(out.error) : 'apply failed')
+  new vm.Script(out.source, { filename: 'bundle.js' })
+
+  // Both rewrites must ask SandLoader and keep the game's own number as the
+  // answer when SandLoader is absent - that is what makes them safe to skip.
+  // Matched as plain substrings, so no minified name is assumed here either.
+  const call = ':(globalThis.__SMLN__&&globalThis.__SMLN__.topBound' +
+    '?globalThis.__SMLN__.topBound('
+  assert(out.source.split(call).length === 3,
+    'expected exactly two topBound calls in the patched bundle, found ' +
+    (out.source.split(call).length - 1))
+  for (const [which, n] of [['soft', 600], ['hard', 550]]) {
+    assert(out.source.includes(',"' + which + '",' + n + '):' + n + ')'),
+      'the ' + which + ' ceiling was not rewritten into a topBound call that falls back to ' + n)
+  }
+  return 'soft (600) and hard (550) both rewritten once, output parses'
+})
+
+check('the flight ceiling scales with a short map and leaves the vanilla world alone', () => {
+  // Restated rather than imported from the runtime, so this test states the
+  // measurement instead of agreeing with it: the world the game itself loads is
+  // map_blueprint_playtest.png at 1280x1280 cells, and cellSize is 4 (module
+  // 90823 in the bundle; the hard-bound site computes size.height*cellSize
+  // three characters earlier).
+  const CELL = 4
+  const VANILLA_PX = 1280 * CELL
+
+  const load = (search) => {
+    const box = {
+      console: { log() {}, warn() {}, error() {} },
+      setTimeout, clearTimeout, setInterval, clearInterval,
+      Object, Array, Promise, Date, RegExp, String, Error, Math, JSON,
+      searchReads: 0,
+    }
+    box.location = { get search() { box.searchReads++; return search } }
+    box.globalThis = box
+    vm.createContext(box)
+    new vm.Script(fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'renderer', 'runtime.js'), 'utf8')).runInContext(box)
+    return box
+  }
+  const world = (cells) => ({ store: { world: { size: { width: cells, height: cells } } } })
+
+  // Not a custom map: every number the game shipped comes back untouched.
+  const vanilla = load('').__SMLN__
+  for (const cells of [1280, 720, 201, 4000]) {
+    assert(vanilla.topBound(world(cells), 'soft', 600) === 600,
+      'a non-custom ' + cells + '-cell world had its soft ceiling moved')
+    assert(vanilla.topBound(world(cells), 'hard', 550) === 550,
+      'a non-custom ' + cells + '-cell world had its hard ceiling moved')
+  }
+
+  const box = load('?custom_map=abc')
+  const custom = box.__SMLN__
+
+  // 201 cells is the shortest map the editor will make: 804 pixels, against
+  // which a fixed 600-pixel strip is three quarters of the world.
+  const px201 = 201 * CELL
+  const soft = custom.topBound(world(201), 'soft', 600)
+  const hard = custom.topBound(world(201), 'hard', 550)
+  assert(soft < 600 && hard < 550, 'a 201-cell map kept the vanilla ceiling: ' + soft + '/' + hard)
+  // What is preserved is the *share* of the world the strip takes.
+  assert(Math.abs(soft / px201 - 600 / VANILLA_PX) < 1e-9,
+    'the soft strip is ' + (100 * soft / px201).toFixed(1) + '% of a 201-cell map, vanilla is ' +
+    (100 * 600 / VANILLA_PX).toFixed(1) + '%')
+  assert(Math.abs(hard / px201 - 550 / VANILLA_PX) < 1e-9,
+    'the hard strip does not keep the vanilla share on a 201-cell map')
+
+  // A map at least as tall as vanilla keeps the number the game shipped: the
+  // strip is capped by the vanilla absolute as well as by the vanilla share.
+  assert(custom.topBound(world(1280), 'soft', 600) === 600, 'a vanilla-sized custom map moved')
+  assert(custom.topBound(world(4000), 'soft', 600) === 600, 'a 4000-cell map raised the soft ceiling')
+  assert(custom.topBound(world(4000), 'hard', 550) === 550, 'a 4000-cell map raised the hard ceiling')
+
+  // It runs inside the game's movement code, so nothing it is handed may throw.
+  // Labelled rather than stringified: one of these bites back when you read it.
+  const broken = [
+    ['null', null],
+    ['undefined', undefined],
+    ['a number', 0],
+    ['a string', 'state'],
+    ['no store', {}],
+    ['no world', { store: {} }],
+    ['no size', { store: { world: {} } }],
+    ['no height', { store: { world: { size: {} } } }],
+    ['height 0', { store: { world: { size: { height: 0 } } } }],
+    ['negative height', { store: { world: { size: { height: -80 } } } }],
+    ['NaN height', { store: { world: { size: { height: NaN } } } }],
+    ['height as a string', { store: { world: { size: { height: '201' } } } }],
+    ['a store that throws', { get store() { throw new Error('the state fought back') } }],
+  ]
+  for (const [label, bad] of broken) {
+    assert(custom.topBound(bad, 'soft', 600) === 600,
+      'a state with ' + label + ' did not fall back to 600')
+  }
+  // A fallback that is not a number is handed straight back rather than scaled.
+  assert(custom.topBound(world(201), 'soft', undefined) === undefined,
+    'a non-numeric fallback was not returned unchanged')
+
+  // Cheap enough for the movement loop: the answer is cached per world load,
+  // not recomputed per frame. The two warm-up calls are the cost of the world
+  // change above; everything after them must be answered from the cache.
+  custom.topBound(world(201), 'soft', 600)
+  custom.topBound(world(201), 'hard', 550)
+  const before = box.searchReads
+  for (let i = 0; i < 200; i++) {
+    custom.topBound(world(201), 'soft', 600)
+    custom.topBound(world(201), 'hard', 550)
+  }
+  assert(box.searchReads === before,
+    'topBound re-read location.search ' + (box.searchReads - before) + ' times over 400 frames')
+
+  // And a world change must still be noticed rather than served from the cache.
+  assert(custom.topBound(world(4000), 'soft', 600) === 600,
+    'the cache outlived the world it was computed for')
+
+  return '201 cells -> soft ' + soft.toFixed(2) + 'px / hard ' + hard.toFixed(2) +
+    'px (vanilla share ' + (100 * 600 / VANILLA_PX).toFixed(1) + '%), 4000 cells -> 600/550, vanilla untouched'
+})

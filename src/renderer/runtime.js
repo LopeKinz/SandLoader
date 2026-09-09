@@ -181,6 +181,96 @@
     invoke(resolve, result)
   }
 
+  /*
+   * ------------------------------------------------------------ flight ceiling
+   *
+   * The game keeps a no-fly strip along the top of the world - one soft bound
+   * that cancels hovering, one hard bound the player cannot rise past - and
+   * reads both out of `store.world.externalMap`. A SandLoader custom map leaves
+   * that null, so both fall back to a fixed number of world pixels: 600 and
+   * 550. See the smln:top-bound-* patches in src/patch/core-patches.js for the
+   * two call sites those numbers come from.
+   *
+   * Fixed pixels are the bug. The world the game ships is 1280x1280 cells at
+   * cellSize 4 - 5120 pixels tall - where 600 pixels is 11.7% of the height.
+   * The same 600 pixels on a 201-cell map (804 pixels, the shortest the editor
+   * will make) is 75% of it. Short maps get almost no sky.
+   *
+   * So: keep the vanilla *share*, never exceed the vanilla absolute. A map at
+   * least as tall as vanilla keeps the number the game shipped; anything
+   * shorter gets the strip scaled down with it.
+   */
+
+  /** Cells to world pixels. `cellSize:4` in the bundle's config module, and the
+   *  hard-bound site itself computes `store.world.size.height*cellSize`. */
+  var CELL_SIZE = 4
+  /** map_blueprint_playtest.png, the blueprint the Intro scene loads. */
+  var VANILLA_WORLD_CELLS = 1280
+  var VANILLA_WORLD_PX = VANILLA_WORLD_CELLS * CELL_SIZE
+
+  /**
+   * Cached per world load, keyed on the world's height in cells - the one thing
+   * that changes when a different map is loaded. `topBound` is called from
+   * inside the movement code on every frame that asks about the ceiling, so it
+   * must not redo this work.
+   */
+  var boundCache = { cells: -1, values: null }
+
+  /**
+   * Is this world a custom map?
+   *
+   * `location.search` rather than anything in the state, because the state does
+   * not know: the game parses `custom_map` out of the query string at boot,
+   * hands the id straight to the map loader, and stores nothing about it -
+   * `store` carries a `worldId` and a `worldName` and no trace of where the
+   * terrain came from. The URL is the only record.
+   *
+   * The known gap: a custom-map world saved and reloaded through the game's own
+   * save system comes back under `load=`, not `custom_map=`, and this returns
+   * false for it.
+   */
+  function isCustomMap() {
+    try {
+      var search = global.location && global.location.search
+      return typeof search === 'string' && search.indexOf('custom_map=') >= 0
+    } catch (_) { return false }
+  }
+
+  /**
+   * The flight ceiling for this world, in world pixels from the top.
+   *
+   * Called by the injected patch as `topBound(state, 'soft'|'hard', 600|550)`.
+   * Total by construction: every path that cannot answer confidently returns
+   * `fallback` unchanged, and the whole thing is wrapped, because throwing here
+   * would throw inside the game's own movement loop.
+   */
+  function topBound(state, which, fallback) {
+    try {
+      if (typeof fallback !== 'number' || !isFinite(fallback)) return fallback
+
+      var s = state || captured.state
+      var size = s && s.store && s.store.world && s.store.world.size
+      var cells = size && size.height
+      if (typeof cells !== 'number' || !isFinite(cells) || cells <= 0) return fallback
+
+      if (boundCache.cells !== cells) {
+        boundCache.cells = cells
+        boundCache.values = Object.create(null)
+      }
+      var key = which + ':' + fallback
+      var cached = boundCache.values[key]
+      if (cached !== undefined) return cached
+
+      var value = fallback
+      if (isCustomMap()) {
+        var scaled = cells * CELL_SIZE * (fallback / VANILLA_WORLD_PX)
+        if (scaled < value) value = scaled
+      }
+      boundCache.values[key] = value
+      return value
+    } catch (_) { return fallback }
+  }
+
   /** Ask the game to redraw its React screens. */
   function refreshUI() {
     var FH = captured.FH, s = captured.state
@@ -212,6 +302,8 @@
     whenReady: whenReady,
     getState: getState,
     postSim: postSim,
+    /** Flight ceiling for the current world; called by the injected patch. */
+    topBound: topBound,
     refreshUI: refreshUI,
     callMain: callMain,
     __rpcResult: __rpcResult,

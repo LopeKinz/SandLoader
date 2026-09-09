@@ -57,6 +57,19 @@ const SPEAKER_TABLE =
   `((globalThis.${GLOBAL}||(globalThis.${GLOBAL}={})).storySpeakers` +
   `||(globalThis.${GLOBAL}.storySpeakers={}))`
 
+/**
+ * `SMLN.topBound(state, which, fallback)`, degrading to the game's own number.
+ *
+ * Written as a conditional expression rather than a call because it sits in the
+ * middle of the game's movement code: with SandLoader absent, or loaded but
+ * older than this patch, the expression is the original literal and the frame
+ * costs one property read.
+ */
+function topBoundCall(state, which, fallback) {
+  return `(globalThis.${GLOBAL}&&globalThis.${GLOBAL}.topBound` +
+    `?globalThis.${GLOBAL}.topBound(${state},"${which}",${fallback}):${fallback})`
+}
+
 /** @type {import('./engine').Patch[]} */
 const corePatches = [
   {
@@ -399,6 +412,119 @@ const corePatches = [
           return `${name}=Object.assign(${SPEAKER_TABLE},${body})`
         },
         expect: 'any',
+      },
+    ],
+  },
+  /*
+   * THE TWO FLIGHT CEILINGS
+   *
+   * The game keeps a no-fly strip along the top of the world, and reads its
+   * height out of the active external map:
+   *
+   *   soft  hovering is cancelled above it   ...topBounds.soft)&&void 0!==r?r:600
+   *   hard  the collision ceiling            ...topBounds.hard)&&void 0!==o?o:550
+   *
+   * `y` is in world pixels and y=0 is the top, so both numbers are the strip's
+   * absolute height in pixels - not a fraction of anything.
+   *
+   * A SandLoader custom map leaves `store.world.externalMap` null, so both
+   * fallbacks apply, and they were picked for the world the game itself ships:
+   * map_blueprint_playtest.png, 1280x1280 cells at cellSize 4, so 5120 pixels
+   * tall. There a 600-pixel strip is 11.7% of the world. Put the same 600
+   * pixels on the smallest map the editor will make - 201 cells, 804 pixels -
+   * and it is 75% of the world. The map gets shorter; the ceiling does not.
+   *
+   * WHY NOT JUST SET `externalMap`
+   *
+   * Because it is not a bag of optional fields. `getActive` clones every
+   * descriptor through a normaliser that reads `t.spawn.x`, `t.unstuck.x`,
+   * `t.topBounds.hard` and `t.depthLight.startY` with no optional chaining, so
+   * a partial descriptor throws the moment anything asks for the active map,
+   * and a complete one would mean inventing a spawn point, an unstuck point
+   * and a depth-light curve. The fallback is the only thing that is wrong, so
+   * the fallback is the only thing these two patches touch.
+   *
+   * ANCHORING
+   *
+   * On `topBounds.soft` / `topBounds.hard` plus the shape of the fallback the
+   * TypeScript downlevelling emits around it. Verified against the shipped
+   * 0.5.6 bundle: `topBounds` appears nine times, and each of these matches
+   * exactly one of them. The other seven are the normaliser above (which reads
+   * the property, never defaults it) and an `Object.freeze`.
+   *
+   * NEITHER IS REQUIRED. A build that reshapes either literal costs the
+   * ceiling fix and nothing else: the expression falls back to the game's own
+   * number, which is what an unpatched game uses, so the map is still
+   * playable - just with vanilla's ceiling over it.
+   */
+  {
+    id: 'smln:top-bound-soft',
+    owner: 'smln',
+    description: "Scale the hover ceiling to a custom map's height instead of the vanilla 600px",
+    anchorLiteral: 'topBounds.soft',
+    // const a=null!==(r=null===(n=e.store.world.externalMap)||void 0===n?void 0:n.topBounds.soft)&&void 0!==r?r:600
+    find: /(null===\(([\w$]+)=([\w$.]+?)\.store\.world\.externalMap\)\|\|void 0===\2\?void 0:\2\.topBounds\.soft\)&&void 0!==([\w$]+)\?\4):600/g,
+    replace: (...args) => {
+      const [, head, , state] = args
+      return `${head}:${topBoundCall(state, 'soft', 600)}`
+    },
+    expect: 1,
+    required: false,
+    variants: [
+      {
+        // The game retuned its own default. Whatever it now is, that number
+        // stays the vanilla answer and the ceiling scales from it.
+        label: 'a different vanilla fallback',
+        find: /(null===\(([\w$]+)=([\w$.]+?)\.store\.world\.externalMap\)\|\|void 0===\2\?void 0:\2\.topBounds\.soft\)&&void 0!==([\w$]+)\?\4):(\d+)/g,
+        replace: (...args) => {
+          const [, head, , state, , n] = args
+          return `${head}:${topBoundCall(state, 'soft', n)}`
+        },
+        expect: 1,
+      },
+      {
+        // The build stopped downlevelling and emits `?.` and `??` natively.
+        label: 'native optional chaining',
+        find: /([\w$.]+?)\.store\.world\.externalMap\?\.topBounds\.soft\s*\?\?\s*(\d+)/g,
+        replace: (...args) => {
+          const [, state, n] = args
+          return `${state}.store.world.externalMap?.topBounds.soft??${topBoundCall(state, 'soft', n)}`
+        },
+        expect: 1,
+      },
+    ],
+  },
+  {
+    id: 'smln:top-bound-hard',
+    owner: 'smln',
+    description: "Scale the collision ceiling to a custom map's height instead of the vanilla 550px",
+    anchorLiteral: 'topBounds.hard',
+    // m=null!==(o=null===(n=e.store.world.externalMap)||void 0===n?void 0:n.topBounds.hard)&&void 0!==o?o:550
+    find: /(null===\(([\w$]+)=([\w$.]+?)\.store\.world\.externalMap\)\|\|void 0===\2\?void 0:\2\.topBounds\.hard\)&&void 0!==([\w$]+)\?\4):550/g,
+    replace: (...args) => {
+      const [, head, , state] = args
+      return `${head}:${topBoundCall(state, 'hard', 550)}`
+    },
+    expect: 1,
+    required: false,
+    variants: [
+      {
+        label: 'a different vanilla fallback',
+        find: /(null===\(([\w$]+)=([\w$.]+?)\.store\.world\.externalMap\)\|\|void 0===\2\?void 0:\2\.topBounds\.hard\)&&void 0!==([\w$]+)\?\4):(\d+)/g,
+        replace: (...args) => {
+          const [, head, , state, , n] = args
+          return `${head}:${topBoundCall(state, 'hard', n)}`
+        },
+        expect: 1,
+      },
+      {
+        label: 'native optional chaining',
+        find: /([\w$.]+?)\.store\.world\.externalMap\?\.topBounds\.hard\s*\?\?\s*(\d+)/g,
+        replace: (...args) => {
+          const [, state, n] = args
+          return `${state}.store.world.externalMap?.topBounds.hard??${topBoundCall(state, 'hard', n)}`
+        },
+        expect: 1,
       },
     ],
   },
