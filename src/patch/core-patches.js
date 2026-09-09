@@ -46,6 +46,17 @@ function captureCall(ns, state, phase, original) {
   return `(globalThis.${GLOBAL}&&globalThis.${GLOBAL}.__capture(${ns}.FH,${state},"${phase}"),${original})`
 }
 
+/**
+ * `globalThis.__SMLN__.storySpeakers`, created on first touch.
+ *
+ * Written as an expression rather than a statement so the rewrite fits
+ * wherever the original assignment sat - a declaration, a comma sequence, an
+ * argument list - without the patch having to know which.
+ */
+const SPEAKER_TABLE =
+  `((globalThis.${GLOBAL}||(globalThis.${GLOBAL}={})).storySpeakers` +
+  `||(globalThis.${GLOBAL}.storySpeakers={}))`
+
 /** @type {import('./engine').Patch[]} */
 const corePatches = [
   {
@@ -310,6 +321,82 @@ const corePatches = [
           return `sandkit={${body},getApi:function(){` +
             `var g=globalThis.${GLOBAL};` +
             `return (g&&g.game)||(g&&g.state&&g.state.FH)||null}}`
+        },
+        expect: 'any',
+      },
+    ],
+  },
+  {
+    id: 'smln:story-speakers',
+    owner: 'smln',
+    description: 'Give the story portrait table an identity mods can register speakers into',
+    anchorLiteral: 'labelKey:"story|speaker|zoe"',
+    /*
+     * The dialogue box picks its portrait, its label and its frame colour out
+     * of one module-scope const:
+     *
+     *   const mN={zoe:{portrait:"img/cool_cat2.png",labelKey:"story|speaker|zoe",…},
+     *             pri:{…}};
+     *
+     * with no accessor, no export and no write site anywhere in the 4.3 MB
+     * bundle - measured, three whole-identifier occurrences, all inside the
+     * component that reads it. The read is
+     * `O=I.speaker in mN?I.speaker:"zoe"`, so a speaker the table does not
+     * know silently becomes ZOE. That silence is the reason this patch exists:
+     * without it a mod's character wears someone else's face and nothing
+     * anywhere says so.
+     *
+     * The rewrite keeps the table's *identity* on the global instead of in the
+     * module, so mods can write into it long after this line has run:
+     *
+     *   const mN=Object.assign(<the shared table>,{zoe:{…},pri:{…}});
+     *
+     * Two properties this has to preserve, and both come from the shape:
+     * `Object.assign` returns its target, so `mN` still names the same object
+     * the module reads; and the vanilla entries are assigned *after* the table
+     * is adopted, so a mod that registered early cannot have deleted ZOE.
+     *
+     * Anchored on `labelKey:"story|speaker|zoe"` - a property name plus a
+     * game-authored locale key. Verified against the shipped 0.5.6 bundle:
+     * exactly one occurrence, because the only other appearance of that key is
+     * in the English locale table without the `labelKey:` prefix.
+     *
+     * NOT required. A build that reshapes this literal costs mod portraits and
+     * nothing else - unknown speakers already fall back to ZOE, so the failure
+     * is cosmetic - and src/renderer/story-sdk.js refuses `story.speaker()` by
+     * name when the table is absent rather than registering a face that would
+     * never be worn.
+     */
+    find: /(const|let|var) ([A-Za-z_$][\w$]*)=(\{[^;]{0,400}labelKey:"story\|speaker\|zoe"[^;]{0,400}\});/g,
+    replace: (...args) => {
+      const [, kw, name, body] = args
+      return `${kw} ${name}=Object.assign(${SPEAKER_TABLE},${body});`
+    },
+    expect: 1,
+    required: false,
+    variants: [
+      {
+        // The table gained speakers, or an entry grew a field, and the body
+        // outgrew the window. Same shape, more room.
+        label: 'a longer speaker table',
+        find: /(const|let|var) ([A-Za-z_$][\w$]*)=(\{[^;]{0,1500}labelKey:"story\|speaker\|zoe"[^;]{0,1500}\});/g,
+        replace: (...args) => {
+          const [, kw, name, body] = args
+          return `${kw} ${name}=Object.assign(${SPEAKER_TABLE},${body});`
+        },
+        expect: 1,
+      },
+      {
+        // Last resort: the declaration keyword or the statement boundary moved
+        // - the table is built inside a comma sequence, or assigned to an
+        // already-declared name. Only the assignment and the literal are
+        // assumed. The lookbehind keeps `x.mN={…}` out, where dropping the
+        // `x.` would turn a property write into a global one.
+        label: 'assigned without a declaration keyword',
+        find: /(?<![\w$.])([A-Za-z_$][\w$]*)=(\{[^;]{0,1500}labelKey:"story\|speaker\|zoe"[^;]{0,1500}\})/g,
+        replace: (...args) => {
+          const [, name, body] = args
+          return `${name}=Object.assign(${SPEAKER_TABLE},${body})`
         },
         expect: 'any',
       },

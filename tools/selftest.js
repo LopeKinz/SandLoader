@@ -6494,28 +6494,116 @@ function bootStory(opts = {}) {
     },
   }
 
-  // getSteps() returns the same array reference every call, as measured.
-  const steps = [{ id: 'reach_factory_tier_2', messages: [], objective: { type: 'factoryLevel' } }]
+  /*
+   * The story-step half of the fake.
+   *
+   * getSteps() hands back the same array reference every call, and setSteps()
+   * replaces it - which is what a world load looks like, because the game
+   * calls setSteps from its own `mods:initialized` handler every time. The
+   * three helpers that matter are transcribed from the bundle: DA (start a
+   * step, which refuses one already done or already current and evaluates a
+   * custom check straight away), LA (complete one - the chain is array order
+   * and nothing else) and BA (re-evaluate the current step's custom check),
+   * plus the one event subscription whose whole body is a call to BA.
+   */
+  const vanillaStep = (id, objective) => ({
+    id,
+    messages: [{ text: { key: 'story|steps|' + id + '|message1' }, showObjective: true }],
+    objective,
+  })
+  const vanillaSteps = () => [
+    vanillaStep('reach_factory_tier_2', { type: 'factoryLevel', target: 2 }),
+    vanillaStep('investigate_anomaly', { type: 'waypoint', radius: 600 }),
+    vanillaStep('resume_factory_expansion', { type: 'factoryLevel', target: 4 }),
+  ]
+  let stepList = vanillaSteps()
+
+  const bag = () => {
+    const st = env.state.store
+    st.mods = st.mods || {}
+    return st.mods.storyProgression || (st.mods.storyProgression = {})
+  }
+  const doneList = () => {
+    const b = bag()
+    return Array.isArray(b.completedSteps) ? b.completedSteps : (b.completedSteps = [])
+  }
+  const isDone = (id) => doneList().indexOf(id) >= 0
+  const stepById = (id) => stepList.find((s) => s.id === id)
+  const currentStep = () => {
+    const id = bag().currentStep
+    return (id && stepById(id)) || null
+  }
+
+  // BA
+  function evaluateCurrent() {
+    const c = currentStep()
+    if (!c || isDone(c.id)) return
+    const o = c.objective
+    if (o && o.type === 'custom' && typeof o.check === 'function' && o.check(env.state)) {
+      completeStep(c.id)
+    }
+  }
+  // DA
+  function startStep(id) {
+    const b = bag()
+    if (isDone(id) || b.currentStep === id) return
+    const s = stepById(id)
+    if (!s) return
+    b.currentStep = s.id
+    env.started.push(s.id)
+    evaluateCurrent()
+  }
+  // LA
+  function completeStep(id) {
+    const b = bag()
+    const done = doneList()
+    if (done.indexOf(id) < 0) done.push(id)
+    const i = stepList.findIndex((s) => s.id === id)
+    if (i >= 0 && i < stepList.length - 1) {
+      const next = stepList[i + 1]
+      if (next.messages && next.messages.length) {
+        if (!isDone(next.id)) env.shown.push(next.id)
+      } else startStep(next.id)
+    } else b.currentStep = null
+  }
+
   const i18n = {}
+  const handlers = {}
+  const progression = {
+    getSteps: () => stepList,
+    setSteps: (a) => { stepList = a },
+    isStepCompleted: (state, id) => isDone(id),
+    getCurrentStep: () => currentStep(),
+    // The public gate, verbatim: the domain, the id, and membership of the
+    // private table - which is the whole reason the SDK writes into it.
+    complete: (state, sel) => {
+      if (!sel || sel.domain !== 'objective' || typeof sel.id !== 'string') return false
+      env.completions.push(sel.id)
+      return Object.prototype.hasOwnProperty.call(qs, sel.id) && EM(state, sel.id)
+    },
+  }
   const sandkitApi = {
     i18n: {
       register: (locale, table) => { i18n[locale] = Object.assign(i18n[locale] || {}, table) },
       getLocale: () => 'en',
     },
-    progression: { getSteps: () => steps },
+    progression,
   }
   const FH = {
     ui: { update: () => {} },
-    progression: {
-      // The public gate, verbatim: the domain, the id, and membership of the
-      // private table - which is the whole reason the SDK writes into it.
-      complete: (state, sel) => {
-        if (!sel || sel.domain !== 'objective' || typeof sel.id !== 'string') return false
-        env.completions.push(sel.id)
-        return Object.prototype.hasOwnProperty.call(qs, sel.id) && EM(state, sel.id)
+    events: {
+      on: (state, name, fn) => { (handlers[name] || (handlers[name] = [])).push(fn) },
+      emit: (state, name, payload) => {
+        env.emitted.push(name)
+        for (const fn of (handlers[name] || []).slice()) fn(state, payload)
       },
     },
+    storage: { ensure: (state, key) => { const m = state.store.mods || (state.store.mods = {}); return m[key] || (m[key] = {}) } },
+    progression,
   }
+  // The story mod's own subscription. Its whole body in the shipped bundle is
+  // `BA(e)` plus a UI refresh, and it is the only listener this event has.
+  FH.events.on(null, 'auralite:productionChanged', () => { evaluateCurrent() })
 
   const modules = { 92659: objectivesModule }
   const req = (id) => {
@@ -6532,6 +6620,12 @@ function bootStory(opts = {}) {
     // __webpack_require__, which is how src/renderer/webpack-bridge.js gets in.
     webpackChunksand_v1: { push(chunk) { if (chunk && typeof chunk[2] === 'function') chunk[2](req) } },
     __SMLN_MODS__: opts.mods || [],
+    // What the main process reports about its own patch anchors, injected by
+    // the prelude. A build where the speaker patch did not resolve says so
+    // here, which is how the SDK can refuse at once rather than on a timeout.
+    __SMLN_BOOT__: opts.brokenSpeakerPatch
+      ? { anchors: { holding: 0, healed: [], broken: [{ id: 'smln:story-speakers', required: false }] } }
+      : null,
     electron: { log: (level, scope, message) => env.logs.push(level + ': ' + message) },
   }
   sandbox.globalThis = sandbox
@@ -6545,9 +6639,45 @@ function bootStory(opts = {}) {
   const S = sandbox.__SMLN__
   env.S = S
   env.qs = qs
-  env.steps = steps
   env.i18n = i18n
   env.active = active
+  env.started = []
+  env.shown = []
+  env.emitted = []
+  Object.defineProperty(env, 'steps', { get: () => stepList })
+  env.vanillaStepCount = stepList.length
+  env.bag = () => bag()
+  /** The game's own setSteps at world load: the array is rebuilt from scratch. */
+  env.resetSteps = () => { progression.setSteps(vanillaSteps()) }
+  /** The player finished a beat; the chain advances. */
+  env.completeStep = (id) => completeStep(id)
+  /** The player dismissed the box, which is what starts the step. */
+  env.dismiss = (id) => startStep(id)
+  /** The game's tutorial:completed handler: show the first uncompleted step. */
+  env.tutorialCompleted = () => {
+    const done = doneList()
+    const first = stepList.find((s) => !done.includes(s.id))
+    if (first) env.shown.push(first.id)
+    return first ? first.id : null
+  }
+  /*
+   * What src/patch/core-patches.js leaves behind: one shared table on the
+   * global, with the game's own two entries assigned on top of it. Absent
+   * unless asked for, so a test can run against a build where the patch is
+   * not there.
+   */
+  env.speakerTable = () => S.storySpeakers || null
+  if (opts.speakerTable !== false) {
+    Object.assign(S.storySpeakers || (S.storySpeakers = {}), {
+      zoe: { portrait: 'img/cool_cat2.png', labelKey: 'story|speaker|zoe', borderColor: '#ffe700', labelColor: '#ffe700' },
+      pri: { portrait: 'img/archon.png', labelKey: 'story|speaker|pri', borderColor: '#ffe700', labelColor: '#ffe700' },
+    })
+  }
+  // The asset resolver registration.js installs, stubbed to its contract so a
+  // portrait path can be exercised without dragging that whole part in.
+  if (opts.assets !== false) {
+    S.assets = { forMod: (id) => ({ tryUrl: (rel) => 'smln-mods/' + id + '/' + rel }) }
+  }
   /** A world load: a fresh store, and the capture the game's patch performs. */
   env.load = (store, phase) => {
     env.state = { store, sandkit: { getApi: () => sandkitApi } }
@@ -6588,10 +6718,11 @@ check('mission ids are namespaced per mod, and vanilla ids stay bare', () => {
   assert(!def.check, "the mod's predicate was written into the game's own table")
   assert(env.i18n.en[def.titleKey] === 'Find fluxite', 'the title never reached i18n')
 
-  // The story half is another task. It must refuse, not pretend.
-  assert(story.speaker('kira', { name: 'KIRA' }) === false, 'story.speaker() claims to work')
-  assert(story.step({ id: 'intro' }) === false, 'story.step() claims to work')
-  assert(env.steps.length === 1, 'the mission half touched the story-step table')
+  // A definition missing the one thing it is for must be refused by name
+  // rather than half-registered, and a refusal must leave the step list alone.
+  assert(story.speaker('kira', { name: 'KIRA' }) === false, 'a speaker with no portrait was accepted')
+  assert(story.step({ id: 'intro' }) === false, 'a step with no messages was accepted')
+  assert(env.steps.length === env.vanillaStepCount, 'a refused step reached the story-step table')
 
   // A chain naming something nobody registered would sit in the active list as
   // a raw id forever, uncompletable, so it is reported rather than left to be
@@ -6785,7 +6916,7 @@ check('a mission event is namespaced by its emitter and any mod can hear it', ()
   return 'published as reactor.mod:reactor-online, heard cross-mod, dropped on unload'
 })
 
-check('unloading a mod takes its objectives out of the game and out of the save', () => {
+check('unloading a mod takes its objectives out of the game\'s table and out of the active list', () => {
   const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
   const story = env.S.forMod('my.mod').story
   story.objective({ id: 'find-fluxite', title: 'Find fluxite', check: () => false })
@@ -6805,6 +6936,308 @@ check('unloading a mod takes its objectives out of the game and out of the save'
 
   env.S.__story.stop()
   return 'definition and active row both removed, vanilla table intact'
+})
+
+// ------------------------------------------------------ story: the patch
+check('the speaker patch gives the portrait table one identity, and the bundle still parses', () => {
+  const patch = corePatches.find((p) => p.id === 'smln:story-speakers')
+  assert(patch, 'smln:story-speakers is missing from corePatches')
+  assert(patch.required === false,
+    'the speaker patch is required, so a build that reshapes one literal would refuse to start')
+
+  // Against the real shipped bundle: the anchor has to resolve exactly once,
+  // because a pattern that became ambiguous would rewrite several places.
+  const outcome = engine.verify(bundle, [patch])[0]
+  assert(outcome.matches === 1, `the anchor matched ${outcome.matches} times, not 1`)
+
+  // And against the real declaration, in a VM, because "it parses" is not the
+  // property that matters here - sharing the object is. The excerpt is the
+  // shipped `const mN={...};` lifted out of the bundle by its own anchor.
+  const at = bundle.indexOf('labelKey:"story|speaker|zoe"')
+  const start = bundle.lastIndexOf('const ', at)
+  const end = bundle.indexOf(';', at) + 1
+  const original = bundle.slice(start, end)
+  assert(/^const [A-Za-z_$][\w$]*=\{/.test(original), 'the excerpt is not the declaration: ' + original)
+
+  const result = engine.apply(original, [patch])
+  assert(result.ok, result.error ? String(result.error) : 'apply failed')
+  const name = original.slice(6, original.indexOf('='))
+  const box = { __SMLN__: { alreadyHere: true } }
+  vm.createContext(box)
+  new vm.Script(result.source + `;globalThis.__probe=${name};`, { filename: 'speakers.js' }).runInContext(box)
+
+  assert(box.__SMLN__.alreadyHere === true, 'the patch replaced the runtime object instead of using it')
+  const shared = box.__SMLN__.storySpeakers
+  assert(shared && box.__probe === shared,
+    'the module const and the global table are not the same object, so a mod could never write into it')
+  assert(shared.zoe && shared.zoe.portrait === 'img/cool_cat2.png',
+    "the game's own speakers did not survive the rewrite")
+  assert(shared.pri && shared.pri.labelKey === 'story|speaker|pri', 'PRI did not survive the rewrite')
+
+  // A mod that registered before this line ran must not be wiped by it, and
+  // must not be able to have deleted ZOE either.
+  const box2 = { __SMLN__: { storySpeakers: { 'my.mod:kira': { portrait: 'k.png' } } } }
+  vm.createContext(box2)
+  new vm.Script(result.source, { filename: 'speakers.js' }).runInContext(box2)
+  assert(box2.__SMLN__.storySpeakers['my.mod:kira'], 'an early registration was wiped by the vanilla assign')
+  assert(box2.__SMLN__.storySpeakers.zoe, 'ZOE is missing after an early registration')
+
+  return `anchor matched once in ${(bundle.length / 1048576).toFixed(2)} MiB; module const and SMLN.storySpeakers are one object`
+})
+
+// ---------------------------------------------------------- story: speakers
+check('a speaker is namespaced, keeps the game\'s two, and refuses when the patch is absent', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  const png = 'data:image/png;base64,iVBORw0KGgo='
+
+  assert(story.speaker('kira', { name: 'KIRA', portrait: png, color: '#8ec5ff' }) === true,
+    'the speaker was refused')
+  const table = env.speakerTable()
+  const entry = table['my.mod:kira']
+  assert(entry, 'nothing landed in the portrait table under the namespaced id')
+  assert(entry.portrait === png, 'a data URL was not passed through: ' + entry.portrait)
+  assert(entry.borderColor === '#8ec5ff' && entry.labelColor === '#8ec5ff', 'the colour was dropped')
+  assert(env.i18n.en[entry.labelKey] === 'KIRA', 'the name never reached i18n')
+  assert(table.zoe && table.pri, "the game's own speakers were disturbed")
+
+  // A mod-relative path goes through the same asset resolver every other mod
+  // file does, rather than being pasted into an <img src> untouched.
+  assert(story.speaker('rell', { name: 'RELL', portrait: 'assets/rell.png' }) === true, 'a path portrait was refused')
+  assert(table['my.mod:rell'].portrait === 'smln-mods/my.mod/assets/rell.png',
+    'the portrait path was not resolved through the mod asset resolver: ' + table['my.mod:rell'].portrait)
+
+  // No portrait is the one thing a speaker cannot do without.
+  assert(story.speaker('ghost', { name: 'GHOST' }) === false, 'a speaker with no portrait was registered')
+  assert(env.logs.some((l) => /E_STORY_NO_PORTRAIT/.test(l)), 'the refusal was not named')
+
+  env.S.__story.stop()
+
+  // The build where the patch did not apply. An unregistered speaker is drawn
+  // as ZOE with no error anywhere, so registering one here would be the exact
+  // silent failure the SDK exists to prevent.
+  const broken = bootStory({
+    mods: [{ id: 'my.mod', enabled: true }],
+    speakerTable: false,
+    brokenSpeakerPatch: true,
+  })
+  const bs = broken.S.forMod('my.mod').story
+  assert(bs.speaker('kira', { name: 'KIRA', portrait: png }) === false,
+    'a speaker was registered on a build with no portrait table')
+  assert(broken.S.__story.speakers().length === 0, 'the SDK thinks it registered a speaker anyway')
+  const named = broken.logs.find((l) => /E_STORY_NO_SPEAKER_TABLE/.test(l))
+  assert(named && /smln:story-speakers/.test(named) && /ZOE/.test(named),
+    'the refusal did not name the patch and what the silence would have looked like: ' + named)
+  broken.S.__story.stop()
+
+  return 'registered as my.mod:kira with its own portrait and colour; refused by name where the patch is absent'
+})
+
+check('a speaker no one registered is reported rather than quietly drawn as ZOE', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  story.step({
+    id: 'intro',
+    messages: [
+      { text: 'The readings are wrong.', speaker: 'zoe' },
+      { text: 'They are not.', speaker: 'nobody' },
+    ],
+  })
+  env.S.__story.tick()
+
+  const step = env.steps.find((s) => s.id === 'my.mod:intro')
+  assert(step, 'the step never landed')
+  // A bare vanilla speaker still means the game's own and cannot be shadowed;
+  // a bare unknown one is this mod's namespace, which is where it would have
+  // been had the mod registered it.
+  assert(step.messages[0].speaker === 'zoe', 'a vanilla speaker was namespaced: ' + step.messages[0].speaker)
+  assert(step.messages[1].speaker === 'my.mod:nobody', 'a mod speaker was not namespaced')
+
+  const warned = env.logs.find((l) => /names speaker "my\.mod:nobody"/.test(l))
+  assert(warned && /ZOE/.test(warned), 'an unregistered speaker was not reported: ' + env.logs.join(' | '))
+
+  env.S.__story.stop()
+  return 'vanilla speaker left bare, mod speaker namespaced, the unregistered one reported'
+})
+
+// ------------------------------------------------------------- story: steps
+check('a step is inserted where after names it, and the chain still leads through it', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  const before = env.steps.map((s) => s.id)
+
+  assert(story.step({
+    id: 'intro',
+    after: 'reach_factory_tier_2',
+    messages: [
+      { text: 'The readings are wrong.', speaker: 'zoe' },
+      { text: 'They are not.', speaker: 'zoe', style: { color: '#88aaff', italic: true } },
+    ],
+  }) === true, 'the step was refused')
+
+  const ids = env.steps.map((s) => s.id)
+  assert(ids[1] === 'my.mod:intro', 'the step is not directly after the one it named: ' + ids.join(','))
+  assert(ids[0] === before[0] && ids[2] === before[1] && ids[3] === before[2],
+    'insertion reordered the game\'s own steps: ' + ids.join(','))
+
+  const step = env.steps[1]
+  // The game's own message vocabulary, not a parallel one: a literal became a
+  // registered key in the shape the game's resolver understands, and the style
+  // went through untouched.
+  assert(step.messages[0].text && step.messages[0].text.key, 'the message text is not a translatable reference')
+  assert(env.i18n.en[step.messages[0].text.key] === 'The readings are wrong.', 'the literal never reached i18n')
+  assert(step.messages[1].style.color === '#88aaff', 'the style was rewritten')
+  assert(step.messages[1].showObjective === true,
+    'no message shows the objective, so the step could never become current')
+
+  // Chaining is array order and nothing else, so the proof is that the game's
+  // own completion of the previous step arrives at ours, and ours arrives at
+  // the one that used to follow.
+  env.completeStep('reach_factory_tier_2')
+  assert(env.shown[env.shown.length - 1] === 'my.mod:intro',
+    'completing the previous step did not lead into the mod\'s: ' + env.shown.join(','))
+  env.dismiss('my.mod:intro')
+  env.S.__story.tick()
+  assert(env.bag().completedSteps.indexOf('my.mod:intro') >= 0, 'the beat never completed')
+  assert(env.shown[env.shown.length - 1] === 'investigate_anomaly',
+    'the chain did not lead out of the mod\'s step into the next vanilla one: ' + env.shown.join(','))
+
+  env.S.__story.stop()
+  return 'inserted at index 1; the chain runs reach_factory_tier_2 -> my.mod:intro -> investigate_anomaly'
+})
+
+check('a step waits for an after that has not registered yet, and gives up by name if it never does', () => {
+  const env = bootStory({
+    mods: [{ id: 'late.mod', enabled: true }, { id: 'early.mod', enabled: true }],
+  })
+  const early = env.S.forMod('early.mod').story
+  const late = env.S.forMod('late.mod').story
+
+  // Declared before the thing it is ordered against. Load order is not
+  // something a mod author can control, so it must not decide the outcome.
+  assert(early.step({
+    id: 'reply', after: 'late.mod:opening', messages: [{ text: 'Understood.' }],
+  }) === true, 'a step naming an unregistered step was refused outright')
+  assert(!env.steps.some((s) => s.id === 'early.mod:reply'), 'it was inserted before its anchor existed')
+  assert(env.S.__story.pendingSteps() === 1, 'it is not waiting for anything')
+
+  assert(late.step({
+    id: 'opening', after: 'reach_factory_tier_2', messages: [{ text: 'Listen.' }],
+  }) === true, 'the anchor step was refused')
+
+  const ids = env.steps.map((s) => s.id)
+  assert(ids[1] === 'late.mod:opening' && ids[2] === 'early.mod:reply',
+    'the waiting step did not land after the anchor that finally arrived: ' + ids.join(','))
+  assert(env.S.__story.pendingSteps() === 0, 'something is still waiting')
+
+  // A reference nothing ever registers is reported once, by name, and the beat
+  // is put at the end rather than silently thrown away.
+  assert(early.step({
+    id: 'orphan', after: 'never.mod:ghost', messages: [{ text: 'Hello?' }],
+  }) === true, 'a step naming a missing mod was refused outright')
+  for (let i = 0; i < env.S.__story.deferTicks + 4; i++) env.S.__story.tick()
+
+  // The SDK's own log line, not the copy `report` also files as a problem.
+  const complaints = env.logs.filter((l) => /^warn: story /.test(l) && /never\.mod:ghost/.test(l))
+  assert(complaints.length === 1,
+    'a reference that never registers was reported ' + complaints.length + ' times, not once')
+  assert(/early\.mod/.test(complaints[0]) && /end of the story/.test(complaints[0]),
+    'the report does not name the mod and where the step went: ' + complaints[0])
+  const after = env.steps.map((s) => s.id)
+  assert(after[after.length - 1] === 'early.mod:orphan', 'the orphan step was dropped: ' + after.join(','))
+
+  env.S.__story.stop()
+  return 'inserted when its anchor arrived; a reference that never arrived reported once and appended'
+})
+
+check('a mod\'s beat does not play twice across a world reload', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  let ready = false
+  story.step({
+    id: 'intro',
+    after: 'reach_factory_tier_2',
+    messages: [{ text: 'The readings are wrong.', speaker: 'zoe' }],
+    completeWhen: () => ready,
+  })
+
+  env.completeStep('reach_factory_tier_2')
+  env.dismiss('my.mod:intro')
+  env.S.__story.tick()
+  assert(story.isStepComplete('intro') === false, 'it completed before its condition was true')
+
+  ready = true
+  env.S.__story.tick()
+  assert(env.emitted.indexOf(env.S.__story.nudgeEvent) >= 0,
+    "the SDK did not drive the game's own evaluator")
+  assert(story.isStepComplete('intro') === true, 'the tick did not complete the step')
+  assert(env.bag().completedSteps.indexOf('my.mod:intro') >= 0,
+    "the game's own record does not know the step is done")
+  const saved = env.state.store[env.S.__story.storeKey]
+  assert(saved && saved.steps && saved.steps['my.mod:intro'], 'nothing was written to the saved half')
+
+  const playedOnce = env.shown.filter((id) => id === 'my.mod:intro').length
+  assert(playedOnce === 1, 'the beat was shown ' + playedOnce + ' times before the reload')
+
+  // The reload, as the game does it: the store is written wholesale, and the
+  // game's own mods:initialized handler rebuilds the step array from its
+  // private literal - which does not contain the mod's entry.
+  const save = JSON.parse(JSON.stringify(env.state.store))
+  env.resetSteps()
+  ready = false
+  env.load(save)
+  env.S.__story.tick()
+
+  assert(env.steps.map((s) => s.id)[1] === 'my.mod:intro',
+    'the step was not put back after setSteps rebuilt the array: ' + env.steps.map((s) => s.id).join(','))
+  assert(story.isStepComplete('intro') === true, 'the completion did not survive the reload')
+  env.tutorialCompleted()
+  assert(env.shown.filter((id) => id === 'my.mod:intro').length === 1,
+    'the beat played again after the reload')
+  assert(env.shown[env.shown.length - 1] === 'investigate_anomaly',
+    'the story resumed at the wrong step: ' + env.shown.join(','))
+
+  // A different world is a different story.
+  env.load({ objectives: { active: [] } })
+  env.S.__story.tick()
+  assert(story.isStepComplete('intro') === false, "one save's beats leaked into another")
+
+  env.S.__story.stop()
+  return 'completed through the game\'s own path, restored after the reload, and never shown twice'
+})
+
+check('unloading a mod takes its steps and speakers out and heals the chain behind them', () => {
+  const env = bootStory({ mods: [{ id: 'my.mod', enabled: true }] })
+  const story = env.S.forMod('my.mod').story
+  story.speaker('kira', { name: 'KIRA', portrait: 'data:image/png;base64,iVBORw0KGgo=' })
+  story.step({
+    id: 'intro',
+    after: 'reach_factory_tier_2',
+    messages: [{ text: 'The readings are wrong.', speaker: 'kira' }],
+  })
+  env.S.__story.tick()
+  assert(env.steps.map((s) => s.id)[1] === 'my.mod:intro', 'it never landed')
+  assert(env.speakerTable()['my.mod:kira'], 'the speaker never landed')
+  const vanilla = env.steps.filter((s) => !s.id.startsWith('my.mod:')).map((s) => s.id)
+
+  env.S.__disposeMod('my.mod')
+
+  assert(!env.steps.some((s) => s.id === 'my.mod:intro'), "the mod's step stayed in the game's list")
+  assert(!env.speakerTable()['my.mod:kira'], "the mod's speaker stayed in the portrait table")
+  assert(env.speakerTable().zoe && env.speakerTable().pri, 'disposal took a vanilla speaker with it')
+  assert(env.steps.map((s) => s.id).join(',') === vanilla.join(','),
+    'the vanilla chain did not close back up: ' + env.steps.map((s) => s.id).join(','))
+  assert(env.S.__story.steps().length === 0 && env.S.__story.speakers().length === 0,
+    'the SDK still thinks it owns something')
+
+  // Taking the step out has to leave the chain running straight past where it
+  // was, or every beat after it is unreachable.
+  env.completeStep('reach_factory_tier_2')
+  assert(env.shown[env.shown.length - 1] === 'investigate_anomaly',
+    'the chain was left broken where the step used to be: ' + env.shown.join(','))
+
+  env.S.__story.stop()
+  return 'step and speaker both removed, vanilla speakers intact, the chain closed back up'
 })
 
 if (archive) archive.close()
