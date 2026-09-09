@@ -78,6 +78,8 @@
     '.smln-modal .prob .msg{color:#e2e8f0;margin-top:3px;word-break:break-word}',
     '.smln-modal .prob .det{color:#64748b;font-size:11px;margin-top:4px;white-space:pre-wrap;',
     'max-height:9em;overflow:auto}',
+    '.smln-modal .prob .detBtn{margin-top:5px;padding:2px 8px;font-size:10.5px;',
+    'letter-spacing:.06em;color:#64748b;border-color:rgba(100,116,139,.4)}',
     '.smln-modal .prob .rep{color:#64748b;font-size:11px}',
     '.smln-modal .reg{padding:9px 22px;border-bottom:1px solid rgba(100,116,139,.16)}',
     '.smln-modal .reg:last-child{border-bottom:0}',
@@ -571,11 +573,48 @@
     row.appendChild(head)
     row.appendChild(msg)
 
+    /*
+     * The stack trace is folded away, and its first line is dropped.
+     *
+     * A stack is a developer's tool and this panel is where a player looks when
+     * a mod did not do what they expected. Shown open, every benign warning -
+     * "declares fluxloaderVersion ^2.0.1, loads it anyway" - carried four lines
+     * of absolute paths into SandLoader's own source, which triples the height
+     * of a row and, worse, points the reader at SandLoader's code for a problem
+     * that is the mod's. Seven warnings became a wall.
+     *
+     * The first line is dropped because it is the message again: `record()`
+     * stores `e.stack`, and a stack begins with the message it belongs to, so
+     * the row said the same sentence twice before saying anything new.
+     */
     if (p.detail) {
-      var det = global.document.createElement('div')
-      det.className = 'det'
-      det.textContent = p.detail
-      row.appendChild(det)
+      var body = String(p.detail)
+      var firstBreak = body.indexOf('\n')
+      if (firstBreak !== -1 && p.message &&
+          body.slice(0, firstBreak).indexOf(p.message) !== -1) {
+        body = body.slice(firstBreak + 1)
+      }
+      body = body.replace(/^\s+|\s+$/g, '')
+
+      if (body) {
+        var det = global.document.createElement('div')
+        det.className = 'det'
+        det.textContent = body
+        det.hidden = true
+
+        var more = global.document.createElement('button')
+        more.className = 'detBtn'
+        more.type = 'button'
+        more.textContent = t('problems.details')
+        more.setAttribute('aria-expanded', 'false')
+        more.addEventListener('click', function () {
+          det.hidden = !det.hidden
+          more.setAttribute('aria-expanded', det.hidden ? 'false' : 'true')
+        })
+
+        row.appendChild(more)
+        row.appendChild(det)
+      }
     }
     return row
   }

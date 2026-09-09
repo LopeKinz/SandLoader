@@ -9155,3 +9155,32 @@ check('the install prompt says which mod it is asking about', () => {
   }
   return 'the title is given the name it interpolates, in every locale that has the key'
 })
+
+check('every key the permission panels ask for exists in both locales', () => {
+  // permui.js's t() has no fallback: an unknown key renders as itself. That is
+  // how a Details button shipped reading "problems.details", and how the
+  // install prompt could have shipped asking about "{name}" - both of them
+  // visible only to someone who opened the panel and looked.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'permui.js'), 'utf8')
+  const locales = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'locales.js'), 'utf8')
+
+  const asked = new Set()
+  const call = /\bt\(\s*'([a-z][\w.]*)'/g
+  let m
+  while ((m = call.exec(src))) asked.add(m[1])
+  assert(asked.size > 10, 'found almost no t() calls - the scan is broken, not the code')
+
+  // Keys built at runtime (`perm.` + id) cannot be scanned, so the table is
+  // checked for the whole families those produce rather than for each key.
+  const missing = []
+  for (const key of asked) {
+    const rows = locales.split('\n').filter((l) => l.includes("'" + key + "'"))
+    if (rows.length < 2) missing.push(key + ' (in ' + rows.length + ' locale(s))')
+  }
+  assert(!missing.length,
+    'keys the permission panels ask for but no locale answers: ' + missing.join(', '))
+
+  return asked.size + ' keys asked for, every one answered in both locales'
+})
