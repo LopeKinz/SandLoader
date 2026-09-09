@@ -8644,12 +8644,14 @@ check('every drawing control is still on the toolbar, and the layers moved to th
   })
 })
 
-check('the five document operations are still reachable behind the one control', () => {
+check('the six document operations are still reachable behind the one control', () => {
   // Resize, crop, mirror and shift are used once or twice in a map's life and
   // each one moves every pixel of all six layers, so they went behind one
-  // control rather than sitting beside Brush at the same size. Hiding
-  // something is the easiest way to lose it: this is the check that it is
-  // still there, still does the work, and can still be got out of.
+  // control rather than sitting beside Brush at the same size. Generating
+  // joined them later and is the strongest of them - it does not move what is
+  // painted, it replaces it - so it sits last. Hiding something is the easiest
+  // way to lose it: this is the check that it is still there, still does the
+  // work, and can still be got out of.
   const harness = require('./dom-harness')
   const { S, dom } = bootEditor()
 
@@ -8663,12 +8665,14 @@ check('the five document operations are still reachable behind the one control',
       'the control lost its label: ' + JSON.stringify(trigger.textContent))
 
     const held = menu.childNodes.map((e) => e.textContent)
-    for (const label of ['Resize...', 'Crop', 'Mirror ⇄', 'Mirror ⇅', 'Shift...']) {
+    for (const label of ['Resize...', 'Crop', 'Mirror ⇄', 'Mirror ⇅', 'Shift...', 'Generate map...']) {
       assert(held.indexOf(label) >= 0,
         label + ' is not behind the Shape control: ' + JSON.stringify(held))
     }
-    assert(held.length === 5,
+    assert(held.length === 6,
       'something else moved in beside the document operations: ' + JSON.stringify(held))
+    assert(held[held.length - 1] === 'Generate map...',
+      'the one operation that discards the map is not last: ' + JSON.stringify(held))
 
     // Shut until it is asked for, and it says which it is where a screen
     // reader can hear it rather than only in how it is drawn.

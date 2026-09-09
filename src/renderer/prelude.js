@@ -23,10 +23,11 @@
  *   official-runtime delays official entries until that adapter is ready
  *   settingsui/permui defined before modsui.js, which opens them
  *
- * MODULES is a second, smaller list of plain CommonJS files - the terrain
- * palette and the map editor's tools, layer meanings, validator and transforms
- * - injected ahead of every part with a `module`/`require` shim around each.
- * See MODULES for why they are not parts.
+ * MODULES is a second list of plain CommonJS files - the terrain palette, the
+ * map editor's tools, layer meanings, validator and transforms, and the four
+ * map-generator stages with the file that composes them - injected ahead of
+ * every part with a `module`/`require` shim around each. See MODULES for why
+ * they are not parts.
  *
  * The result is cached only when nothing mod-specific went into it, because
  * the interceptor asks for it on every bundle request.
@@ -84,9 +85,9 @@ const PARTS = [
   'permui.js',
   'modsui.js',
   'mapsui.js',
-  // Reached from mapsui.js ("New map...", "Edit"), which looks it up on
-  // SMLN when the button is clicked rather than at install time - so the
-  // order of these two is convention, not a dependency.
+  // Reached from mapsui.js ("New map...", "Generate map...", "Edit"), which
+  // looks it up on SMLN when the button is clicked rather than at install
+  // time - so the order of these two is convention, not a dependency.
   'mapeditor.js',
   'hotreload.js',
 ]
@@ -94,14 +95,15 @@ const PARTS = [
 /**
  * CommonJS modules the renderer needs, injected ahead of PARTS.
  *
- * These five are not renderer parts and are deliberately not written like
- * one. They are plain `module.exports` files with no reference to `__SMLN__`,
- * because `tools/selftest.js` and the main process `require()` the very same
- * source the game runs - the palette that decides what a colour does, and the
- * four modules the map editor draws, checks and transforms with and reads its
- * layer meanings from. Turning them into self-installing renderer parts would
- * mean either a second copy or a wrapper around every one of them, and both are
- * how a table like the palette comes to say two different things in two places.
+ * These are not renderer parts and are deliberately not written like one. They
+ * are plain `module.exports` files with no reference to `__SMLN__`, because
+ * `tools/selftest.js`, `tools/test-*.js` and the main process `require()` the
+ * very same source the game runs - the palette that decides what a colour does,
+ * the four modules the map editor draws, checks and transforms with and reads
+ * its layer meanings from, and the five that build a world out of a seed.
+ * Turning them into self-installing renderer parts would mean either a second
+ * copy or a wrapper around every one of them, and both are how a table like the
+ * palette comes to say two different things in two places.
  *
  * So the prelude supplies what CommonJS would: a `module`, an `exports`, and a
  * `require` that resolves only the ids listed in `provides` below. Nothing here
@@ -110,7 +112,8 @@ const PARTS = [
  *
  * `global` is the seam the editor actually reads, so the order matters exactly
  * as much as PARTS' does: terrain-palette first, because mapeditor-validate
- * requires it.
+ * requires it, and mapeditor-validate before the generator stages, two of which
+ * require it at top level with no guard.
  *
  * @type {Array<{file:string, global:string, provides:string[]}>}
  */
@@ -118,7 +121,14 @@ const MODULES = [
   {
     file: path.join('..', 'game', 'terrain-palette.js'),
     global: '__SMLN_TERRAIN_PALETTE__',
-    provides: ['../game/terrain-palette.js', '../game/terrain-palette'],
+    // Two spellings, because two directories require this file: the editor's
+    // own modules sit in src/renderer/ and ask for `../game/terrain-palette`,
+    // while the four generator modules sit beside it in src/game/ and ask for
+    // `./terrain-palette`. The shim's table is flat, so both ids point here.
+    provides: [
+      '../game/terrain-palette.js', '../game/terrain-palette',
+      './terrain-palette.js', './terrain-palette',
+    ],
   },
   {
     // This one already publishes its own global for exactly this reason; the
@@ -138,12 +148,71 @@ const MODULES = [
   {
     file: 'mapeditor-validate.js',
     global: '__SMLN_MAPEDITOR_VALIDATE__',
-    provides: ['./mapeditor-validate.js', './mapeditor-validate'],
+    // As with the palette, two spellings: the editor's siblings ask for
+    // `./mapeditor-validate`, and mapgen-caves.js and mapgen-ore.js - which
+    // live in src/game/ and take `spawnCell` from here rather than keeping a
+    // second copy of the spawn formula - ask for `../renderer/mapeditor-validate`.
+    // Those two requires are at module top level and are NOT guarded, so this
+    // entry must stay above them in this list; see the generator block below.
+    provides: [
+      './mapeditor-validate.js', './mapeditor-validate',
+      '../renderer/mapeditor-validate.js', '../renderer/mapeditor-validate',
+    ],
   },
   {
     file: 'mapeditor-transform.js',
     global: '__SMLN_MAPEDITOR_TRANSFORM__',
     provides: ['./mapeditor-transform.js', './mapeditor-transform'],
+  },
+
+  /*
+   * The map generator: four stages and the file that composes them.
+   *
+   * Here for the same reason as the five above - they are plain CommonJS that
+   * tools/test-mapgen*.js require directly, so the renderer gets the very same
+   * source rather than a second copy - and reached from mapeditor.js's
+   * "Generate map..." dialog through `__SMLN_MAPGEN__`.
+   *
+   * ORDER IS LOAD-BEARING TWICE OVER. Each module's body runs inside its own
+   * try/catch, and its exports are only registered once that body has finished,
+   * so a module whose top-level require is not yet in the table does not fail
+   * loudly - it fails once, at install, and then simply is not there.
+   *
+   *   - all four stages require the terrain palette (registered first, above)
+   *   - mapgen-caves.js and mapgen-ore.js require mapeditor-validate.js at
+   *     top level, unguarded, so it must already be registered - it is
+   *   - mapgen-shape.js requires it too, but inside a try/catch, and falls
+   *     back to __SMLN_MAPEDITOR_VALIDATE__ lazily at the first call, so its
+   *     order is safe either way. It is listed here anyway.
+   *   - mapgen.js requires all four stages, so it comes last.
+   *
+   * The stage modules provide the extensionless id as well, because mapgen.js
+   * writes `require('./mapgen-params')` without the suffix.
+   */
+  {
+    file: path.join('..', 'game', 'mapgen-params.js'),
+    global: '__SMLN_MAPGEN_PARAMS__',
+    provides: ['./mapgen-params.js', './mapgen-params'],
+  },
+  {
+    file: path.join('..', 'game', 'mapgen-shape.js'),
+    global: '__SMLN_MAPGEN_SHAPE__',
+    provides: ['./mapgen-shape.js', './mapgen-shape'],
+  },
+  {
+    file: path.join('..', 'game', 'mapgen-caves.js'),
+    global: '__SMLN_MAPGEN_CAVES__',
+    provides: ['./mapgen-caves.js', './mapgen-caves'],
+  },
+  {
+    file: path.join('..', 'game', 'mapgen-ore.js'),
+    global: '__SMLN_MAPGEN_ORE__',
+    provides: ['./mapgen-ore.js', './mapgen-ore'],
+  },
+  {
+    file: path.join('..', 'game', 'mapgen.js'),
+    global: '__SMLN_MAPGEN__',
+    provides: ['../game/mapgen.js', '../game/mapgen'],
   },
 ]
 

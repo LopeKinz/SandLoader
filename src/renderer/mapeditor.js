@@ -85,6 +85,21 @@
   var checker = global.__SMLN_MAPEDITOR_VALIDATE__ || null
   var xform = global.__SMLN_MAPEDITOR_TRANSFORM__ || null
 
+  /*
+   * The map generator, and the parameter table it is driven by.
+   *
+   * Two globals rather than one because the dialog needs both halves and they
+   * answer different questions: `mapgen` runs the thing and says, in MAPPING,
+   * which user-facing name actually reaches a stage; `mapgenParams` carries the
+   * presets, the defaults every knob starts at, and the seed generator.
+   *
+   * Optional in the same sense as the five above. If either is missing the
+   * "Generate map..." entry is dead rather than absent, so an author can see
+   * that the feature exists and that this build did not load it.
+   */
+  var mapgen = global.__SMLN_MAPGEN__ || null
+  var mapgenParams = global.__SMLN_MAPGEN_PARAMS__ || null
+
   /** The six fields the game reads, in the order it reads them. */
   var LAYERS = ['terrain', 'lights', 'lightsMeta', 'sensors', 'authorization', 'wall']
 
@@ -437,6 +452,19 @@
     "#smln-mapedit .dims{flex:none;margin-left:auto;color:#94a3b8;font-size:11.5px;",
     "letter-spacing:.06em;font-family:'Cascadia Mono',Consolas,monospace}",
 
+    // The seed the map on screen came out of, in the masthead because it has
+    // to survive every other message the editor writes. A real input, not a
+    // span, so it can be selected and copied; read-only, because editing it
+    // here would claim to change a map that has already been generated.
+    '#smln-mapedit .seedbox{flex:none;display:flex;align-items:center;gap:7px}',
+    '#smln-mapedit .seedbox[hidden]{display:none}',
+    '#smln-mapedit .seedbox .cap{color:#64748b;font-size:10px;letter-spacing:.14em;',
+    'text-transform:uppercase}',
+    '#smln-mapedit .seedbox input{width:160px;background:transparent;color:#94a3b8;',
+    'border:1px solid rgba(100,116,139,.28);border-radius:0 4px 0 4px;padding:4px 7px;',
+    "font:inherit;font-size:11.5px;font-family:'Cascadia Mono',Consolas,monospace}",
+    '#smln-mapedit .seedbox input:focus{outline:none;border-color:rgba(255,231,0,.45)}',
+
     // --- toolbar: one row. The caption sits above its cluster rather than
     // beside it, which costs a few pixels of height and gives back the width
     // that made three rows necessary.
@@ -711,6 +739,34 @@
     '#smln-mapedit .anchors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:150px}',
     '#smln-mapedit .anchors button{padding:8px 0;font-size:11px}',
 
+    // --- the generator's dialog: wider than the others, and scrollable,
+    // because opening "Everything else" adds sixteen rows to it.
+    '#smln-mapedit .dialog .card.wide{width:min(560px,92%);max-height:86%;overflow-y:auto}',
+    // A preset is a paragraph, not a word: the name alone would make four
+    // buttons that only mean something to whoever wrote them.
+    '#smln-mapedit .presets{display:flex;flex-direction:column;gap:6px}',
+    '#smln-mapedit .presets button{display:block;width:100%;text-align:left;padding:9px 11px;',
+    'line-height:1.45}',
+    '#smln-mapedit .presets button b{display:block;font-size:12.5px;color:#f1f5f9}',
+    '#smln-mapedit .presets button span{display:block;font-size:11px;color:#94a3b8;margin-top:2px}',
+    '#smln-mapedit .presets button.on b,#smln-mapedit .presets button.on span{color:#080c11}',
+    // The randomise button sits on the seed field rather than under it: it is
+    // one of the two ways to fill that box, not a separate action.
+    '#smln-mapedit .seedrow{display:flex;gap:8px;align-items:stretch}',
+    '#smln-mapedit .seedrow input{flex:1;min-width:0}',
+    '#smln-mapedit .seedrow button{flex:none;white-space:nowrap}',
+    // A wait that is long enough to notice is not an error, so it is not red.
+    '#smln-mapedit .dialog .cost.slow{color:#fbbf24}',
+    '#smln-mapedit .moreBtn{margin-top:16px;width:100%;text-align:left}',
+    '#smln-mapedit .more[hidden]{display:none}',
+    '#smln-mapedit .more .group{margin-top:16px;font-size:11px;font-weight:700;',
+    'letter-spacing:.14em;text-transform:uppercase;color:#e2e8f0;',
+    'border-top:1px solid rgba(100,116,139,.28);padding-top:12px}',
+    '#smln-mapedit .knob{display:flex;align-items:baseline;gap:10px;margin-top:9px}',
+    '#smln-mapedit .knob .what{flex:1;min-width:0;color:#94a3b8;font-size:11.5px;line-height:1.45}',
+    '#smln-mapedit .knob input{flex:none;width:96px}',
+    "#smln-mapedit .knob input[type=checkbox]{width:auto}",
+
     // --- footer: what just happened at the left, what is under the cursor
     // beside it, and the one action that commits at the right.
     '#smln-mapedit footer{flex:none;display:flex;align-items:center;gap:16px;',
@@ -962,6 +1018,33 @@
     name.addEventListener('input', function () {
       if (doc) { doc.name = name.value; doc.dirty = true }
     })
+    /*
+     * The seed, where it cannot be scrolled off or overwritten by the next
+     * message the editor writes.
+     *
+     * A generator whose result cannot be got back is a toy, so the one string
+     * that gets this map back has to be somewhere the author can select it -
+     * hence a read-only input rather than a span. It is saved with the map
+     * (see saveMap) and the maps browser shows it there too; this is the copy
+     * that is visible while the map is still unsaved, which is exactly when it
+     * is easiest to lose.
+     */
+    var seedBox = document.createElement('span')
+    seedBox.className = 'seedbox'
+    seedBox.hidden = true
+    var seedCap = document.createElement('span')
+    seedCap.className = 'cap'
+    seedCap.textContent = tx('editor.seedCap', 'Seed')
+    var seedOut = document.createElement('input')
+    seedOut.type = 'text'
+    seedOut.readOnly = true
+    seedOut.setAttribute('readonly', 'readonly')
+    seedOut.setAttribute('aria-label', tx('editor.seedLabel', 'The seed this map was generated from'))
+    seedOut.setAttribute('title', tx('editor.seedTip',
+      'Type this back into Generate map... at the same size and settings to get this map again'))
+    seedBox.appendChild(seedCap)
+    seedBox.appendChild(seedOut)
+
     var dims = document.createElement('span')
     dims.className = 'dims'
     var close = document.createElement('button')
@@ -969,6 +1052,7 @@
     close.addEventListener('click', function () { requestClose() })
     header.appendChild(h2)
     header.appendChild(name)
+    header.appendChild(seedBox)
     header.appendChild(dims)
     header.appendChild(close)
 
@@ -1035,6 +1119,8 @@
     document.body.appendChild(overlay)
 
     overlay._name = name
+    overlay._seedBox = seedBox
+    overlay._seedOut = seedOut
     overlay._dims = dims
     overlay._tools = tools
     overlay._stage = stage
@@ -1176,6 +1262,13 @@
     op(tx('editor.shift', 'Shift...'),
       tx('editor.shiftTip', 'Move everything painted by a number of cells'),
       function () { openShift() })
+    // Last, and on its own terms: the other five move what is painted, this
+    // one throws it away and builds something else. It asks first when there
+    // is unsaved work - see openGenerate.
+    var generateBtn = op(tx('editor.generate', 'Generate map...'),
+      tx('editor.generateTip',
+        'Build a whole new world from a preset and a seed, replacing this one'),
+      function () { openGenerate() })
 
     var checkBox = document.createElement('div')
     checkBox.className = 'cluster'
@@ -1206,6 +1299,7 @@
     overlay._undoBtn = undoBtn
     overlay._redoBtn = redoBtn
     overlay._cropBtn = cropBtn
+    overlay._generateBtn = generateBtn
     overlay._checkBtn = checkBtn
     overlay._zoomVal = zoomVal
     overlay._shapeBtn = shapeBtn
@@ -1725,11 +1819,21 @@
     overlay._undoBtn.disabled = undo.depth() === 0
     overlay._redoBtn.disabled = redo.depth() === 0
     overlay._cropBtn.disabled = !selection || !xform
+    // Dead rather than absent: a build where the generator modules did not
+    // install should show an author that the feature exists and did not load,
+    // not quietly offer four operations where there are five.
+    overlay._generateBtn.disabled = !mapgen || !mapgenParams
     overlay._checkBtn.disabled = !checker
     overlay._zoomVal.textContent = Math.round(view.zoom * 100) + '%'
     overlay._canvas.classList.toggle('pan', panMode)
     overlay._dims.textContent = doc ? doc.width + '×' + doc.height : ''
     if (doc && overlay._name.value !== doc.name) overlay._name.value = doc.name
+
+    // A map with no seed is not a map with an empty seed, so the whole box
+    // goes rather than standing there looking like a field nobody filled in.
+    var seedText = doc && doc.seed ? String(doc.seed) : ''
+    overlay._seedBox.hidden = !seedText
+    if (overlay._seedOut.value !== seedText) overlay._seedOut.value = seedText
 
     // Exactly one surface is showing, and it is the active layer's. Hidden
     // rather than rebuilt: the terrain palette is fifty buttons, and throwing
@@ -2474,6 +2578,41 @@
     return ok
   }
 
+  /**
+   * Is this a size the editor will hold? If not, why not, and which field.
+   *
+   * One function rather than one copy per dialog: the resize dialog and the
+   * generator's ask exactly the same question about exactly the same numbers,
+   * and a second copy is how two dialogs come to disagree about what the floor
+   * is. The floor, the per-axis ceiling and the cell ceiling all live above.
+   *
+   * @param {number} w
+   * @param {number} h
+   * @returns {{message:string, axes:string[]}|null} null when the size is fine
+   */
+  function sizeRefusal(w, h) {
+    var axes = []
+    if (!isFinite(w) || w < MIN_WIDTH || w > MAX_SIZE) axes.push('width')
+    if (!isFinite(h) || h < MIN_HEIGHT || h > MAX_SIZE) axes.push('height')
+    if (!axes.length && w * h > MAX_CELLS) {
+      return {
+        axes: ['width', 'height'],
+        message: tx('editor.tooManyCells',
+          'That is ' + Math.round(w * h / 1e6) + ' million cells. The editor holds six' +
+          ' layers plus a display copy, so it stops at ' + Math.round(MAX_CELLS / 1e6) +
+          ' million - about ' + Math.round(Math.sqrt(MAX_CELLS)) + ' x ' +
+          Math.round(Math.sqrt(MAX_CELLS)) + ', or 8000 x 2000.'),
+      }
+    }
+    if (!axes.length) return null
+    return {
+      axes: axes,
+      message: tx('editor.resizeRefused',
+        'Between ' + MIN_WIDTH + ' × ' + MIN_HEIGHT + ' and ' + MAX_SIZE + ' × ' + MAX_SIZE +
+        ' cells. ' + minimumSentence()),
+    }
+  }
+
   function openResize() {
     if (!doc || !xform) return
     var card = dialog(tx('editor.resizeTitle', 'Resize the map'))
@@ -2551,21 +2690,10 @@
     dialogButtons(card, tx('editor.apply', 'Resize'), function () {
       var w = Math.round(Number(widthInput.value))
       var h = Math.round(Number(heightInput.value))
-      var bad = []
-      if (!isFinite(w) || w < MIN_WIDTH || w > MAX_SIZE) bad.push(widthInput)
-      if (!isFinite(h) || h < MIN_HEIGHT || h > MAX_SIZE) bad.push(heightInput)
-      if (!bad.length && w * h > MAX_CELLS) {
-        refuseResize(tx('editor.tooManyCells',
-          'That is ' + Math.round(w * h / 1e6) + ' million cells. The editor holds six' +
-          ' layers plus a display copy, so it stops at ' + Math.round(MAX_CELLS / 1e6) +
-          ' million - about ' + Math.round(Math.sqrt(MAX_CELLS)) + ' x ' +
-          Math.round(Math.sqrt(MAX_CELLS)) + ', or 8000 x 2000.'), [widthInput, heightInput])
-        return
-      }
-      if (bad.length) {
-        refuseResize(tx('editor.resizeRefused',
-          'Between ' + MIN_WIDTH + ' × ' + MIN_HEIGHT + ' and ' + MAX_SIZE + ' × ' + MAX_SIZE +
-          ' cells. ' + minimumSentence()), bad)
+      var no = sizeRefusal(w, h)
+      if (no) {
+        refuseResize(no.message,
+          no.axes.map(function (a) { return a === 'width' ? widthInput : heightInput }))
         return
       }
       closeDialog()
@@ -2607,6 +2735,578 @@
         return xform.shift(buf, dx, dy, fillFor(layer))
       })
     })
+  }
+
+  // ----------------------------------------------------------- generation
+  /*
+   * The map generator, from the outside.
+   *
+   * Four modules in src/game/ already build a whole world from a preset and a
+   * seed, and until now nothing in the game could reach them. This section is
+   * the way in, and it is deliberately the only one: the maps browser's
+   * "Generate map..." calls straight into openGenerate() rather than keeping a
+   * second dialog of its own, because everything the dialog needs is here -
+   * the size limits, the memory figure, the busy overlay, and the document the
+   * result has to land in.
+   *
+   * Nothing below changes a generator module or repeats a rule one of them
+   * owns. Sizes are refused by the editor's own sizeRefusal(); parameters are
+   * clamped and refused by mapgen-params' normalise(), whose sentences are
+   * shown verbatim; which knobs exist at all comes from mapgen's MAPPING.
+   */
+
+  /** The parameter groups, in the order mapgen-params documents them. */
+  var GEN_GROUPS = ['shape', 'caves', 'ore']
+
+  /** A heading for each, in the terms an author thinks in. */
+  var GEN_GROUP_LABEL = {
+    shape: 'The ground',
+    caves: 'The caves',
+    ore: 'The ore',
+  }
+
+  /**
+   * What each knob does, rather than what it is called.
+   *
+   * `surfaceWavelength` is a true name and a useless label: it tells an author
+   * nothing about what moves when they change it. Every line here answers "what
+   * will I see if I turn this up", in the units the parameter is actually in.
+   *
+   * The list of knobs is NOT taken from here. It comes from mapgen's MAPPING,
+   * which is the one place that records whether a user-facing name reaches a
+   * stage at all - so a name MAPPING marks `null` (there are eight, among them
+   * every material colour and `keepInsideRock`) is not offered, because a
+   * control that quietly does nothing is worse than a missing one. A knob that
+   * appears in MAPPING with no line here still gets a row, labelled with its
+   * own name; that is a worse label, not a missing feature.
+   */
+  var GEN_KNOB = {
+    surfaceLevel: 'Where the ground starts, down the map: 0.05 is nearly all sky, 0.5 is half and half',
+    surfaceAmplitude: 'How tall the hills are, in cells from trough to peak',
+    surfaceRoughness: 'How broken those hills are: 0 is a smooth swell, 1 is scree',
+    surfaceWavelength: 'Cells from one hilltop to the next - small numbers make a comb, not hills',
+    topsoilDepth: 'Cells of soft dirt under the surface: what the starting shovel gets through fast',
+    floorThickness: 'Cells of indestructible bedrock along the bottom edge',
+    caveDensity: 'How much of the underground ends up as open cave - 0.10 really is about a tenth',
+    smoothingPasses: 'More rounds means fewer, rounder, larger caverns',
+    minCaveSize: 'Pockets smaller than this many cells are filled back in, so the ground is not freckled',
+    minDepthBelowSurface: 'Cells of solid ground kept between the surface and any cave, so none opens to the sky',
+    minHeightAboveFloor: 'Cells of solid ground kept above the bedrock floor',
+    connectCaves: 'Join isolated caverns to their neighbours with tunnels',
+    tunnelWidth: 'How wide those tunnels are, in cells - the width a player walks through',
+    veinCount: 'How many ore veins in the whole map, not per screen',
+    veinSize: 'Cells in an average vein',
+    veinSizeVariation: 'How much vein size varies: 0 is every vein identical, 1 is anything up to double',
+  }
+
+  /*
+   * How long a run will take, from one measurement and a straight line.
+   *
+   * MEASURED, once, on the machine this was written for: 800 x 400 - 320,000
+   * cells - generated in 351 ms, most of that the cave solve.
+   *
+   * EXTRAPOLATED everywhere else. This is that one rate multiplied by the cell
+   * count and nothing else, so at any other size it is an estimate and not a
+   * measurement. It reads low on large maps for two reasons: the cave solve
+   * does more work per cell as the map grows - three later runs came out 20-30%
+   * above this line at 600,000 and 700,000 cells - and the canvas work that
+   * follows, six layers allocated and one of them written, is not in the figure
+   * at all. Treat what it says as a floor.
+   *
+   * It exists to tell an author before they click that a size will make them
+   * wait, not to tell them how long.
+   */
+  var GEN_MS_PER_CELL = 351 / 320000
+
+  /** Below this the run is over before a person notices; above it, say so. */
+  var GEN_NOTICEABLE_MS = 400
+
+  function generateMillis(w, h) {
+    if (!(w > 0) || !(h > 0)) return 0
+    return w * h * GEN_MS_PER_CELL
+  }
+
+  /** The wait as something to read, rounded coarsely because it is an estimate. */
+  function generateWait(ms) {
+    if (ms < 1000) return Math.round(ms / 100) * 100 + ' ms'
+    if (ms < 60000) return Math.round(ms / 100) / 10 + ' seconds'
+    return Math.round(ms / 6000) / 10 + ' minutes'
+  }
+
+  /**
+   * The knobs one group offers, derived rather than listed.
+   *
+   * `kind` comes from the type of the default, so nothing here has a second
+   * opinion about whether a parameter is a number or a switch. Anything that is
+   * neither - `ore.materials`, which is a table of rows with its own colours and
+   * depth bands - is left out: that is a grid editor, and until there is one the
+   * materials come from the chosen preset.
+   */
+  function generatorKnobs(group) {
+    var out = []
+    var mapping = mapgen && mapgen.MAPPING ? mapgen.MAPPING[group] : null
+    var defaults = mapgenParams && mapgenParams.DEFAULTS ? mapgenParams.DEFAULTS[group] : null
+    if (!mapping || !defaults) return out
+    for (var key in mapping) {
+      if (!Object.prototype.hasOwnProperty.call(mapping, key)) continue
+      if (mapping[key] == null) continue
+      var def = defaults[key]
+      var kind = typeof def === 'number' ? 'number' : typeof def === 'boolean' ? 'boolean' : null
+      if (!kind) continue
+      out.push({ group: group, key: key, kind: kind, what: GEN_KNOB[key] || key })
+    }
+    return out
+  }
+
+  /**
+   * A writable copy of a preset's parameters.
+   *
+   * PRESETS is deep-frozen, and the dialog writes the knob values back over
+   * whatever the preset chose - so it needs its own object. Only the shapes
+   * mapgen-params deals in are copied: scalars, and the one array of flat rows
+   * that is `ore.materials`.
+   */
+  function copyParams(p) {
+    var out = { seed: p.seed === undefined ? null : p.seed }
+    for (var i = 0; i < GEN_GROUPS.length; i++) {
+      var group = GEN_GROUPS[i]
+      var src = p[group] || {}
+      var dst = {}
+      for (var key in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, key)) continue
+        var v = src[key]
+        dst[key] = Array.isArray(v) ? v.map(copyRow) : v
+      }
+      out[group] = dst
+    }
+    return out
+  }
+
+  function copyRow(row) {
+    var out = {}
+    for (var k in row) {
+      if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k]
+    }
+    return out
+  }
+
+  /**
+   * Open the generator.
+   *
+   * Reached from the shape menu, and from the maps browser's own footer through
+   * SMLN.mapEditor.openGenerate. From the browser there is no document yet and
+   * nothing to lose; from inside the editor there is, and generating replaces
+   * all six layers with no undo across it, so unsaved work is asked about first.
+   *
+   * @param {{onSaved?:Function, name?:string}} [opts]
+   * @returns {boolean} whether the dialog is now on screen
+   */
+  function openGenerate(opts) {
+    var options = opts || {}
+    if (!overlay) build()
+    if (!mapgen || typeof mapgen.generate !== 'function' || !mapgenParams) {
+      say(tx('editor.noGenerator',
+        'the map generator did not load in this build, so there is nothing to generate with'), true)
+      return false
+    }
+    if (typeof options.onSaved === 'function') onSaved = options.onSaved
+    if (!isOpen) {
+      isOpen = true
+      overlay.classList.toggle('open', true)
+      say('')
+      busy('')
+    }
+
+    // The dialog lives on the stage, so there has to be a stage to put it on.
+    // Coming from the maps browser there is no document at all; a blank one at
+    // the default size costs a moment and is replaced the instant the author
+    // presses Generate.
+    if (!doc) {
+      reset(blankDoc({ name: options.name }))
+      say(openingNote())
+      openGenerateDialog()
+      return true
+    }
+    if (doc.dirty) {
+      confirmRegenerate()
+      return true
+    }
+    openGenerateDialog()
+    return true
+  }
+
+  /** The one thing generating can destroy, said before it destroys it. */
+  function confirmRegenerate() {
+    var card = dialog(tx('editor.regenerateTitle', 'Replace this map?'))
+    var hint = document.createElement('div')
+    hint.className = 'hint refused'
+    hint.textContent = tx('editor.regenerateWarning',
+      'This map has changes that have not been saved. Generating builds a new world over the ' +
+      'top of it: all six layers are replaced, and undo does not reach back across that.')
+    card.appendChild(hint)
+    dialogButtons(card, tx('editor.regenerateGo', 'Discard and generate'), function () {
+      openGenerateDialog()
+    })
+  }
+
+  /**
+   * The dialog itself.
+   *
+   * The first screen is four presets, a seed and a size, and nothing else -
+   * somebody who wants a world types nothing and presses the button. Everything
+   * the four stages can be told is behind one disclosure, grouped the way
+   * mapgen-params groups it, and every row says what it does rather than what
+   * it is called.
+   */
+  function openGenerateDialog() {
+    var presets = mapgenParams.PRESETS || null
+    var ids = presets ? Object.keys(presets) : []
+    if (!ids.length) {
+      say(tx('editor.noPresets', 'the generator offers no presets in this build'), true)
+      return
+    }
+
+    var card = dialog(tx('editor.generateTitle', 'Generate a map'))
+    card.className = 'card wide'
+
+    // --- which world
+    var presetLabel = document.createElement('label')
+    presetLabel.textContent = tx('editor.generateStart', 'Start from')
+    card.appendChild(presetLabel)
+    var presetBox = document.createElement('div')
+    presetBox.className = 'presets'
+    card.appendChild(presetBox)
+
+    var chosen = ids[0]
+    var presetBtns = []
+    ids.forEach(function (id) {
+      var spec = presets[id] || {}
+      var b = document.createElement('button')
+      b._preset = id
+      var nm = document.createElement('b')
+      nm.textContent = spec.name || id
+      var why = document.createElement('span')
+      why.textContent = spec.description || ''
+      b.appendChild(nm)
+      b.appendChild(why)
+      b.addEventListener('click', function () { applyPreset(id) })
+      presetBox.appendChild(b)
+      presetBtns.push(b)
+    })
+
+    // --- which world, again: the seed is the half a preset does not decide
+    var seedLabel = document.createElement('label')
+    seedLabel.textContent = tx('editor.generateSeed', 'Seed')
+    card.appendChild(seedLabel)
+    var seedRow = document.createElement('div')
+    seedRow.className = 'seedrow'
+    var seedInput = document.createElement('input')
+    seedInput.type = 'text'
+    // The seed of the map on screen, if it has one, so that regenerating from
+    // inside the editor starts from the world the author is looking at.
+    seedInput.value = doc && doc.seed ? String(doc.seed) : ''
+    seedInput.setAttribute('placeholder', tx('editor.generateSeedEmpty', 'leave empty for a new one'))
+    seedRow.appendChild(seedInput)
+    button(seedRow, tx('editor.generateRandomise', 'Randomise'),
+      tx('editor.generateRandomiseTip', 'A fresh seed, short enough to read out over a call'),
+      function () {
+        seedInput.value = typeof mapgenParams.randomSeed === 'function'
+          ? mapgenParams.randomSeed() : ''
+        clearRefusal()
+      })
+    card.appendChild(seedRow)
+
+    var seedHint = document.createElement('div')
+    seedHint.className = 'hint'
+    seedHint.textContent = tx('editor.generateSeedHint',
+      'The same seed, preset, settings and size always build the same map. Leave it empty and ' +
+      'one is picked for you - it is shown in the masthead afterwards, and saved with the map.')
+    card.appendChild(seedHint)
+
+    // --- how big
+    var pair = document.createElement('div')
+    pair.className = 'pair'
+    var wcell = document.createElement('div')
+    var hcell = document.createElement('div')
+    pair.appendChild(wcell)
+    pair.appendChild(hcell)
+    var widthInput = field(wcell, tx('editor.width', 'Width (cells)'), DEFAULT_SIZE.width)
+    var heightInput = field(hcell, tx('editor.height', 'Height (cells)'), DEFAULT_SIZE.height)
+    card.appendChild(pair)
+
+    // What the size costs to hold, and what it costs to wait for. Both before
+    // the click rather than after it - the generator is synchronous and the
+    // whole renderer stops for its run, so "it will take a while" discovered
+    // afterwards is indistinguishable from a hang.
+    var cost = document.createElement('div')
+    cost.className = 'cost'
+    card.appendChild(cost)
+    var wait = document.createElement('div')
+    wait.className = 'cost'
+    card.appendChild(wait)
+
+    function showCost() {
+      var w = Math.round(Number(widthInput.value))
+      var h = Math.round(Number(heightInput.value))
+      cost.textContent = memoryEstimate(w, h)
+      cost.className = 'cost' + (w > 0 && h > 0 && w * h > MAX_CELLS ? ' over' : '')
+      var ms = generateMillis(w, h)
+      if (!(ms >= GEN_NOTICEABLE_MS)) {
+        wait.textContent = ''
+        wait.className = 'cost'
+        return
+      }
+      wait.textContent = tx('editor.generateWait',
+        'Roughly ' + generateWait(ms) + ' to generate, and the game can do nothing else while ' +
+        'it does. That is a straight line from one timed run at 800 x 400, so read it as a ' +
+        'floor rather than a promise.', { wait: generateWait(ms) })
+      wait.className = 'cost slow'
+    }
+    widthInput.addEventListener('input', showCost)
+    heightInput.addEventListener('input', showCost)
+
+    // --- everything else
+    var moreOpen = false
+    var moreBtn = document.createElement('button')
+    moreBtn.className = 'moreBtn'
+    moreBtn.setAttribute('aria-expanded', 'false')
+    card.appendChild(moreBtn)
+    var more = document.createElement('div')
+    more.className = 'more'
+    more.hidden = true
+    card.appendChild(more)
+    moreBtn.addEventListener('click', function () { setMore(!moreOpen) })
+
+    function setMore(on) {
+      moreOpen = !!on
+      more.hidden = !moreOpen
+      moreBtn.setAttribute('aria-expanded', moreOpen ? 'true' : 'false')
+      moreBtn.textContent = (moreOpen ? '▾ ' : '▸ ') +
+        tx('editor.generateMore', 'Everything else')
+    }
+
+    var rows = []
+    GEN_GROUPS.forEach(function (group) {
+      var knobs = generatorKnobs(group)
+      if (!knobs.length) return
+      var heading = document.createElement('div')
+      heading.className = 'group'
+      heading.textContent = tx('editor.generateGroup.' + group, GEN_GROUP_LABEL[group] || group)
+      more.appendChild(heading)
+      knobs.forEach(function (knob) {
+        var row = document.createElement('div')
+        row.className = 'knob'
+        var what = document.createElement('span')
+        what.className = 'what'
+        what.textContent = knob.what
+        var input = document.createElement('input')
+        input.type = knob.kind === 'boolean' ? 'checkbox' : 'text'
+        input.setAttribute('aria-label', knob.what)
+        input.setAttribute('data-knob', group + '.' + knob.key)
+        input.addEventListener('input', clearRefusal)
+        input.addEventListener('change', clearRefusal)
+        row.appendChild(what)
+        row.appendChild(input)
+        more.appendChild(row)
+        rows.push({ group: group, key: knob.key, kind: knob.kind, input: input })
+      })
+    })
+
+    // Said where the knobs are, because that is where its absence is felt: the
+    // ore table is the one thing in the parameters this dialog cannot edit.
+    var moreNote = document.createElement('div')
+    moreNote.className = 'hint'
+    moreNote.textContent = tx('editor.generateMaterialsNote',
+      'Which ores appear, how deep each one sits and how they are shared out come from the ' +
+      'preset. Everything above is clamped into range rather than refused, so a silly number ' +
+      'gives you the nearest sensible one.')
+    more.appendChild(moreNote)
+
+    // --- refusals
+    var hint = document.createElement('div')
+    hint.className = 'hint'
+    hint.textContent = ''
+    card.appendChild(hint)
+
+    function refuse(message, bad) {
+      hint.textContent = message
+      hint.className = 'hint refused'
+      for (var i = 0; i < (bad || []).length; i++) bad[i].className = 'bad'
+    }
+
+    function clearRefusal() {
+      hint.textContent = ''
+      hint.className = 'hint'
+      widthInput.className = ''
+      heightInput.className = ''
+    }
+    widthInput.addEventListener('input', clearRefusal)
+    heightInput.addEventListener('input', clearRefusal)
+    seedInput.addEventListener('input', clearRefusal)
+
+    /** Choosing a preset moves the size and every knob with it. */
+    function applyPreset(id) {
+      chosen = id
+      presetBtns.forEach(function (b) {
+        b.classList.toggle('on', b._preset === id)
+        b.setAttribute('aria-pressed', b._preset === id ? 'true' : 'false')
+      })
+      var spec = presets[id] || {}
+      var size = spec.suggestedSize || {}
+      // A suggestion, and the editor is the authority - so it goes through the
+      // same clamp a new map's size does rather than being trusted.
+      widthInput.value = String(clampSize(size.width, DEFAULT_SIZE.width, MIN_WIDTH))
+      heightInput.value = String(clampSize(size.height, DEFAULT_SIZE.height, MIN_HEIGHT))
+      var p = spec.params || {}
+      rows.forEach(function (row) {
+        var group = p[row.group] || {}
+        var v = group[row.key]
+        if (v === undefined) return
+        if (row.kind === 'boolean') row.input.checked = !!v
+        else row.input.value = String(v)
+      })
+      clearRefusal()
+      showCost()
+    }
+
+    /**
+     * The parameters as the generator wants them.
+     *
+     * The preset's own complete set is the base, so the parts this dialog does
+     * not offer - the material table, the layer colours - are the ones the
+     * preset chose. Knob values go over the top as the strings they were typed
+     * as: normalise() reads and clamps them, and its refusal names the
+     * parameter, which is a better sentence than anything written here.
+     */
+    function readParams() {
+      var out = copyParams((presets[chosen] && presets[chosen].params) || {})
+      var seed = String(seedInput.value == null ? '' : seedInput.value).trim()
+      out.seed = seed || null
+      rows.forEach(function (row) {
+        if (!out[row.group]) return
+        out[row.group][row.key] = row.kind === 'boolean' ? !!row.input.checked : row.input.value
+      })
+      return out
+    }
+
+    dialogButtons(card, tx('editor.generateGo', 'Generate'), function () {
+      var w = Math.round(Number(widthInput.value))
+      var h = Math.round(Number(heightInput.value))
+      var no = sizeRefusal(w, h)
+      if (no) {
+        refuse(no.message,
+          no.axes.map(function (a) { return a === 'width' ? widthInput : heightInput }))
+        return
+      }
+      var spec = {
+        width: w,
+        height: h,
+        name: (presets[chosen] && presets[chosen].name) || tx('editor.untitled', 'Untitled map'),
+        params: readParams(),
+      }
+      closeDialog()
+      overlay._generating = runGenerate(spec)
+    })
+
+    setMore(false)
+    applyPreset(chosen)
+    if (seedInput.focus) seedInput.focus()
+  }
+
+  /**
+   * Let the browser paint, then run something that will block it.
+   *
+   * `generate` is synchronous and holds the renderer for its whole run - a
+   * third of a second at 320,000 cells, seconds at the sizes the editor can
+   * hold. So the busy overlay has to be on screen BEFORE the work starts, and
+   * setting its text does not put it there: the paint and the finished map
+   * would land in the same frame and the overlay would never be seen at all.
+   *
+   * Two frames, because one only queues the paint and the second is when it has
+   * happened. setTimeout where there are no animation frames, which is the
+   * self-test's DOM - the ordering guarantee is the same, the paint is not, and
+   * there is nothing there to paint.
+   */
+  function afterPaint(run) {
+    return new Promise(function (resolve) {
+      var raf = typeof global.requestAnimationFrame === 'function'
+        ? function (fn) { global.requestAnimationFrame(fn) }
+        : function (fn) { global.setTimeout(fn, 0) }
+      raf(function () { raf(function () { resolve(run()) }) })
+    })
+  }
+
+  /**
+   * Generate, and put the result on screen.
+   *
+   * @param {{width:number, height:number, name:string, params:object}} spec
+   * @returns {Promise<boolean>}
+   */
+  function runGenerate(spec) {
+    busy(tx('editor.generating',
+      'Generating ' + spec.width + ' × ' + spec.height + '...  the game is busy until it finishes.',
+      { width: spec.width, height: spec.height }))
+    say('')
+
+    return afterPaint(function () {
+      /*
+       * The busy overlay covers the stage and takes pointer events, so it is
+       * hidden in a finally and not at the end of the happy path. Left up with
+       * no text it is an invisible sheet over the canvas that swallows every
+       * click - that has shipped once already, and every way out of here
+       * (a result, a refusal, a throw, an editor closed underneath us) goes
+       * through this one clause.
+       */
+      try {
+        if (!isOpen) return false
+        var result = mapgen.generate(spec.width, spec.height, spec.params)
+        if (!result || !result.ok) {
+          // The generator's own sentence, never a summary of it: it names the
+          // parameter and the bound it missed, and nothing here knows better.
+          say(tx('editor.generateRefused',
+            'Not generated: ' + ((result && result.reason) || 'no reason given'),
+            { reason: (result && result.reason) || '' }), true)
+          return false
+        }
+        adoptGenerated(result, spec)
+        say(tx('editor.generated',
+          'Generated from seed ' + doc.seed + '. Nothing is saved yet - move the spawn, carve ' +
+          'what you want, then Save. The same seed and settings build this map again.',
+          { seed: doc.seed }))
+        return true
+      } catch (e) {
+        say((e && e.message) || tx('editor.generateFailed', 'the map could not be generated'), true)
+        return false
+      } finally {
+        busy('')
+      }
+    })
+  }
+
+  /**
+   * The generated buffer as a document, unsaved.
+   *
+   * Terrain only. The generator writes one layer, and the other five stay
+   * empty, which is a valid world - lights, light tuning, markers, zones and
+   * backdrop are all things an author adds, and inventing them here would be
+   * inventing content nobody asked for.
+   *
+   * `dirty` is true on purpose. A generated map is a starting point, not a
+   * finished one, and it is not written to disk behind the author's back: they
+   * press Save, or they close and Escape asks them to confirm, exactly as with
+   * anything else they have painted and not kept.
+   */
+  function adoptGenerated(result, spec) {
+    var made = blankDoc({
+      width: spec.width,
+      height: spec.height,
+      name: spec.name,
+      seed: String(result.seed),
+    })
+    var ctx = ctxOf(made.layers.terrain)
+    ctx.putImageData(asImageData(ctx, result.buf), 0, 0)
+    made.dirty = true
+    reset(made)
   }
 
   // ---------------------------------------------------------- validation
@@ -3197,6 +3897,15 @@
   SMLN.mapEditor = {
     open: open,
     close: close,
+    /**
+     * Open the editor on the generator's dialog.
+     *
+     * Exported so the maps browser's footer can reach the same screen the
+     * shape menu does, rather than growing a second copy of it there.
+     */
+    openGenerate: openGenerate,
+    /** Whether the generator modules reached this build at all. */
+    canGenerate: function () { return !!(mapgen && mapgenParams) },
     isOpen: function () { return isOpen },
     /**
      * What a new map may be, so the maps overlay's dialog can say the same

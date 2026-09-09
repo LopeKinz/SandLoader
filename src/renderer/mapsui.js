@@ -267,8 +267,16 @@
     newBtn.className = 'import'
     newBtn.textContent = tx('maps.newMap', 'New map...')
     newBtn.addEventListener('click', function () { promptNewMap() })
+    // Beside New map, because they are the same gesture - "start something" -
+    // and an author who wants a world rather than a canvas should not have to
+    // find their way into the editor first to discover that this exists.
+    var genBtn = document.createElement('button')
+    genBtn.className = 'import generate'
+    genBtn.textContent = tx('maps.generateMap', 'Generate map...')
+    genBtn.addEventListener('click', function () { generateMap() })
     footer.appendChild(note)
     footer.appendChild(newBtn)
+    footer.appendChild(genBtn)
     footer.appendChild(importBtn)
     footer.appendChild(exportBtn)
     footer.appendChild(close)
@@ -316,14 +324,36 @@
       return
     }
     var options = opts || {}
-    options.onSaved = function (r) {
-      if (r && r.id) selectedId = r.id
-      // The saved map may be new, or may have changed name or size; the cached
-      // preview is of the old pixels either way.
-      if (r && r.id) delete previews[r.id]
-      loadList()
-    }
+    options.onSaved = afterEditorSaved
     ed.open(mapId, options)
+  }
+
+  /** Whatever the editor just wrote is the map this list should be showing. */
+  function afterEditorSaved(r) {
+    if (r && r.id) selectedId = r.id
+    // The saved map may be new, or may have changed name or size; the cached
+    // preview is of the old pixels either way.
+    if (r && r.id) delete previews[r.id]
+    loadList()
+  }
+
+  /**
+   * Open the editor straight onto the generator's dialog.
+   *
+   * The dialog itself lives in mapeditor.js, because everything it needs is
+   * there - the size floor and ceiling, the measured memory figure, the busy
+   * overlay it runs behind, and the document the result lands in. This is the
+   * same screen the editor's own "Generate map..." opens, not a second one, so
+   * the two cannot come to disagree about what a map may be.
+   */
+  function generateMap() {
+    var ed = SMLN.mapEditor
+    if (!ed || typeof ed.openGenerate !== 'function' ||
+      (typeof ed.canGenerate === 'function' && !ed.canGenerate())) {
+      say(tx('maps.noGenerator', 'the map generator is not available in this build'))
+      return
+    }
+    ed.openGenerate({ onSaved: afterEditorSaved })
   }
 
   /**
