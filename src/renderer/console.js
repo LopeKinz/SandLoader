@@ -929,7 +929,13 @@
     '#smln-console{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;',
     "font:13px/1.6 'Cascadia Mono',Consolas,'SF Mono',Menlo,monospace;color:#cbd5e1;",
     'display:none;flex-direction:column;',
-    'background:rgba(8,12,17,.97);border-top:1px solid rgba(100,116,139,.68);',
+    // Opaque, unlike the overlays, and for a reason they do not share: an
+    // overlay lays a dark scrim over the whole page first, so 3% of an already
+    // dimmed background is nothing. The console is a bare strip over the live
+    // page, so those same 3% are 3% of the menu at full brightness - measured
+    // over the bright daytime main menu, the game's own text was legible
+    // straight through a wall of monospace output.
+    'background:rgb(8,12,17);border-top:1px solid rgba(100,116,139,.68);',
     'box-shadow:0 -8px 24px rgba(0,0,0,.45);',
     'transform:translateY(8px);opacity:0;transition:transform .16s ease-out,opacity .16s ease-out}',
     '#smln-console.open{display:flex;transform:none;opacity:1}',
