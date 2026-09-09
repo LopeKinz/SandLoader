@@ -232,32 +232,39 @@
   var boundCache = { cells: -1, values: null }
 
   /**
-   * Is this world a custom map?
-   *
-   * `location.search` rather than anything in the state, because the state does
-   * not know: the game parses `custom_map` out of the query string at boot,
-   * hands the id straight to the map loader, and stores nothing about it -
-   * `store` carries a `worldId` and a `worldName` and no trace of where the
-   * terrain came from. The URL is the only record.
-   *
-   * The known gap: a custom-map world saved and reloaded through the game's own
-   * save system comes back under `load=`, not `custom_map=`, and this returns
-   * false for it.
-   */
-  function isCustomMap() {
-    try {
-      var search = global.location && global.location.search
-      return typeof search === 'string' && search.indexOf('custom_map=') >= 0
-    } catch (_) { return false }
-  }
-
-  /**
    * The flight ceiling for this world, in world pixels from the top.
    *
    * Called by the injected patch as `topBound(state, 'soft'|'hard', 600|550)`.
    * Total by construction: every path that cannot answer confidently returns
    * `fallback` unchanged, and the whole thing is wrapped, because throwing here
    * would throw inside the game's own movement loop.
+   *
+   * This scales for EVERY world, not only for a custom map, and that is the
+   * point rather than an oversight.
+   *
+   * It used to ask `location.search` whether `custom_map=` was there. That
+   * check was wrong twice over. A saved custom-map world comes back under
+   * `db_load=` - the game keeps no record of where its terrain came from, so
+   * the URL was the only evidence and the reload discards it - which meant the
+   * ceiling was right on the day the map was made and wrong every day after.
+   * Measured on a 201-cell map: 92.7% of the height reachable on day one,
+   * 27.9% on day two, with anything built above cell row 137 stranded for good.
+   *
+   * Dropping the check costs nothing, because the ceiling is a proportion and
+   * `min` already makes it a no-op at vanilla size: 3840 cells is 15360 world
+   * pixels, and 15360 x (600/15360) is 600, the number it replaces. A world
+   * smaller than that gets a strip proportional to its own height, which is
+   * what the fixed 600 was always trying to express. The only other small world
+   * in the build is the main menu's backdrop, which nobody flies in, and
+   * dungeons are a progression flag rather than a world of their own - checked.
+   *
+   * The alternative was a marker written into the save. It is rejected on
+   * purpose: such a marker rides the shallow store copy through two
+   * postMessage boundaries, and a value that fails to clone throws after
+   * `session.saving.status` is set and nothing clears it - the player would
+   * silently lose the ability to save, in any form, for the rest of the
+   * session. A ceiling being slightly generous is not worth that risk, and
+   * this way old saves are fixed too.
    */
   function topBound(state, which, fallback) {
     try {
@@ -276,11 +283,8 @@
       var cached = boundCache.values[key]
       if (cached !== undefined) return cached
 
-      var value = fallback
-      if (isCustomMap()) {
-        var scaled = cells * CELL_SIZE * (fallback / VANILLA_WORLD_PX)
-        if (scaled < value) value = scaled
-      }
+      var scaled = cells * CELL_SIZE * (fallback / VANILLA_WORLD_PX)
+      var value = scaled < fallback ? scaled : fallback
       boundCache.values[key] = value
       return value
     } catch (_) { return fallback }

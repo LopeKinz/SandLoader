@@ -9572,7 +9572,7 @@ check('both flight-ceiling anchors resolve exactly once in the shipped bundle', 
   return 'soft (600) and hard (550) both rewritten once, output parses'
 })
 
-check('the flight ceiling scales with a short map and leaves the vanilla world alone', () => {
+check('the flight ceiling follows the height of the world, whatever the URL says', () => {
   // Restated rather than imported from the runtime, so this test states the
   // measurement instead of agreeing with it: a loaded vanilla world reports
   // `store.world.size` of {3840,3840}, and cellSize is 4 (module 90823 in the
@@ -9598,17 +9598,27 @@ check('the flight ceiling scales with a short map and leaves the vanilla world a
   }
   const world = (cells) => ({ store: { world: { size: { width: cells, height: cells } } } })
 
-  // Not a custom map: every number the game shipped comes back untouched.
-  const vanilla = load('').__SMLN__
-  for (const cells of [3840, 720, 201, 4000]) {
-    assert(vanilla.topBound(world(cells), 'soft', 600) === 600,
-      'a non-custom ' + cells + '-cell world had its soft ceiling moved')
-    assert(vanilla.topBound(world(cells), 'hard', 550) === 550,
-      'a non-custom ' + cells + '-cell world had its hard ceiling moved')
-  }
-
+  // The URL decides nothing any more, and that is the whole fix. A world loaded
+  // with no query string at all must answer identically to one loaded with a
+  // custom map, because a saved custom map comes back under `db_load=` and the
+  // ceiling has to be right on the second day as well as the first.
+  const noQuery = load('').__SMLN__
   const box = load('?custom_map=abc')
   const custom = box.__SMLN__
+  for (const cells of [3840, 4000, 720, 201]) {
+    for (const pair of [['soft', 600], ['hard', 550]]) {
+      assert(noQuery.topBound(world(cells), pair[0], pair[1]) ===
+             custom.topBound(world(cells), pair[0], pair[1]),
+        'the ' + pair[0] + ' ceiling still depends on the URL at ' + cells + ' cells')
+    }
+  }
+
+  // At vanilla size the shipped numbers survive untouched, with or without a
+  // query string: 3840 cells is 15360 px, and 15360 x (600/15360) is 600.
+  assert(noQuery.topBound(world(3840), 'soft', 600) === 600,
+    'a vanilla-sized world had its soft ceiling moved')
+  assert(noQuery.topBound(world(3840), 'hard', 550) === 550,
+    'a vanilla-sized world had its hard ceiling moved')
 
   // 201 cells is the shortest map the editor will make: 804 pixels, against
   // which a fixed 600-pixel strip is three quarters of the world.
@@ -9668,8 +9678,8 @@ check('the flight ceiling scales with a short map and leaves the vanilla world a
     custom.topBound(world(201), 'soft', 600)
     custom.topBound(world(201), 'hard', 550)
   }
-  assert(box.searchReads === before,
-    'topBound re-read location.search ' + (box.searchReads - before) + ' times over 400 frames')
+  assert(box.searchReads === 0,
+    'topBound read location.search ' + box.searchReads + ' times; only the height matters now')
 
   // And a world change must still be noticed rather than served from the cache.
   assert(custom.topBound(world(4000), 'soft', 600) === 600,
