@@ -24,9 +24,9 @@
  *   settingsui/permui defined before modsui.js, which opens them
  *
  * MODULES is a second, smaller list of plain CommonJS files - the terrain
- * palette and the map editor's tools, validator and transforms - injected ahead
- * of every part with a `module`/`require` shim around each. See MODULES for why
- * they are not parts.
+ * palette and the map editor's tools, layer meanings, validator and transforms
+ * - injected ahead of every part with a `module`/`require` shim around each.
+ * See MODULES for why they are not parts.
  *
  * The result is cached only when nothing mod-specific went into it, because
  * the interceptor asks for it on every bundle request.
@@ -94,14 +94,14 @@ const PARTS = [
 /**
  * CommonJS modules the renderer needs, injected ahead of PARTS.
  *
- * These four are not renderer parts and are deliberately not written like
+ * These five are not renderer parts and are deliberately not written like
  * one. They are plain `module.exports` files with no reference to `__SMLN__`,
  * because `tools/selftest.js` and the main process `require()` the very same
  * source the game runs - the palette that decides what a colour does, and the
- * three modules the map editor draws, checks and transforms with. Turning them
- * into self-installing renderer parts would mean either a second copy or a
- * wrapper around every one of them, and both are how a table like the palette
- * comes to say two different things in two places.
+ * four modules the map editor draws, checks and transforms with and reads its
+ * layer meanings from. Turning them into self-installing renderer parts would
+ * mean either a second copy or a wrapper around every one of them, and both are
+ * how a table like the palette comes to say two different things in two places.
  *
  * So the prelude supplies what CommonJS would: a `module`, an `exports`, and a
  * `require` that resolves only the ids listed in `provides` below. Nothing here
@@ -126,6 +126,14 @@ const MODULES = [
     file: 'mapeditor-tools.js',
     global: '__SMLN_MAPEDITOR_TOOLS__',
     provides: ['./mapeditor-tools.js', './mapeditor-tools'],
+  },
+  {
+    // Before mapeditor-validate.js, which requires it: the tables that say what
+    // a sensors or authorization colour does are read by the rail and by the
+    // validator, and one copy is the only way those two can agree.
+    file: 'mapeditor-layers.js',
+    global: '__SMLN_MAPEDITOR_LAYERS__',
+    provides: ['./mapeditor-layers.js', './mapeditor-layers'],
   },
   {
     file: 'mapeditor-validate.js',

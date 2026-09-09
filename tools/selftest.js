@@ -9678,3 +9678,497 @@ check('the flight ceiling scales with a short map and leaves the vanilla world a
   return '201 cells -> soft ' + soft.toFixed(2) + 'px / hard ' + hard.toFixed(2) +
     'px (vanilla share ' + (100 * 600 / VANILLA_PX).toFixed(1) + '%), 4000 cells -> 600/550, vanilla untouched'
 })
+
+// ------------------------------------- the five layers that are not terrain
+// A `.custommap` is six PNGs and only one of them is a picture. The other five
+// are data wearing a colour's clothes, and for a long time the editor offered
+// the terrain palette on all six - so an author who selected the light-tuning
+// layer and clicked a rock colour wrote a brightness they never typed. These
+// checks are about what each layer offers, what the tools write into it, and
+// what the validator says when the game is about to quietly mean something the
+// author did not choose.
+
+/** Every layer's panel in the rail, in the order the editor builds them. */
+const LAYER_KEYS = ['terrain', 'lights', 'lightsMeta', 'sensors', 'authorization', 'wall']
+
+/** Click the rail's row for one layer. */
+function selectLayer(overlay, layer) {
+  const picks = mapUiByClass(mapUiNodes(overlay), 'layerPick')
+  const at = LAYER_KEYS.indexOf(layer)
+  assert(picks.length === LAYER_KEYS.length,
+    'the rail lists ' + picks.length + ' layers, not ' + LAYER_KEYS.length)
+  picks[at].dispatch('click', { type: 'click' })
+}
+
+/** The one surface panel that is showing, as its layer's name. */
+function shownSurface(overlay) {
+  const panels = mapUiByClass(mapUiNodes(overlay), 'surface')
+  assert(panels.length === LAYER_KEYS.length,
+    'the rail holds ' + panels.length + ' surfaces, not one per layer')
+  const on = panels.map((p, i) => (p.hidden ? null : LAYER_KEYS[i])).filter(Boolean)
+  assert(on.length === 1, on.length + ' surfaces are showing at once: ' + on.join(', '))
+  return { layer: on[0], panel: panels[LAYER_KEYS.indexOf(on[0])], panels }
+}
+
+/** The first pixel of a layer that is not fully see-through. */
+function firstOpaque(canvas) {
+  const d = canvas._data()
+  for (let y = 0; y < d.height; y++) {
+    for (let x = 0; x < d.width; x++) {
+      if (d.pixels[(y * d.width + x) * 4 + 3] !== 0) return { x, y }
+    }
+  }
+  return null
+}
+
+check('each layer offers its own surface, and only terrain offers the terrain palette', () => {
+  // The defect this closes: selecting any layer but terrain left the terrain
+  // palette on screen, so the author picked a material and the map got a
+  // brightness, an artifact marker or a restriction zone instead.
+  const pal = require('../src/game/terrain-palette')
+  const kinds = require('../src/renderer/mapeditor-layers')
+  const { S, dom } = bootEditor()
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Surfaces' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+
+    // Terrain is where the editor opens, and it is unchanged: the palette's
+    // own colours, every one of them.
+    const start = shownSurface(overlay)
+    assert(start.layer === 'terrain', 'the editor opens on the ' + start.layer + ' surface')
+    assert(mapUiByClass(mapUiNodes(start.panel), 'swatch').length === pal.paintable().length,
+      'the terrain surface no longer holds the palette')
+
+    const seen = Object.create(null)
+    for (const layer of LAYER_KEYS) {
+      selectLayer(overlay, layer)
+      const now = shownSurface(overlay)
+      assert(now.layer === layer,
+        'selecting ' + layer + ' showed the ' + now.layer + ' surface')
+
+      // The terrain palette is a terrain-only thing. On every other layer its
+      // panel is hidden, so not one of those colours can be clicked.
+      const terrainPanel = now.panels[0]
+      assert((layer === 'terrain') === !terrainPanel.hidden,
+        'the terrain palette is ' + (terrainPanel.hidden ? 'hidden' : 'showing') +
+        ' while ' + layer + ' is selected')
+
+      const choices = mapUiByClass(mapUiNodes(now.panel), 'choice')
+      const inputs = mapUiNodes(now.panel).filter((e) => e.tagName === 'INPUT')
+      if (layer === 'sensors') {
+        assert(choices.length === 2,
+          'the artifact markers surface offers ' + choices.length + ' choices, not 2')
+      } else if (layer === 'authorization') {
+        assert(choices.length === 12,
+          'the zones surface offers ' + choices.length + ' zones, not 12')
+      } else if (layer === 'lights' || layer === 'wall') {
+        assert(choices.length === 0, layer + ' offers a fixed table where any colour is legal')
+        assert(inputs.some((e) => e.type === 'color'), layer + ' has no colour picker')
+      } else if (layer === 'lightsMeta') {
+        assert(choices.length === 0, 'the light-tuning layer offers colours to pick from')
+        assert(inputs.length === 2,
+          'the light-tuning layer asks for ' + inputs.length + ' numbers, not 2')
+      }
+
+      // The explanatory line follows the layer. It used to say the squares
+      // were terrain codes whatever was selected, which on the layer that
+      // holds a brightness and a radius was simply untrue.
+      const key = mapUiByClass(mapUiNodes(now.panel), 'paletteKey')[0]
+      assert(key && key.textContent === kinds.controlsLine(layer),
+        layer + ' does not say what its own controls are')
+      assert(!seen[key.textContent], layer + ' repeats another layer\'s explanation')
+      seen[key.textContent] = true
+      const hint = mapUiByClass(mapUiNodes(overlay), 'layerHint')[0]
+      assert(hint.textContent === kinds.consequenceLine(layer),
+        layer + ' does not say what the game will do with what is painted here')
+      if (layer !== 'terrain') {
+        assert(/terrain layer becomes|codes the map format stores/.test(key.textContent) === false,
+          layer + ' still describes its squares as terrain codes')
+      }
+    }
+    return 'six surfaces, one showing at a time, ' + pal.paintable().length +
+      ' terrain colours confined to terrain, 2 markers, 12 zones, 2 pickers and 2 numbers'
+  })
+})
+
+check('every tool writes the active layer\'s own value, and the eraser writes nothing at all', () => {
+  // Alpha 0 is the correct empty value on all five: every one of the game's
+  // decoders opens by testing alpha and returns when it is zero. That is the
+  // opposite of terrain, where a see-through pixel is sealed fog - so the
+  // eraser has to mean two different things, and this is the one that would be
+  // quietly wrong if it went through the guard that protects terrain.
+  const harness = require('./dom-harness')
+  const kinds = require('../src/renderer/mapeditor-layers')
+  const { S, dom } = bootEditor()
+  const artifact2 = kinds.SENSORS[1].rgb
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Tools' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = () => mapUiNodes(overlay)
+    const sensors = mapUiLayers(dom, MAPUI_W, MAPUI_H)[3]
+    const terrain = mapUiLayers(dom, MAPUI_W, MAPUI_H)[0]
+    const view = mapUiByClass(nodes(), 'view')[0]
+    const centre = mapUiCentre(harness)
+    const paint = () => {
+      view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+      dom.window.emit('mouseup', {})
+    }
+
+    // Scoped to the panel that is showing: every layer's rows are in the DOM
+    // all the time, and only one panel's are reachable.
+    const choice = (n) => mapUiByClass(mapUiNodes(shownSurface(overlay).panel), 'choice')[n]
+
+    selectLayer(overlay, 'sensors')
+    choice(1).dispatch('click', { type: 'click' })
+
+    // Brush.
+    paint()
+    const at = firstOpaque(sensors)
+    assert(at, 'the brush wrote nothing into the artifact markers layer')
+    assert(mapUiPixel(sensors, at.x, at.y).join(',') === artifact2.concat(255).join(','),
+      'the brush wrote ' + mapUiPixel(sensors, at.x, at.y) + ' rather than ' + artifact2)
+
+    // Eyedropper: picks up the layer's own value, in the layer's own terms.
+    choice(0).dispatch('click', { type: 'click' })
+    assert(mapUiByClass(nodes(), 'current')[0].childNodes[1].childNodes[0].textContent ===
+      kinds.SENSORS[0].label, 'clicking the first marker did not select it')
+    mapUiByText(nodes(), 'Eyedropper').dispatch('click', { type: 'click' })
+    paint()
+    assert(mapUiByClass(nodes(), 'current')[0].childNodes[1].childNodes[0].textContent ===
+      kinds.SENSORS[1].label, 'the eyedropper did not pick up what the brush had written')
+
+    // Eraser: fully transparent, which is exactly "nothing here".
+    mapUiByText(nodes(), 'Eraser').dispatch('click', { type: 'click' })
+    paint()
+    assert(mapUiPixel(sensors, at.x, at.y).join(',') === '0,0,0,0',
+      'erasing left ' + mapUiPixel(sensors, at.x, at.y) + ' rather than nothing at all')
+
+    // And terrain's eraser is still the palette's air colour, opaque, because
+    // a see-through terrain pixel is fog.
+    selectLayer(overlay, 'terrain')
+    paint()
+    const air = require('../src/game/terrain-palette').DEFAULT_EMPTY.rgb
+    const t = firstOpaque(terrain)
+    assert(mapUiPixel(terrain, t.x, t.y).join(',') === air.concat(255).join(','),
+      'the terrain eraser wrote ' + mapUiPixel(terrain, t.x, t.y) + ', not opaque air')
+
+    // Box and fill on a non-terrain layer, so no tool is left believing every
+    // layer is terrain. Fill first, over an empty layer, then the box on top of
+    // it - which also proves the box wrote over something rather than into a
+    // blank the fill had not reached.
+    selectLayer(overlay, 'authorization')
+    const zones = mapUiLayers(dom, MAPUI_W, MAPUI_H)[4]
+    mapUiByText(nodes(), 'Fill').dispatch('click', { type: 'click' })
+    choice(0).dispatch('click', { type: 'click' })
+    paint()
+    const filled = zones._data()
+    let zone1 = 0
+    for (let i = 0; i < filled.pixels.length; i += 4) {
+      if (filled.pixels[i] === kinds.ZONES[0].rgb[0] && filled.pixels[i + 1] === 0 &&
+        filled.pixels[i + 3] === 255) zone1++
+    }
+    assert(zone1 === MAPUI_W * MAPUI_H,
+      'fill covered ' + zone1 + ' of ' + (MAPUI_W * MAPUI_H) + ' cells of the zones layer')
+
+    const zone3 = kinds.ZONES[2]
+    choice(2).dispatch('click', { type: 'click' })
+    mapUiByText(nodes(), 'Box').dispatch('click', { type: 'click' })
+    paint()
+    assert(mapUiPixel(zones, at.x, at.y).join(',') === zone3.rgb.concat(255).join(','),
+      'the box tool wrote ' + mapUiPixel(zones, at.x, at.y) +
+      ' into the zones layer rather than ' + zone3.rgb)
+
+    // The two layers where the bytes really are a colour. The field takes it
+    // typed as well as picked, because the one colour the lights decoder
+    // special-cases has to be hit exactly and nobody drags a gradient onto it.
+    selectLayer(overlay, 'lights')
+    const lights = mapUiLayers(dom, MAPUI_W, MAPUI_H)[1]
+    const typed = mapUiNodes(shownSurface(overlay).panel)
+      .filter((e) => e.tagName === 'INPUT' && e.type === 'text')[0]
+    assert(typed, 'the lights surface has no field to type a colour into')
+    typed.value = kinds.LIGHT_BOOST.rgb.join(',')
+    typed.dispatch('change', { type: 'change' })
+    mapUiByText(nodes(), 'Brush').dispatch('click', { type: 'click' })
+    // A drag, so the segment between two points is drawn on this layer too.
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', centre))
+    view.dispatch('mousemove', harness.mouseEvent('mousemove',
+      { clientX: centre.clientX + 12, clientY: centre.clientY }))
+    dom.window.emit('mouseup', {})
+    const lightAt = firstOpaque(lights)
+    assert(lightAt && mapUiPixel(lights, lightAt.x, lightAt.y).join(',') ===
+      kinds.LIGHT_BOOST.rgb.concat(255).join(','),
+    'the lights layer holds ' + (lightAt ? mapUiPixel(lights, lightAt.x, lightAt.y) : 'nothing') +
+      ' rather than the colour that was typed')
+    let litCells = 0
+    const litData = lights._data()
+    for (let i = 3; i < litData.pixels.length; i += 4) if (litData.pixels[i] === 255) litCells++
+    assert(litCells > 1, 'a drag across the lights layer painted ' + litCells + ' cell')
+
+    // The wall layer's own fact: how many distinct colours are in it, against
+    // the 254 the game's backdrop palette holds.
+    selectLayer(overlay, 'wall')
+    const emptyCount = mapUiByClass(mapUiNodes(shownSurface(overlay).panel), 'stored')[0]
+    assert(emptyCount && /0 of 254/.test(emptyCount.textContent),
+      'the wall surface says "' + (emptyCount ? emptyCount.textContent : '(nothing)') +
+      '" over an empty backdrop')
+    paint()
+    const oneCount = mapUiByClass(mapUiNodes(shownSurface(overlay).panel), 'stored')[0]
+    assert(/1 of 254/.test(oneCount.textContent),
+      'painting one wall colour left the count at "' + oneCount.textContent + '"')
+    return 'brush, drag, box, fill and the eyedropper all speak the layer\'s language; ' +
+      'the eraser writes 0,0,0,0 there and opaque air on terrain'
+  })
+})
+
+check('the light-tuning layer is two numbers, and zero means the default', () => {
+  // R is brightness x 100 and G is size / 4, and the decoder tests each byte
+  // before it uses it - so a zero byte is not zero, it is "leave this one
+  // alone". An editor that let an author paint 0,0,0 here without saying so
+  // would be handing them a brightness of 1 and a size of 400 by accident.
+  const harness = require('./dom-harness')
+  const kinds = require('../src/renderer/mapeditor-layers')
+
+  assert(kinds.encodeMeta(1.5, 600).join(',') === '150,150,0',
+    '1.5 and 600 encode as ' + kinds.encodeMeta(1.5, 600))
+  const back = kinds.decodeMeta(150, 150)
+  assert(back.brightness === 1.5 && back.size === 600,
+    '150,150 reads back as brightness ' + back.brightness + ' and size ' + back.size)
+  assert(!back.brightnessDefaulted && !back.sizeDefaulted,
+    'stated numbers were reported as defaults')
+
+  const zero = kinds.decodeMeta(0, 0)
+  assert(kinds.encodeMeta(0, 0).join(',') === '0,0,0', 'zero did not encode as a zero byte')
+  assert(zero.brightness === kinds.DEFAULT_LIGHT_BRIGHTNESS &&
+    zero.size === kinds.DEFAULT_LIGHT_SIZE,
+  'a zero byte read back as brightness ' + zero.brightness + ' and size ' + zero.size +
+    ' rather than the defaults')
+  assert(zero.brightnessDefaulted && zero.sizeDefaulted, 'a zero byte was not flagged as a default')
+  assert(/default/.test(kinds.metaLabel(0, 0)), 'the readout for a zero byte does not say "default"')
+  assert(!/default/.test(kinds.metaLabel(150, 150)), 'a stated number is described as a default')
+
+  // The ceilings are the byte's, not an invention: 2.55 and 1020.
+  assert(kinds.encodeMeta(99, 99999).join(',') === '255,255,0', 'the fields do not clamp to a byte')
+  assert(kinds.MAX_LIGHT_BRIGHTNESS === 2.55 && kinds.MAX_LIGHT_SIZE === 1020,
+    'the stated ceilings are not what a byte actually holds')
+
+  const { S, dom } = bootEditor()
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Tuning' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    selectLayer(overlay, 'lightsMeta')
+    const panel = shownSurface(overlay).panel
+    const fields = mapUiNodes(panel).filter((e) => e.tagName === 'INPUT')
+    fields[0].value = '1.5'
+    fields[0].dispatch('change', { type: 'change' })
+    fields[1].value = '600'
+    fields[1].dispatch('change', { type: 'change' })
+
+    const stored = mapUiByClass(mapUiNodes(panel), 'stored')[0]
+    assert(/R 150, G 150/.test(stored.textContent),
+      'the panel says the bytes are "' + stored.textContent + '"')
+
+    const view = mapUiByClass(mapUiNodes(overlay), 'view')[0]
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', mapUiCentre(harness)))
+    dom.window.emit('mouseup', {})
+    const meta = mapUiLayers(dom, MAPUI_W, MAPUI_H)[2]
+    const at = firstOpaque(meta)
+    assert(at && mapUiPixel(meta, at.x, at.y).join(',') === '150,150,0,255',
+      'painting brightness 1.5 and size 600 stored ' +
+      (at ? mapUiPixel(meta, at.x, at.y) : 'nothing'))
+    return '1.5/600 -> R150 G150 and back; 0 -> the defaults, said out loud'
+  })
+})
+
+check('the artifact markers and the twelve zones are the colours the game looks up', () => {
+  // Read out of the shipped bundle's own decoders. If any one of these drifts,
+  // the editor offers a colour the game does not recognise - which for sensors
+  // is a silent Artifact 1 and for zones is no restriction at all.
+  const kinds = require('../src/renderer/mapeditor-layers')
+
+  assert(kinds.SENSORS.map((e) => e.rgb.join(',')).join(' | ') === '255,0,0 | 255,255,0',
+    'the artifact markers are ' + kinds.SENSORS.map((e) => e.rgb.join(',')).join(' | '))
+
+  const zones = [
+    [1, 255, 0, 0], [2, 255, 255, 0], [3, 255, 255, 255], [4, 0, 0, 255],
+    [5, 0, 255, 0], [6, 255, 0, 255], [7, 0, 255, 255], [8, 255, 128, 0],
+    [9, 128, 0, 255], [10, 0, 128, 255], [11, 128, 255, 0], [12, 128, 128, 0],
+  ]
+  assert(kinds.ZONES.length === zones.length,
+    'the table holds ' + kinds.ZONES.length + ' zones, not ' + zones.length)
+  for (let i = 0; i < zones.length; i++) {
+    const [zone, r, g, b] = zones[i]
+    const entry = kinds.ZONES[i]
+    assert(entry.zone === zone, 'zone ' + i + ' calls itself ' + entry.zone)
+    assert(entry.rgb.join(',') === [r, g, b].join(','),
+      'zone ' + zone + ' is ' + entry.rgb + ', not ' + [r, g, b])
+    assert(kinds.choiceByRgb('authorization', r, g, b) === entry,
+      'zone ' + zone + ' cannot be found by its own colour')
+    // Named by what it takes away, the way the terrain table names a colour by
+    // what the player gets. A number alone teaches nobody anything.
+    assert(/^Zone \d+ - /.test(entry.label) && entry.label.length > 12,
+      'zone ' + zone + ' is labelled "' + entry.label + '"')
+    assert(entry.forbids.length > 0, 'zone ' + zone + ' forbids nothing')
+  }
+  // No two zones share a colour, or the lookup would be a coin toss.
+  assert(new Set(kinds.ZONES.map((e) => e.rgb.join(','))).size === zones.length,
+    'two zones are the same colour')
+  // A colour that is in neither table is in neither table.
+  assert(!kinds.choiceByRgb('sensors', 12, 34, 56) &&
+    !kinds.choiceByRgb('authorization', 12, 34, 56),
+  'an arbitrary colour resolves to a marker or a zone')
+  return '2 markers and 12 zones, each labelled by what it forbids'
+})
+
+check('the checker names what the five non-terrain layers will quietly do', () => {
+  // All three are warnings on purpose: the map loads and plays. It simply does
+  // not do what the person drawing it thought, and nothing in the game says so.
+  const mapValidate = require('../src/renderer/mapeditor-validate')
+  const kinds = require('../src/renderer/mapeditor-layers')
+  const pal = require('../src/game/terrain-palette')
+  const W = 160
+  const H = 204
+
+  const blank = () => ({ data: new Uint8ClampedArray(W * H * 4), width: W, height: H })
+  const put = (layer, x, y, rgba) => {
+    const i = (y * W + x) * 4
+    layer.data[i] = rgba[0]
+    layer.data[i + 1] = rgba[1]
+    layer.data[i + 2] = rgba[2]
+    layer.data[i + 3] = rgba[3]
+  }
+  /** Air with a floor, so the terrain rules have nothing of their own to say. */
+  const goodTerrain = () => {
+    const t = blank()
+    const air = pal.DEFAULT_EMPTY.rgb
+    const rock = pal.DEFAULT_SOLID.rgb
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        put(t, x, y, (y > H - 4 ? rock : air).concat(255))
+      }
+    }
+    return t
+  }
+  const run = (over) => {
+    const layers = {
+      terrain: goodTerrain(),
+      lights: blank(),
+      lightsMeta: blank(),
+      sensors: blank(),
+      authorization: blank(),
+      wall: blank(),
+      ...over,
+    }
+    return mapValidate.validate({ params: { width: W, height: H }, layers }).problems
+  }
+  const codes = (problems) => problems.map((p) => p.code)
+
+  // Quiet on a map where all five say nothing at all.
+  const clean = run({})
+  for (const code of ['sensors-off-table', 'zone-off-table', 'light-meta-orphan']) {
+    assert(codes(clean).indexOf(code) === -1,
+      code + ' fired on a map with nothing painted in any of those layers')
+  }
+
+  // Quiet on a map where all five are used correctly, including a light with
+  // its own tuning at the same spot.
+  const rightSensors = blank()
+  put(rightSensors, 10, 10, kinds.SENSORS[0].rgb.concat(255))
+  put(rightSensors, 11, 10, kinds.SENSORS[1].rgb.concat(255))
+  const rightZones = blank()
+  for (const zone of kinds.ZONES) put(rightZones, zone.zone, 20, zone.rgb.concat(255))
+  const lights = blank()
+  put(lights, 30, 30, [255, 255, 255, 255])
+  const meta = blank()
+  put(meta, 30, 30, kinds.encodeMeta(1.5, 600).concat(255))
+  const good = run({ sensors: rightSensors, authorization: rightZones, lights, lightsMeta: meta })
+  for (const code of ['sensors-off-table', 'zone-off-table', 'light-meta-orphan']) {
+    assert(codes(good).indexOf(code) === -1, code + ' fired on a correctly painted map')
+  }
+
+  // A sensors colour that is neither red nor yellow.
+  const badSensors = blank()
+  put(badSensors, 4, 5, [0, 255, 0, 255])
+  const s = run({ sensors: badSensors }).find((p) => p.code === 'sensors-off-table')
+  assert(s, 'a green pixel in the artifact markers layer was not reported')
+  assert(s.severity === 'warning' && s.layer === 'sensors', 'reported as ' + s.severity)
+  assert(s.at && s.at.x === 4 && s.at.y === 5, 'the report points at ' + JSON.stringify(s.at))
+  assert(/4, 5/.test(s.message) && /0,255,0/.test(s.message),
+    'the message names neither the place nor the colour: ' + s.message)
+  assert(new RegExp(kinds.SENSORS[0].label).test(s.message),
+    'the message never says what the game will do instead: ' + s.message)
+
+  // A zone colour that is not one of the twelve.
+  const badZones = blank()
+  put(badZones, 6, 7, [3, 3, 3, 255])
+  const z = run({ authorization: badZones }).find((p) => p.code === 'zone-off-table')
+  assert(z, 'an unrecognised colour in the zones layer was not reported')
+  assert(z.severity === 'warning' && z.layer === 'authorization', 'reported as ' + z.severity)
+  assert(/6, 7/.test(z.message) && /3,3,3/.test(z.message),
+    'the message names neither the place nor the colour: ' + z.message)
+  assert(/no zone at all|restrict/.test(z.message),
+    'the message never says nothing is restricted there: ' + z.message)
+  // A colour that IS one of the twelve must not be reported, at any zone.
+  for (const zone of kinds.ZONES) {
+    const one = blank()
+    put(one, 8, 9, zone.rgb.concat(255))
+    assert(codes(run({ authorization: one })).indexOf('zone-off-table') === -1,
+      'zone ' + zone.zone + ' is reported as not being a zone')
+  }
+
+  // Tuning with no light under it. Both shapes: a lights layer that has none
+  // at that spot, and no usable lights layer at all.
+  const orphan = blank()
+  put(orphan, 12, 13, kinds.encodeMeta(2, 800).concat(255))
+  const m = run({ lightsMeta: orphan }).find((p) => p.code === 'light-meta-orphan')
+  assert(m, 'light tuning with no light under it was not reported')
+  assert(m.severity === 'warning' && m.layer === 'lightsMeta', 'reported as ' + m.severity)
+  assert(/12, 13/.test(m.message), 'the message does not say where: ' + m.message)
+  const lit = blank()
+  put(lit, 12, 13, [200, 180, 120, 255])
+  assert(codes(run({ lightsMeta: orphan, lights: lit })).indexOf('light-meta-orphan') === -1,
+    'tuning a light that is really there was reported as an orphan')
+  const none = run({ lightsMeta: orphan, lights: { data: new Uint8ClampedArray(4), width: 1, height: 1 } })
+    .find((p) => p.code === 'light-meta-orphan')
+  assert(none && /no usable lights layer/.test(none.message),
+    'a missing lights layer does not explain why the tuning is never read')
+
+  // See-through is not a mistake in any of the three - it is how all five of
+  // these layers spell "nothing here", and it is what the eraser writes.
+  const faint = blank()
+  put(faint, 1, 1, [0, 255, 0, 0])
+  const quiet = run({ sensors: faint, authorization: faint, lightsMeta: faint })
+  for (const code of ['sensors-off-table', 'zone-off-table', 'light-meta-orphan']) {
+    assert(codes(quiet).indexOf(code) === -1, code + ' fired on a fully see-through pixel')
+  }
+  return 'all three fire with a place and a consequence, and stay quiet on a correct map'
+})
+
+check('the rail and the checker count wall colours with the same function', () => {
+  // The wall layer's decoder was never found, so nothing claims to know what
+  // its colours mean. The one hard fact about it - the backdrop palette holds
+  // 254 - is shown live in the rail and enforced by the checker, and both read
+  // the same counter so they cannot disagree about the number.
+  const kinds = require('../src/renderer/mapeditor-layers')
+  const editor = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
+  const checker = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'mapeditor-validate.js'), 'utf8')
+
+  assert(/kinds\.countColours\(/.test(editor), 'the rail counts wall colours some other way')
+  assert(/layerKinds\.countColours\(/.test(checker), 'the checker counts wall colours some other way')
+  assert(/MAX_WALL_COLOURS = layerKinds\.MAX_WALL_COLOURS/.test(checker),
+    'the checker restates the 254 ceiling rather than reading it')
+  assert(kinds.MAX_WALL_COLOURS === 254, 'the ceiling moved: ' + kinds.MAX_WALL_COLOURS)
+
+  const buf = { data: new Uint8ClampedArray(64 * 4), width: 64, height: 1 }
+  for (let i = 0; i < 64; i++) { buf.data[i * 4] = i; buf.data[i * 4 + 3] = 255 }
+  assert(kinds.countColours(buf, 300).count === 64, 'sixty-four colours counted as something else')
+  // A see-through pixel costs nothing, which is what makes an empty backdrop free.
+  buf.data[3] = 0
+  assert(kinds.countColours(buf, 300).count === 63, 'a see-through pixel was counted as a colour')
+  // Alpha is part of a colour's identity, the way the game's palette holds it.
+  buf.data[3] = 128
+  assert(kinds.countColours(buf, 300).count === 64, 'alpha is not part of a colour here')
+  const capped = kinds.countColours(buf, 8)
+  assert(capped.capped && capped.count === 8, 'the count is not bounded')
+  return '254 stated once, counted once, and a see-through backdrop still costs nothing'
+})

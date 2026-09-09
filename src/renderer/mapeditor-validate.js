@@ -17,12 +17,16 @@
  * becomes, and what collides) and `.superpowers/sdd/map-editor-investigation.md`
  * (the spawn formula, the layer strides, the real size limits). The colour table
  * itself is not duplicated: it lives in `src/game/terrain-palette.js` and is the
- * single authority on what any given colour does.
+ * single authority on what any given colour does. The same goes for the five
+ * layers that are not terrain: what a sensors or an authorization colour does
+ * is stated once, in `src/renderer/mapeditor-layers.js`, and both the editor's
+ * rail and the rules below read it from there.
  *
  * @module mapeditor-validate
  */
 
 const palette = require('../game/terrain-palette.js')
+const layerKinds = require('./mapeditor-layers.js')
 
 /** World pixels per cell. One blueprint pixel is one world cell. */
 const CELL_SIZE = 4
@@ -39,8 +43,12 @@ const SPAWN_ROW_CELLS = 200
  */
 const MAX_CELLS_PER_AXIS = 16383
 
-/** The wall layer's palette has room for indices 1..254 and no more. */
-const MAX_WALL_COLOURS = 254
+/**
+ * The wall layer's palette has room for indices 1..254 and no more. Read from
+ * the layer-meanings module rather than restated, so the editor's live count
+ * and this rule are the same number.
+ */
+const MAX_WALL_COLOURS = layerKinds.MAX_WALL_COLOURS
 
 /**
  * Counting distinct wall colours is bounded so a photographic wall layer cannot
@@ -254,20 +262,64 @@ function largestConnected(mask, width, height) {
 }
 
 /**
- * Count distinct RGBA values in the wall layer the way the game does: a fully
- * see-through pixel is skipped and costs nothing, and alpha is part of a
- * colour's identity, so two pixels that differ only in alpha are two colours.
+ * Every pixel of a layer that is not fully see-through and whose colour is not
+ * in that layer's table, gathered in one pass.
+ *
+ * Alpha is the gate the game's own decoders test first - `if (A === 0) return`
+ * - so a see-through pixel is not a mistake, it is the absence of one. What is
+ * left is every colour the decoder will accept and then quietly mean something
+ * by that the author did not choose.
  */
-function countWallColours(buffer) {
+function scanOffTable(buffer, layer) {
   const { data, width, height } = buffer
+  const out = { count: 0, first: null, firstColour: null, colours: 0 }
   const seen = new Set()
-  let capped = false
-  for (let i = 0, n = width * height * 4; i < n; i += 4) {
-    if (data[i + 3] === 0) continue
-    if (seen.size >= WALL_COLOUR_SCAN_CAP) { capped = true; break }
-    seen.add(((data[i] * 256 + data[i + 1]) * 256 + data[i + 2]) * 256 + data[i + 3])
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      if (data[i + 3] === 0) continue
+      const r = data[i], g = data[i + 1], b = data[i + 2]
+      if (layerKinds.choiceByRgb(layer, r, g, b)) continue
+      out.count++
+      if (!out.first) {
+        out.first = { x, y }
+        out.firstColour = rgbText(r, g, b)
+      }
+      if (seen.size < 64) seen.add((r * 256 + g) * 256 + b)
+    }
   }
-  return { count: seen.size, capped }
+  out.colours = seen.size
+  return out
+}
+
+/**
+ * Pixels where the light-tuning layer says something and the lights layer has
+ * put no light for it to say it about.
+ *
+ * The decoder reads the meta pixel only from inside the loop over lights, and
+ * that loop returns early on a see-through lights pixel - so a tuning pixel
+ * with no light under it is never read at all.
+ */
+function scanOrphanMeta(meta, lights) {
+  const { data, width, height } = meta
+  const lit = lights && lights.data
+  const out = { count: 0, first: null }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      if (data[i + 3] === 0) continue
+      if (lit && lit[i + 3] !== 0) continue
+      out.count++
+      if (!out.first) out.first = { x, y }
+    }
+  }
+  return out
+}
+
+/** A layer that is present, the size it claims, and the size of the map. */
+function usableLayer(layer, width, height) {
+  return isBuffer(layer) && layer.width === width && layer.height === height &&
+    layer.data.length >= width * height * 4
 }
 
 /**
@@ -481,11 +533,77 @@ function validate(doc) {
     }
   }
 
+  // ---- Rules 10, 11, 12: the layers that are data wearing a colour's clothes
+  //
+  // Each of these three is a decoder accepting a pixel and then meaning
+  // something by it the author never chose. All three are warnings: the map
+  // loads and plays, it just does not do what the person drawing it thought.
+  if (sizeUsable) {
+    // Rule 10 - a sensors colour that is not one of the two.
+    if (usableLayer(layers.sensors, width, height)) {
+      const off = scanOffTable(layers.sensors, 'sensors')
+      if (off.count > 0) {
+        const [one, two] = layerKinds.SENSORS
+        problems.push(problem('warning', 'sensors-off-table',
+          'The ' + LAYER_NAMES.sensors + ' layer holds ' + places(off.count) + ' the game does not have ' +
+          'a marker for, the first at ' + off.first.x + ', ' + off.first.y + ' (' +
+          off.firstColour + ')' +
+          (off.colours > 1 ? ', in ' + off.colours + ' different colours' : '') +
+          '. This layer reads exactly two colours: ' + rgbText(...one.rgb) + ' for ' +
+          one.label + ' and ' + rgbText(...two.rgb) + ' for ' + two.label +
+          '. Every other colour that is not fully see-through becomes an ' + one.label +
+          ' marker anyway, without a word about it - so you get artifacts where you did ' +
+          'not put any. Paint one of the two colours, or erase to see-through, which is ' +
+          'how this layer spells "nothing here".', 'sensors', off.first))
+      }
+    }
+
+    // Rule 11 - a zone colour that is not one of the twelve.
+    if (usableLayer(layers.authorization, width, height)) {
+      const off = scanOffTable(layers.authorization, 'authorization')
+      if (off.count > 0) {
+        problems.push(problem('warning', 'zone-off-table',
+          'The ' + LAYER_NAMES.authorization + ' layer holds ' + places(off.count) + ' painted in a colour that is not ' +
+          'one of the twelve zones, the first at ' + off.first.x + ', ' + off.first.y + ' (' +
+          off.firstColour + ')' +
+          (off.colours > 1 ? ', in ' + off.colours + ' different colours' : '') +
+          '. The game looks each colour up in a fixed table and treats anything it does not ' +
+          'find as no zone at all, so these cells restrict nothing - the player can build, ' +
+          'dig, grab and fly there exactly as if you had left them blank. Use one of the ' +
+          'twelve zone colours, or erase to see-through if you meant no restriction.',
+          'authorization', off.first))
+      }
+    }
+
+    // Rule 12 - light tuning with no light to tune.
+    if (usableLayer(layers.lightsMeta, width, height)) {
+      // Only a lights layer the same size as the map is read at all - rule 1
+      // has already said so about any other - and one that is not read leaves
+      // every tuning pixel orphaned rather than none of them.
+      const noLights = !usableLayer(layers.lights, width, height)
+      const orphan = scanOrphanMeta(layers.lightsMeta, noLights ? null : layers.lights)
+      if (orphan.count > 0) {
+        problems.push(problem('warning', 'light-meta-orphan',
+          'The ' + LAYER_NAMES.lightsMeta + ' layer holds ' + places(orphan.count) +
+          ' where the lights layer has no light, the first at ' + orphan.first.x + ', ' + orphan.first.y + '. ' +
+          (noLights
+            ? 'There is no usable lights layer at all, so none of it is read. '
+            : 'The game reads a light settings pixel only while it is placing a light at the ' +
+              'same spot, so a setting with nothing under it is never read. ') +
+          'Nothing goes wrong - the brightness and size you set simply do not happen. ' +
+          'Paint the light itself into the lights layer at ' + orphan.first.x + ', ' +
+          orphan.first.y + ', or erase the setting.', 'lightsMeta', orphan.first))
+      }
+    }
+  }
+
   // ---- Rule 4: more backdrop colours than the game can hold ----------------
   const wall = layers.wall
   if (isBuffer(wall) && wall.width > 0 && wall.height > 0 &&
       wall.data.length >= wall.width * wall.height * 4) {
-    const wallColours = countWallColours(wall)
+    // Counted by the module the editor's own live count comes from, so the
+    // number in the rail and the number in this message can never disagree.
+    const wallColours = layerKinds.countColours(wall, WALL_COLOUR_SCAN_CAP)
     if (wallColours.capped || wallColours.count > MAX_WALL_COLOURS) {
       const how = wallColours.capped
         ? 'at least ' + group(WALL_COLOUR_SCAN_CAP)

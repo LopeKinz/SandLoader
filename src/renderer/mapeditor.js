@@ -23,12 +23,13 @@
  *
  * ## This file is a user interface, and nothing else
  *
- * Everything that decides what a map *means* lives in four modules that know
+ * Everything that decides what a map *means* lives in five modules that know
  * nothing about the DOM, and this file is the surface that puts them in front
  * of a person:
  *
  *   src/game/terrain-palette.js       what each colour gives the player
  *   src/renderer/mapeditor-tools.js   brush, line, rectangle, fill, pick, eraser
+ *   src/renderer/mapeditor-layers.js  what a colour means in the other five layers
  *   src/renderer/mapeditor-validate.js what a map will do before anyone plays it
  *   src/renderer/mapeditor-transform.js resize, crop, mirror, shift
  *
@@ -72,7 +73,7 @@
   if (!SMLN || SMLN.mapEditor) return
 
   /*
-   * The four modules, read once at install. Each is optional in the sense that
+   * The five modules, read once at install. Each is optional in the sense that
    * a missing one must not stop the editor installing - the prelude wraps every
    * module in its own try/catch, so one that failed to parse leaves a hole
    * rather than taking the whole prepended script down - but every feature
@@ -80,6 +81,7 @@
    */
   var palette = global.__SMLN_TERRAIN_PALETTE__ || null
   var draw = global.__SMLN_MAPEDITOR_TOOLS__ || null
+  var kinds = global.__SMLN_MAPEDITOR_LAYERS__ || null
   var checker = global.__SMLN_MAPEDITOR_VALIDATE__ || null
   var xform = global.__SMLN_MAPEDITOR_TRANSFORM__ || null
 
@@ -327,8 +329,21 @@
   /** Whether the document-operations menu is showing. */
   var shapeOpen = false
 
-  /** The palette entry the brush paints, and the one the eraser writes. */
-  var ink = null
+  /**
+   * What the brush paints, per layer.
+   *
+   * Per layer and not one value, because the six layers do not share a
+   * vocabulary: 0,0,0 is a material in the terrain layer, an unlit light in the
+   * lights layer and "leave both settings alone" in the light-tuning layer.
+   * Carrying one ink across a layer change would hand the author the last
+   * layer's meaning under this layer's decoder, which is the whole defect.
+   *
+   * Each value is an entry in the palette's shape - `{rgb, hex, label, note}`,
+   * plus an optional `a` for the one that is deliberately see-through - so the
+   * terrain table's rows and the other five layers' choices travel through the
+   * same code from here on.
+   */
+  var inks = Object.create(null)
 
   /** The marquee, in cells, or null. Crop is the only thing that reads it. */
   var selection = null
@@ -526,20 +541,67 @@
     // The chip sets the height of a row, so every pixel of padding around it is
     // a pixel of a colour further down that nobody can see. The chip keeps its
     // size; the air around it does not.
-    '#smln-mapedit .swatch{display:flex;align-items:center;gap:10px;width:100%;text-align:left;',
+    //
+    // `.choice` is a row in one of the five non-terrain tables - the two
+    // artifact markers, the twelve zones - and it is the same row, stated once.
+    // A second set of rules for it would be a second look at the same idea.
+    '#smln-mapedit .swatch,#smln-mapedit .choice{display:flex;align-items:center;gap:10px;',
+    'width:100%;text-align:left;',
     'padding:3px 7px;margin-top:2px;font-size:11.5px;line-height:1.3;color:#cbd5e1;',
     'border:1px solid transparent;border-left:3px solid transparent;border-radius:0}',
-    '#smln-mapedit .swatch:hover{background:rgba(148,163,184,.09);color:#f1f5f9}',
+    '#smln-mapedit .swatch:hover,#smln-mapedit .choice:hover{background:rgba(148,163,184,.09);',
+    'color:#f1f5f9}',
     // Big enough to tell two pale yellows apart, which fifteen pixels was not.
     // Border-box, so twenty-six is the whole square rather than the square
     // plus a border the row then has to be tall enough to hold.
-    '#smln-mapedit .swatch .chip{flex:none;box-sizing:border-box;width:26px;height:26px;',
+    '#smln-mapedit .swatch .chip,#smln-mapedit .choice .chip{flex:none;box-sizing:border-box;',
+    'width:26px;height:26px;',
     'border:1px solid rgba(226,232,240,.35);border-radius:0 3px 0 3px}',
-    '#smln-mapedit .swatch .txt{min-width:0;flex:1}',
-    '#smln-mapedit .swatch.on{border-color:transparent;border-left-color:#e2e8f0;',
+    '#smln-mapedit .swatch .txt,#smln-mapedit .choice .txt{min-width:0;flex:1}',
+    '#smln-mapedit .swatch.on,#smln-mapedit .choice.on{border-color:transparent;',
+    'border-left-color:#e2e8f0;',
     'background:rgba(226,232,240,.09);color:#f8fafc;font-weight:700}',
-    '#smln-mapedit .swatch.on .chip{box-shadow:0 0 0 2px #070b10,0 0 0 4px #e2e8f0}',
+    '#smln-mapedit .swatch.on .chip,#smln-mapedit .choice.on .chip{',
+    'box-shadow:0 0 0 2px #070b10,0 0 0 4px #e2e8f0}',
     '#smln-mapedit .paletteNote{padding:12px 14px;color:#f87171;font-size:11.5px}',
+
+    // --- the per-layer surfaces.
+    //
+    // One panel per layer, all six in the palette's own scroller, and exactly
+    // one of them not hidden. Sharing the scroller is the point: the rail's
+    // shape does not change under the hand when the layer does, only what is
+    // offered inside it.
+    //
+    // Stated rather than left to the browser's own [hidden] rule, the way
+    // .busy states it: a panel that is invisible and still laid out is a strip
+    // of dead space in a rail that has colours to fit, and that has shipped
+    // here once already.
+    '#smln-mapedit .surface[hidden]{display:none}',
+    // Two numbers side by side, because brightness and size are one setting.
+    '#smln-mapedit .fields{display:flex;gap:10px;margin:10px 2px 0}',
+    '#smln-mapedit .fields>label{flex:1;min-width:0;display:block;color:#64748b;',
+    'font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;line-height:1.6}',
+    '#smln-mapedit .fields input{display:block;width:100%;box-sizing:border-box;margin-top:3px;',
+    'background:rgba(2,6,10,.7);border:1px solid rgba(100,116,139,.5);color:#f1f5f9;',
+    "font:inherit;font-size:12.5px;font-family:'Cascadia Mono',Consolas,monospace;",
+    'padding:5px 7px;border-radius:0 4px 0 4px;letter-spacing:.02em;text-transform:none}',
+    '#smln-mapedit .fields input:focus{outline:none;border-color:rgba(255,231,0,.45)}',
+    // The picker is the chip: a swatch you can open, at the size of the ones
+    // above it, rather than a browser control parked beside a preview of itself.
+    '#smln-mapedit .picker{display:flex;align-items:center;gap:10px;margin:10px 2px 0}',
+    '#smln-mapedit .picker input[type=color]{flex:none;box-sizing:border-box;',
+    'width:44px;height:34px;padding:0;cursor:pointer;background:transparent;',
+    'border:1px solid rgba(226,232,240,.35);border-radius:0 4px 0 4px}',
+    '#smln-mapedit .picker input[type=text]{flex:1;min-width:0;box-sizing:border-box;',
+    'background:rgba(2,6,10,.7);border:1px solid rgba(100,116,139,.5);color:#f1f5f9;',
+    "font:inherit;font-size:12.5px;font-family:'Cascadia Mono',Consolas,monospace;",
+    'padding:6px 8px;border-radius:0 4px 0 4px}',
+    '#smln-mapedit .picker input[type=text]:focus{outline:none;border-color:rgba(255,231,0,.45)}',
+    // What the two numbers actually become, and how full the wall palette is.
+    // Quiet, monospaced, and never something the author has to work out.
+    '#smln-mapedit .stored{margin:9px 2px 0;color:#64748b;font-size:10.5px;line-height:1.5;',
+    "font-family:'Cascadia Mono',Consolas,monospace}",
+    '#smln-mapedit .stored.over{color:#f87171}',
 
     '#smln-mapedit .layerHint{flex:none;padding:9px 14px;color:#94a3b8;font-size:11px;',
     'line-height:1.45;border-top:1px solid rgba(100,116,139,.28);display:none}',
@@ -724,34 +786,53 @@
 
   // --------------------------------------------------------------- colour
   /**
-   * A palette entry as the four opaque bytes to write.
+   * An entry as the four bytes to write.
    *
-   * Alpha is 255 and is not negotiable: a see-through terrain pixel is Fog,
-   * not air, and the whole point of routing every colour through the palette
-   * is that the editor cannot write one by accident.
+   * Opaque unless the entry says otherwise, and only one kind of entry ever
+   * says otherwise: the eraser's, on the five layers where a see-through pixel
+   * is the format's own way of spelling "nothing here". Terrain has no such
+   * entry and cannot - a see-through terrain pixel is Fog - so every colour
+   * that reaches the terrain layer is still opaque by construction.
    */
   function rgbaOf(entry) {
     var c = entry && entry.rgb
     if (!c || c.length < 3) return null
-    return [c[0], c[1], c[2], 255]
+    return [c[0], c[1], c[2], entry.a === undefined ? 255 : entry.a]
   }
 
-  /** The colour the brush paints. Defaults to the palette's own default. */
-  function inkEntry() {
-    if (!ink && palette) ink = palette.DEFAULT_SOLID || null
-    return ink
+  /** What a layer paints with before anyone has chosen anything. */
+  function defaultInk(layer) {
+    if (layer === 'terrain') return palette ? (palette.DEFAULT_SOLID || null) : null
+    return kinds ? kinds.defaultInk(layer) : null
+  }
+
+  /** What the brush paints on a layer - the active one unless told otherwise. */
+  function inkEntry(layer) {
+    var which = layer || active
+    if (!inks[which]) inks[which] = defaultInk(which)
+    return inks[which] || null
   }
 
   /**
-   * The colour the eraser writes.
+   * The colour the eraser writes on a layer.
    *
-   * Not transparency. mapeditor-tools.js refuses a fully transparent colour
-   * outright and writes nothing, because clearing a terrain pixel fills it
-   * with Fog - so the eraser is handed the palette's real empty entry, and if
-   * the palette is missing there is no honest colour to erase with.
+   * Two different answers, and the difference is the point. On terrain it is
+   * the palette's real empty entry, opaque: mapeditor-tools.js refuses a fully
+   * transparent colour outright, because clearing a terrain pixel fills it with
+   * Fog.
+   *
+   * On the other five it *is* transparency. Four of those five decoders were
+   * read and every one of them opens by testing alpha and returning when it is
+   * zero, so a see-through pixel is exactly "nothing here". The fifth - wall -
+   * has never had its decoder found; transparency is what this editor has
+   * always filled new wall space with, and the shipped campaign map loads with
+   * no wall layer at all, so it is the established empty rather than a claim
+   * about a decoder nobody has read.
    */
-  function eraserEntry() {
-    return palette ? (palette.DEFAULT_EMPTY || null) : null
+  function eraserEntry(layer) {
+    var which = layer || active
+    if (which === 'terrain') return palette ? (palette.DEFAULT_EMPTY || null) : null
+    return kinds ? kinds.emptyInk(which) : null
   }
 
   function colourText(entry) {
@@ -968,7 +1049,7 @@
     overlay._dialog = null
 
     buildTools(tools)
-    buildPalette(paletteSide)
+    buildRail(paletteSide)
     buildIssues(issues)
     bindStage(canvas)
   }
@@ -1160,8 +1241,35 @@
    * entry's `note` is on the button as its tooltip, because the note is where
    * "solid rock" turns out to need a drill and "looks like black rock" turns
    * out to dissolve in one lump.
+   *
+   * ## One rail, six surfaces
+   *
+   * "What there is to paint with" is not the same question on every layer, and
+   * for a long time this rail answered it as though it were: the terrain
+   * palette stayed on screen whichever layer was selected, so choosing
+   * `lightsMeta` and clicking a rock colour wrote brightness 0 into the map. The
+   * author picked a material and got a number.
+   *
+   * So the middle of the rail is six panels in one scroller, of which exactly
+   * one is not hidden. The scroller, the current-colour line above it and the
+   * layer list below it never move; only what is offered inside changes, and
+   * what each layer offers is the shape its own decoder actually reads -
+   * src/renderer/mapeditor-layers.js is where that is written down:
+   *
+   *   terrain       the palette table, unchanged
+   *   lights        a colour picker - the pixel's RGB is the light's colour
+   *   lightsMeta    two numbers, brightness and size, encoded into R and G
+   *   sensors       two entries, because the decoder reads exactly two colours
+   *   authorization the twelve zones, each labelled by what it forbids
+   *   wall          a colour picker, and a live count against the 254 ceiling
+   *
+   * Two lines travel with the panel: one above it saying what is being chosen,
+   * and one below the scroller saying what the game does with a mistake. Both
+   * follow the layer, because the sentence that used to sit there - "these
+   * squares are the codes the map format stores" - is false on the layer where
+   * they are a brightness and a radius.
    */
-  function buildPalette(side) {
+  function buildRail(side) {
     var current = document.createElement('div')
     current.className = 'current'
     var chip = document.createElement('div')
@@ -1180,77 +1288,346 @@
     swatches.className = 'swatches'
     side.appendChild(swatches)
 
-    // Said once, plainly, and nowhere else. A colour here is the code the map
-    // format stores, not the material's appearance - the indestructible one is
-    // bright red and the diggable one is pure black - and the view deliberately
-    // does not show what the world will look like either. One line is the whole
-    // remedy: this file does not know any material's real appearance and must
-    // not invent one.
-    //
-    // It goes inside the palette's scroller rather than above it, as the first
-    // thing there. Said once means it can scroll away once it has been read,
-    // and a permanent block of it was fifty pixels of colours nobody could see.
-    var codes = document.createElement('div')
-    codes.className = 'paletteKey'
-    codes.textContent = tx('editor.paletteCodes',
-      'These squares are the codes the map format stores, not how the world will look.')
-    swatches.appendChild(codes)
+    var surfaces = Object.create(null)
+    LAYERS.forEach(function (layer) {
+      var panel = document.createElement('div')
+      panel.className = 'surface'
+      panel.hidden = layer !== active
 
+      // Said once, at the top of the panel it belongs to, and it scrolls away
+      // like anything else said once - the first group heading, being sticky,
+      // covers it as soon as there is something better to look at. A permanent
+      // block of it was fifty pixels of colours nobody could see.
+      var line = document.createElement('div')
+      line.className = 'paletteKey'
+      line.textContent = tx('editor.controls.' + layer, controlsLine(layer))
+      panel.appendChild(line)
+
+      surfaces[layer] = buildSurface(layer, panel)
+      surfaces[layer].node = panel
+      swatches.appendChild(panel)
+    })
+
+    // What the game will do with what is painted here: under the scroller and
+    // above the layer list, so it sits between the choice and its consequence.
     var hint = document.createElement('div')
     hint.className = 'layerHint'
-    hint.textContent = tx('editor.paletteTerrainOnly',
-      'These colours say what the terrain layer becomes. Another layer reads colour its own way.')
     side.appendChild(hint)
-
-    var swatchBtns = []
-    if (!palette || typeof palette.paintable !== 'function') {
-      var missing = document.createElement('div')
-      missing.className = 'paletteNote'
-      missing.textContent = tx('editor.noPalette',
-        'The colour table did not load, so there is no safe colour to paint with.')
-      swatches.appendChild(missing)
-    } else {
-      var offered = palette.paintable()
-      var kinds = palette.KINDS || ['solid', 'empty', 'fluid', 'broken']
-      kinds.forEach(function (kind) {
-        var rows = offered.filter(function (e) { return e.kind === kind })
-        if (!rows.length) return
-        var heading = document.createElement('div')
-        heading.className = 'kind'
-        heading.textContent = tx('editor.kind.' + kind, KIND_HEADING[kind] || kind)
-        swatches.appendChild(heading)
-        rows.forEach(function (entry) {
-          var b = document.createElement('button')
-          b.className = 'swatch'
-          var c = document.createElement('span')
-          c.className = 'chip'
-          c.style.background = cssOf(entry)
-          var txt = document.createElement('span')
-          txt.className = 'txt'
-          // Verbatim. The fog labels carry "blocks until dug" and shortening
-          // one is how an author reaches for fog thinking it is rock.
-          txt.textContent = entry.label
-          b.appendChild(c)
-          b.appendChild(txt)
-          b.setAttribute('title', entry.note
-            ? entry.label + ' - ' + colourText(entry) + '\n' + entry.note
-            : entry.label + ' - ' + colourText(entry))
-          b.setAttribute('data-hex', entry.hex)
-          b._entry = entry
-          b.addEventListener('click', function () { setInk(entry) })
-          swatches.appendChild(b)
-          swatchBtns.push(b)
-        })
-      })
-    }
 
     buildLayers(side)
 
-    overlay._swatches = swatchBtns
+    overlay._surfaces = surfaces
     overlay._currentChip = chip
     overlay._currentLabel = label
     overlay._currentRgb = rgb
     overlay._layerHint = hint
+  }
+
+  /**
+   * The line above a layer's controls: what is being chosen here.
+   *
+   * Terrain's is the sentence that was always at the top of the palette, and it
+   * is there for a reason worth keeping in front of whoever changes it: a
+   * colour in that table is the code the map format stores, not the material's
+   * appearance - the indestructible one is bright red and the diggable one is
+   * pure black - and the view deliberately does not show what the world will
+   * look like either. This file does not know any material's real appearance
+   * and must not invent one. The other five lines say the equivalent thing
+   * about their own layer, and none of them is the terrain sentence.
+   */
+  function controlsLine(layer) {
+    if (kinds) return kinds.controlsLine(layer)
+    return layer === 'terrain'
+      ? 'These squares are the codes the map format stores, not how the world will look.'
+      : ''
+  }
+
+  /** The line below them: what the game does with what was chosen. */
+  function consequenceLine(layer) {
+    return kinds ? kinds.consequenceLine(layer) : ''
+  }
+
+  /**
+   * One layer's controls, built into `panel`.
+   *
+   * Returns `{refresh}`: everything a surface has to do when the ink changes
+   * under it - because the eyedropper, an undo and a click on the surface
+   * itself all change the same thing, and only one of the three goes through
+   * the controls.
+   */
+  function buildSurface(layer, panel) {
+    var kind = kinds ? kinds.surfaceOf(layer) : (layer === 'terrain' ? 'palette' : null)
+    if (kind === 'palette') return buildPaletteSurface(panel)
+    if (kind === 'choices') return buildChoiceSurface(layer, panel)
+    if (kind === 'colour') return buildColourSurface(layer, panel)
+    if (kind === 'meta') return buildMetaSurface(panel)
+    return missingSurface(panel, tx('editor.noLayerModule',
+      'The module that says what this layer\'s colours mean did not load, so there is ' +
+      'nothing here that can safely be painted.'))
+  }
+
+  /** A panel holding nothing but the reason there is nothing in it. */
+  function missingSurface(panel, text) {
+    var note = document.createElement('div')
+    note.className = 'paletteNote'
+    note.textContent = text
+    panel.appendChild(note)
+    return { refresh: function () {} }
+  }
+
+  /** The terrain palette, grouped in the table's own order. */
+  function buildPaletteSurface(panel) {
+    if (!palette || typeof palette.paintable !== 'function') {
+      return missingSurface(panel, tx('editor.noPalette',
+        'The colour table did not load, so there is no safe colour to paint with.'))
+    }
+    var swatchBtns = []
+    var offered = palette.paintable()
+    var buckets = palette.KINDS || ['solid', 'empty', 'fluid', 'broken']
+    buckets.forEach(function (kind) {
+      var rows = offered.filter(function (e) { return e.kind === kind })
+      if (!rows.length) return
+      var heading = document.createElement('div')
+      heading.className = 'kind'
+      heading.textContent = tx('editor.kind.' + kind, KIND_HEADING[kind] || kind)
+      panel.appendChild(heading)
+      rows.forEach(function (entry) {
+        var b = entryButton(panel, 'swatch', entry)
+        b.setAttribute('data-hex', entry.hex)
+        swatchBtns.push(b)
+      })
+    })
+    return {
+      refresh: function () {
+        var entry = inkEntry('terrain')
+        swatchBtns.forEach(function (b) { b.classList.toggle('on', b._entry === entry) })
+      },
+    }
+  }
+
+  /**
+   * A fixed table of choices: the two artifact markers, or the twelve zones.
+   *
+   * The same row the terrain palette uses, because it is the same act - pick
+   * the thing, see the colour it stores. The label is what the choice does to
+   * the player, in the palette's own spirit: a zone is named by what it takes
+   * away rather than by the byte it happens to be.
+   */
+  function buildChoiceSurface(layer, panel) {
+    var rows = kinds.choices(layer) || []
+    var btns = []
+    rows.forEach(function (entry) {
+      var b = entryButton(panel, 'choice', entry)
+      b.setAttribute('data-rgb', colourText(entry))
+      btns.push(b)
+    })
+    return {
+      refresh: function () {
+        var entry = inkEntry(layer)
+        btns.forEach(function (b) { b.classList.toggle('on', b._entry === entry) })
+      },
+    }
+  }
+
+  /** One row of a table: the colour it stores, and what it does. */
+  function entryButton(panel, className, entry) {
+    var b = document.createElement('button')
+    b.className = className
+    var c = document.createElement('span')
+    c.className = 'chip'
+    c.style.background = cssOf(entry)
+    var txt = document.createElement('span')
+    txt.className = 'txt'
+    // Verbatim. The fog labels carry "blocks until dug" and shortening one is
+    // how an author reaches for fog thinking it is rock.
+    txt.textContent = entry.label
+    b.appendChild(c)
+    b.appendChild(txt)
+    b.setAttribute('title', entry.note
+      ? entry.label + ' - ' + colourText(entry) + '\n' + entry.note
+      : entry.label + ' - ' + colourText(entry))
+    b._entry = entry
+    b.addEventListener('click', function () { setInk(entry) })
+    panel.appendChild(b)
+    return b
+  }
+
+  /**
+   * A free colour, for the two layers where the bytes really are a colour.
+   *
+   * The picker is the chip - the same square the tables show, opened rather
+   * than only looked at - beside a field that takes `#rrggbb` or `r,g,b`,
+   * because a light that has to be exactly 58,211,204 to get the game's own
+   * brightness bump is not a colour anybody hits by dragging a gradient.
+   *
+   * The wall layer carries a live count of the distinct colours in it, against
+   * the 254 the game's backdrop palette holds. That number is the one hard fact
+   * anybody has about this layer, and it is counted by the same function the
+   * validator's rule counts with, so the rail and the report cannot disagree.
+   */
+  function buildColourSurface(layer, panel) {
+    var box = document.createElement('div')
+    box.className = 'picker'
+    var swatch = document.createElement('input')
+    swatch.type = 'color'
+    swatch.setAttribute('aria-label', tx('editor.pickColour', 'Pick a colour'))
+    var text = document.createElement('input')
+    text.type = 'text'
+    text.setAttribute('aria-label', tx('editor.colourValue', 'Colour as #rrggbb or r,g,b'))
+    box.appendChild(swatch)
+    box.appendChild(text)
+    panel.appendChild(box)
+
+    var stored = null
+    if (layer === 'wall') {
+      stored = document.createElement('div')
+      stored.className = 'stored'
+      panel.appendChild(stored)
+    }
+
+    function take(raw) {
+      var c = parseColour(raw)
+      // Nothing it can read means nothing changes, and the field goes back to
+      // the colour that is really selected rather than keeping text that looks
+      // as though it was accepted.
+      if (!c) { refresh(); return }
+      setInk(kinds.colourEntry(layer, c[0], c[1], c[2]))
+    }
+    swatch.addEventListener('input', function () { take(swatch.value) })
+    swatch.addEventListener('change', function () { take(swatch.value) })
+    text.addEventListener('change', function () { take(text.value) })
+
+    function refresh() {
+      var entry = inkEntry(layer)
+      if (entry) {
+        swatch.value = entry.hex
+        text.value = entry.hex
+      }
+      if (stored) {
+        stored.textContent = wallCountText()
+        stored.classList.toggle('over', wallColours.over)
+      }
+    }
+    return { refresh: refresh }
+  }
+
+  /**
+   * Two numbers, which is what this layer holds however much it looks like a
+   * picture.
+   *
+   * R is brightness x 100 and G is size / 4, so the author types 1.5 and 600
+   * and the encoding is this file's problem rather than theirs. The bytes it
+   * produces are shown under the fields, because an author who cannot see them
+   * cannot check a map somebody handed them - but they are shown, never asked
+   * for.
+   *
+   * Zero is the one value that does not mean what it says. The game's decoder
+   * tests the byte before it uses it, so a zero leaves brightness at 1 and size
+   * at 400, and the readout says "(default)" rather than "0".
+   */
+  function buildMetaSurface(panel) {
+    var box = document.createElement('div')
+    box.className = 'fields'
+    var brightness = metaField(box,
+      tx('editor.brightness', 'Brightness'),
+      tx('editor.brightnessHelp',
+        'A multiplier. 1 is ordinary, up to ' + kinds.MAX_LIGHT_BRIGHTNESS +
+        '. 0 leaves it at the default of ' + kinds.DEFAULT_LIGHT_BRIGHTNESS + '.'))
+    var size = metaField(box,
+      tx('editor.lightSize', 'Size'),
+      tx('editor.lightSizeHelp',
+        'A radius, in steps of ' + kinds.SIZE_SCALE + ', up to ' + kinds.MAX_LIGHT_SIZE +
+        '. 0 leaves it at the default of ' + kinds.DEFAULT_LIGHT_SIZE + '.'))
+    panel.appendChild(box)
+
+    var stored = document.createElement('div')
+    stored.className = 'stored'
+    panel.appendChild(stored)
+
+    function take() {
+      setInk(kinds.metaEntry(Number(brightness.value), Number(size.value)))
+    }
+    brightness.addEventListener('change', take)
+    size.addEventListener('change', take)
+
+    return {
+      refresh: function () {
+        var entry = inkEntry('lightsMeta')
+        if (!entry) return
+        // The stored byte, not the effective number: a zero the author typed
+        // means "leave it alone", and showing it back as 1 would erase that.
+        brightness.value = entry.rgb[0] ? String(entry.rgb[0] / kinds.BRIGHTNESS_SCALE) : '0'
+        size.value = entry.rgb[1] ? String(entry.rgb[1] * kinds.SIZE_SCALE) : '0'
+        stored.textContent = tx('editor.metaStored',
+          'Stored as R ' + entry.rgb[0] + ', G ' + entry.rgb[1] + ' - ' + entry.label)
+      },
+    }
+  }
+
+  /** One labelled number field. */
+  function metaField(box, labelText, help) {
+    var label = document.createElement('label')
+    label.textContent = labelText
+    var input = document.createElement('input')
+    input.type = 'text'
+    input.setAttribute('inputmode', 'decimal')
+    input.setAttribute('title', help)
+    input.setAttribute('aria-label', labelText + '. ' + help)
+    label.appendChild(input)
+    box.appendChild(label)
+    return input
+  }
+
+  /**
+   * `#rgb`, `#rrggbb` or `r,g,b` as three bytes, or null.
+   *
+   * Forgiving about the form and not at all forgiving about the result:
+   * anything it cannot read comes back null, and the caller puts the field back
+   * rather than letting a typo look accepted.
+   */
+  function parseColour(raw) {
+    var s = String(raw == null ? '' : raw).trim()
+    var hex = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s)
+    if (hex) {
+      var h = hex[1]
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+    }
+    var parts = s.split(/[\s,]+/).filter(function (v) { return v !== '' })
+    if (parts.length !== 3) return null
+    var out = []
+    for (var i = 0; i < 3; i++) {
+      var n = Number(parts[i])
+      if (!isFinite(n) || n < 0 || n > 255) return null
+      out.push(Math.round(n))
+    }
+    return out
+  }
+
+  /**
+   * How full the wall layer's palette is.
+   *
+   * A full scan of the layer, which on the largest map the editor allows is
+   * sixteen million pixels - so it is recounted only when the layer has
+   * actually changed, and only while its own panel is the one on screen. It
+   * never runs during a stroke, and never at all while another layer is
+   * active.
+   */
+  var wallColours = { stale: true, text: '', over: false }
+
+  function wallCountText() {
+    if (!doc || !kinds) return ''
+    if (wallColours.stale) {
+      var seen = kinds.countColours(bufferOf('wall'), kinds.MAX_WALL_COLOURS + 1)
+      wallColours.over = seen.capped
+      wallColours.text = seen.capped
+        ? tx('editor.wallOver',
+          'More than ' + kinds.MAX_WALL_COLOURS + ' colours - the game paints the extras ' +
+          'in one shared colour')
+        : tx('editor.wallCount', seen.count + ' of ' + kinds.MAX_WALL_COLOURS + ' colours used')
+      wallColours.stale = false
+    }
+    return wallColours.text
   }
 
   /**
@@ -1354,14 +1731,29 @@
     overlay._dims.textContent = doc ? doc.width + '×' + doc.height : ''
     if (doc && overlay._name.value !== doc.name) overlay._name.value = doc.name
 
+    // Exactly one surface is showing, and it is the active layer's. Hidden
+    // rather than rebuilt: the terrain palette is fifty buttons, and throwing
+    // them away on every layer change would cost more than it saves.
+    LAYERS.forEach(function (layer) {
+      var surface = overlay._surfaces[layer]
+      if (surface) surface.node.hidden = layer !== active
+    })
+    var showing = overlay._surfaces[active]
+    if (showing) showing.refresh()
+
     var entry = inkEntry()
     overlay._currentChip.style.background = cssOf(entry)
     overlay._currentLabel.textContent = entry
       ? entry.label
       : tx('editor.noColour', 'No colour available')
     overlay._currentRgb.textContent = entry ? colourText(entry) : ''
-    overlay._swatches.forEach(function (b) { b.classList.toggle('on', b._entry === entry) })
-    overlay._layerHint.classList.toggle('on', active !== 'terrain')
+
+    // The consequence line follows the layer. It used to say the squares were
+    // terrain codes whatever was selected, which on the light-tuning layer was
+    // not merely unhelpful - it was untrue.
+    var hint = consequenceLine(active)
+    overlay._layerHint.textContent = hint
+    overlay._layerHint.classList.toggle('on', !!hint)
   }
 
   function say(text, isError) {
@@ -1395,12 +1787,15 @@
   function setLayer(layer) {
     active = layer
     visible[layer] = true
+    if (layer === 'wall') wallColours.stale = true
     refreshTools()
     render()
   }
 
+  /** Choose what this layer paints with. Another layer's choice is untouched. */
   function setInk(entry) {
-    ink = entry
+    if (!entry) return
+    inks[active] = entry
     refreshTools()
   }
 
@@ -1719,6 +2114,7 @@
     ctx.putImageData(buf, x0, y0)
     // The tool's own rectangle again, so what is redrawn is what was written.
     if (layer === 'terrain') shownDirty(abs)
+    if (layer === 'wall') wallColours.stale = true
     doc.dirty = true
     return abs
   }
@@ -1744,14 +2140,20 @@
   /**
    * One dab.
    *
-   * The eraser goes through the module's own `eraser` rather than through
-   * `brush` with a pale colour: that function refuses a fully transparent
-   * colour and writes nothing, which is the guard that stops an eraser filling
-   * a map with Fog. Routing around it would work today and quietly stop being
-   * true the moment somebody made the eraser's colour configurable.
+   * On terrain the eraser goes through the module's own `eraser` rather than
+   * through `brush` with a pale colour: that function refuses a fully
+   * transparent colour and writes nothing, which is the guard that stops an
+   * eraser filling a map with Fog.
+   *
+   * On the other five layers the erase *is* transparency, so it cannot go
+   * through that guard - and the choice is made on the colour rather than on
+   * the layer name, so the guard still covers anything that reaches terrain
+   * however it got there. See `eraserEntry` for why alpha 0 is the right empty
+   * value on those five and the wrong one here.
    */
   function paintDab(cell, rgba) {
-    var dab = tool === 'eraser' ? draw.eraser : draw.brush
+    var erasing = tool === 'eraser' && rgba[3] !== 0
+    var dab = erasing ? draw.eraser : draw.brush
     return operate(active, reach(cell.x, cell.y, cell.x, cell.y, brush), function (buf, ox, oy) {
       return dab(buf, cell.x - ox, cell.y - oy, brush, rgba)
     })
@@ -1793,9 +2195,48 @@
       : [image.data[0], image.data[1], image.data[2], image.data[3]]
   }
 
+  /**
+   * Pick up what is already there, in whatever the active layer's terms are.
+   *
+   * The terrain branch is the palette's; the rest is the layer's own decoder,
+   * so picking a light-tuning pixel fills the brightness and size fields with
+   * the numbers that pixel holds rather than telling the author about a
+   * material. A colour that a fixed table does not contain is not picked up at
+   * all - there is no such choice to select - and what the game will do with
+   * it instead is said out loud.
+   */
   function eyedropper(cell) {
     var c = colourAt(active, cell.x, cell.y)
     if (!c) return
+    if (active === 'terrain') { pickTerrain(c); return }
+    if (!kinds) return
+    if (c[3] === 0) {
+      say(tx('editor.pickedEmpty', 'Nothing here - the eraser is what writes that.'))
+      return
+    }
+    var kind = kinds.surfaceOf(active)
+    if (kind === 'choices') {
+      var choice = kinds.choiceByRgb(active, c[0], c[1], c[2])
+      if (!choice) {
+        say(colourText({ rgb: c }) + ' - ' + kinds.unknownConsequence(active) + '.', true)
+        return
+      }
+      setInk(choice)
+      say(choice.label + ' - ' + colourText(choice))
+      return
+    }
+    // The bytes as they are, not the numbers they resolve to: a meta pixel of
+    // zero means "leave the default alone", and re-encoding the 1 or the 400
+    // it comes out as would turn that into a value the author never stated.
+    var entry = kind === 'meta'
+      ? kinds.metaEntry(c[0] / kinds.BRIGHTNESS_SCALE, c[1] * kinds.SIZE_SCALE)
+      : kinds.colourEntry(active, c[0], c[1], c[2])
+    setInk(entry)
+    say(kinds.describe(active, c) || entry.label)
+  }
+
+  /** The terrain layer's own answer, which only the palette can give. */
+  function pickTerrain(c) {
     var entry = palette ? palette.byRgb(c[0], c[1], c[2]) : null
     if (entry && entry.kind !== 'broken') {
       setInk(entry)
@@ -1870,6 +2311,9 @@
       if (name === 'terrain') {
         shownDirty({ x: tile.x, y: tile.y, w: tile.image.width, h: tile.image.height })
       }
+      // An undo can put wall colours back or take them away, so the count in
+      // the rail is only as good as the last thing that wrote to that layer.
+      if (name === 'wall') wallColours.stale = true
     }
     doc.dirty = true
   }
@@ -1902,7 +2346,7 @@
    */
   function fillFor(layer) {
     if (layer !== 'terrain') return [0, 0, 0, 0]
-    var c = rgbaOf(eraserEntry())
+    var c = rgbaOf(eraserEntry('terrain'))
     return c || null
   }
 
@@ -1955,6 +2399,7 @@
     selection = null
     report = null
     shownDirty(null)
+    wallColours.stale = true
     commit(before)
     fitView()
     render()
@@ -2416,10 +2861,18 @@
     if (!inside) { overlay._under.textContent = ''; return }
     var c = colourAt(active, cell.x, cell.y)
     if (!c) { overlay._under.textContent = ''; return }
+    if (active !== 'terrain') {
+      // Every layer but terrain reads its own bytes its own way, so the answer
+      // comes from that layer's decoder. Naming a terrain material for a
+      // light-tuning pixel of 0,0,0 was the readout telling the author a fact
+      // about a layer that is not the one under the cursor.
+      overlay._under.textContent = (kinds && kinds.describe(active, c)) ||
+        (c[3] === 0 ? tx('editor.underEmpty', 'nothing here') : colourText({ rgb: c }))
+      return
+    }
     if (c[3] === 0) {
-      overlay._under.textContent = active === 'terrain'
-        ? tx('editor.underClear', 'see-through - the game reads this as sealed fog')
-        : tx('editor.underEmpty', 'nothing here')
+      overlay._under.textContent =
+        tx('editor.underClear', 'see-through - the game reads this as sealed fog')
       return
     }
     var entry = palette ? palette.byRgb(c[0], c[1], c[2]) : null
@@ -2505,7 +2958,8 @@
     report = null
     escapeArmed = false
     shownDirty(null)
-    ink = palette ? palette.DEFAULT_SOLID || null : null
+    inks = Object.create(null)
+    wallColours.stale = true
     if (overlay) {
       overlay._issues.classList.toggle('open', false)
       clearChildren(overlay._issuesBody)
@@ -2534,7 +2988,7 @@
     var layers = Object.create(null)
     for (var i = 0; i < LAYERS.length; i++) layers[LAYERS[i]] = newCanvas(width, height)
 
-    var air = rgbaOf(eraserEntry())
+    var air = rgbaOf(eraserEntry('terrain'))
     if (air) {
       var ctx = ctxOf(layers.terrain)
       ctx.fillStyle = 'rgba(' + air[0] + ',' + air[1] + ',' + air[2] + ',1)'
