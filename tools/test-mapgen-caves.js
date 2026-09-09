@@ -8,6 +8,10 @@
  * carved through the spot the player lands in, a cell of fog that looks like
  * rock until the first shovel hit dissolves the whole wall, and a "cave" that is
  * really a thousand one-cell specks with a healthy-looking pixel count.
+ *
+ * The last three guard the two things a played world said were missing: a result
+ * that is a cave system rather than a foam, and a density control whose response
+ * a person can predict instead of a percolation cliff.
  */
 
 const caves = require('../src/game/mapgen-caves.js')
@@ -298,7 +302,14 @@ function scriptedRng() {
 }
 
 function testRegionsAreCountedHonestly() {
-  const params = { roof: 1, floor: 1, passes: 0, fill: 0.5, minRegion: 1 }
+  // `connect: false` because the corridors exist precisely to merge these into
+  // one system, and this test is about counting what is there before they do.
+  // `caverns: 0` keeps every chamber, so selection does not prune the count
+  // either - the two later tests are where those stages are pinned.
+  const params = {
+    roof: 1, floor: 1, passes: 0, fill: 0.5, minRegion: 1,
+    connect: false, caverns: 0,
+  }
 
   const w = patternWorld()
   const rng = scriptedRng()
@@ -338,15 +349,240 @@ function testRegionsAreCountedHonestly() {
 
 /** Smoothing is what makes caves out of noise, and it can be counted. */
 function testSmoothingBeatsRawNoise() {
+  // The later stages are off so that this compares the one thing it names: the
+  // same seed field, the same threshold, with and without the passes.
+  const bare = { fill: 0.46, minRegion: 1, caverns: 0, connect: false }
   const raw = bigWorld()
-  const rawStats = caves.carve(raw.buf, raw.profile, { passes: 0, minRegion: 1 }, mulberry32(1))
+  const rawStats = caves.carve(raw.buf, raw.profile,
+    Object.assign({}, bare, { passes: 0 }), mulberry32(1))
   const smooth = bigWorld()
-  const smoothStats = caves.carve(smooth.buf, smooth.profile, { minRegion: 1 }, mulberry32(1))
+  const smoothStats = caves.carve(smooth.buf, smooth.profile, bare, mulberry32(1))
 
   assert(smoothStats.regions * 4 < rawStats.regions,
     'smoothing barely reduced the speck count: ' + rawStats.regions + ' -> ' + smoothStats.regions)
   assert(smoothStats.largest > rawStats.largest * 4,
     'smoothing barely grew the largest cavern: ' + rawStats.largest + ' -> ' + smoothStats.largest)
+}
+
+/**
+ * The corridors turn a scatter of sealed rooms into one system.
+ *
+ * Run on the same hand-counted picture, so the before is known exactly: seven
+ * chambers, 17 cells. Connecting them can only ever add cells and can only ever
+ * reduce the region count, and the finished numbers have to describe that - if
+ * `carve` reported the pre-corridor count it would be lying about the map it
+ * just wrote.
+ */
+function testCorridorsMakeOneSystem() {
+  const w = patternWorld()
+  const rng = scriptedRng()
+  const r = caves.carve(w.buf, w.profile,
+    { roof: 1, floor: 1, passes: 0, fill: 0.5, minRegion: 1, caverns: 0, connect: true },
+    rng.next)
+
+  assert(rng.used === rng.total, 'connecting drew extra random numbers: ' + rng.used +
+    ' for ' + rng.total + ' carvable cells - the corridors must not consume the generator')
+  assert(r.regions === 1, 'the corridors left ' + r.regions + ' regions, expected 1 system')
+  assert(r.carved > 17, 'the corridors carved nothing: still ' + r.carved + ' cells')
+  assert(r.largest === r.carved, 'the one system does not hold every carved cell')
+
+  // Every cell the picture asked for is still open, and the guards still hold
+  // for the corridors - they are carved through the same permission mask.
+  for (let row = 0; row < PATTERN.length; row++) {
+    for (let x = 0; x < PATTERN[row].length; x++) {
+      if (PATTERN[row][x] !== '#') continue
+      assert(is(pixel(w.buf, x, row + 1), AIR.rgb, 255),
+        'a corridor run closed a chamber cell at ' + x + ',' + (row + 1))
+    }
+  }
+  for (let x = 0; x < w.buf.width; x++) {
+    assert(is(pixel(w.buf, x, 0), ROCK.rgb, 255), 'a corridor reached row 0 at column ' + x)
+    assert(is(pixel(w.buf, x, w.buf.height - 1), ROCK.rgb, 255),
+      'a corridor reached the bottom border row at column ' + x)
+  }
+}
+
+/**
+ * `density` responds the way a person expects, which the raw threshold does not.
+ *
+ * This is the whole reason the exposed control is solved for rather than set.
+ * The threshold sits on a percolation cliff - on an 800x400 world 0.35 empties
+ * 1.6% of the underground and 0.46 empties 28.9%, so a nudge of 0.03 gives an
+ * unrecognisably different map. Asking for twice the density has to give about
+ * twice the ground, or the control is not a control.
+ */
+function testDensityResponseIsPredictable() {
+  const got = {}
+  for (const density of [0.05, 0.1, 0.2]) {
+    const w = bigWorld()
+    got[density] = caves.carve(w.buf, w.profile, { density: density }, mulberry32(808)).carved
+    assert(got[density] > 0, 'density ' + density + ' carved nothing')
+  }
+  for (const [lo, hi] of [[0.05, 0.1], [0.1, 0.2]]) {
+    const ratio = got[hi] / got[lo]
+    assert(ratio > 1.7 && ratio < 2.3, 'doubling density from ' + lo + ' to ' + hi +
+      ' changed the carved area by ' + ratio.toFixed(2) + 'x, expected about 2x (' +
+      got[lo] + ' -> ' + got[hi] + ')')
+  }
+
+  // Solving must not cost extra randomness: however many trial rounds it runs,
+  // the generator is still drawn from exactly once per carvable cell.
+  function counting(seed) {
+    const inner = mulberry32(seed)
+    const state = { used: 0 }
+    state.next = function () { state.used++; return inner() }
+    return state
+  }
+  const solved = bigWorld()
+  const solvedRng = counting(5)
+  caves.carve(solved.buf, solved.profile, {}, solvedRng.next)
+  const direct = bigWorld()
+  const directRng = counting(5)
+  caves.carve(direct.buf, direct.profile, { fill: 0.4 }, directRng.next)
+  assert(solvedRng.used === directRng.used, 'the density solve drew ' + solvedRng.used +
+    ' random numbers where a named threshold drew ' + directRng.used)
+}
+
+/**
+ * The default is a cave system, not a foam.
+ *
+ * A played world at the old default came back described as a sponge: caverns
+ * wall to wall with thin webs of rock between them, 338 regions averaging 128
+ * cells. So this asserts the shape of the result and not only its size - the
+ * ground is still mostly ground, what is carved is nearly all one connected
+ * system, and the chambers in it are big enough to be worth walking into.
+ */
+function testDefaultsGiveACaveSystem() {
+  for (const seed of [1, 2, 3]) {
+    const w = bigWorld()
+    const r = caves.carve(w.buf, w.profile, {}, mulberry32(seed))
+
+    let ground = 0
+    for (let x = 0; x < w.buf.width; x++) ground += w.buf.height - w.profile[x]
+    const share = r.carved / ground
+    assert(share > 0.04 && share < 0.18, 'seed ' + seed + ' emptied ' +
+      (100 * share).toFixed(1) + '% of the underground; the default should leave ' +
+      'ground that still reads as ground')
+    assert(r.regions <= 2, 'seed ' + seed + ' left ' + r.regions +
+      ' separate cave systems, which is a scatter rather than a system')
+    assert(r.largest / r.carved > 0.95, 'seed ' + seed + ' put only ' +
+      (100 * r.largest / r.carved).toFixed(0) + '% of the carved area in its largest system')
+    assert(r.largest > 3000, 'seed ' + seed + ' largest system is only ' + r.largest +
+      ' cells, which is a room rather than a cave system')
+  }
+}
+
+/**
+ * `caverns` is the "fewer, larger" knob, and it does what it says.
+ *
+ * With the corridors off - they would merge everything into one region and hide
+ * the count - asking for N chambers gives at most N, and asking for few gives
+ * bigger ones than asking for many.
+ */
+function testCavernCountIsAControl() {
+  const seen = {}
+  for (const caverns of [4, 20]) {
+    const w = bigWorld()
+    seen[caverns] = caves.carve(w.buf, w.profile, { caverns: caverns, connect: false },
+      mulberry32(64))
+    assert(seen[caverns].regions <= caverns, 'asked for at most ' + caverns +
+      ' chambers and got ' + seen[caverns].regions)
+    assert(seen[caverns].regions > 0, 'asking for ' + caverns + ' chambers gave none')
+  }
+  assert(seen[20].regions > seen[4].regions, 'asking for 20 chambers gave no more than ' +
+    'asking for 4: ' + seen[20].regions + ' vs ' + seen[4].regions)
+  const few = seen[4].carved / seen[4].regions
+  const many = seen[20].carved / seen[20].regions
+  assert(few > many, 'four chambers averaged ' + Math.round(few) + ' cells and twenty ' +
+    'averaged ' + Math.round(many) + ' - fewer is supposed to mean larger')
+}
+
+/**
+ * A corridor cannot strand a speck on the far side of something it cannot carve.
+ *
+ * This is the one way a sub-minimum cavern can still appear after selection has
+ * already thrown the small chambers away: a wide corridor running alongside a
+ * thin band of material that is not carvable - water, here - spills past it, and
+ * what lands on the far side is cut off from everything.
+ *
+ * The fixture makes that happen on purpose. Two 30-cell chambers with a
+ * full-width row of water below them; a corridor four cells to a side, which is
+ * exactly wide enough to reach across the water into the rock beyond it. Run
+ * with no minimum, the stranded strip is there and is counted as its own region.
+ * Run with the default rule, the same strip is filled back in. Both halves are
+ * asserted, because the first is what proves the second is doing something.
+ */
+function strandedWorld() {
+  const w = 24
+  const h = 12
+  const wd = world(w, h, () => 0)
+  const water = palette.byHex('#0000ff')
+  assert(water && water.kind !== 'solid', 'the fixture needs a colour that is not carvable')
+  for (let x = 0; x < w; x++) {
+    const i = (7 * w + x) * 4
+    wd.buf.data[i] = water.rgb[0]
+    wd.buf.data[i + 1] = water.rgb[1]
+    wd.buf.data[i + 2] = water.rgb[2]
+    wd.buf.data[i + 3] = 255
+  }
+  return wd
+}
+
+/** Draws in the order carve consumes them: row-major, one per carvable cell. */
+function seedRng(buf, roof, floor, seeded) {
+  const draws = []
+  for (let y = 0; y < buf.height; y++) {
+    for (let x = 0; x < buf.width; x++) {
+      if (y < roof || y > buf.height - 1 - floor) continue
+      if (!is(pixel(buf, x, y), ROCK.rgb)) continue
+      draws.push(seeded(x, y) ? 0 : 0.9)
+    }
+  }
+  const state = { used: 0, total: draws.length }
+  state.next = function () {
+    const v = state.used < draws.length ? draws[state.used] : 1
+    state.used++
+    return v
+  }
+  return state
+}
+
+function testCorridorsStrandNothing() {
+  const chambers = (x, y) => y >= 2 && y <= 6 && ((x >= 1 && x <= 6) || (x >= 17 && x <= 22))
+  const base = {
+    roof: 1, floor: 1, passes: 0, fill: 0.5, caverns: 0,
+    connect: true, corridorRadius: 4,
+  }
+
+  const loose = strandedWorld()
+  const looseStats = caves.carve(loose.buf, loose.profile,
+    Object.assign({}, base, { minRegion: 1 }), seedRng(loose.buf, 1, 1, chambers).next)
+  let spilled = 0
+  for (let x = 0; x < loose.buf.width; x++) {
+    if (is(pixel(loose.buf, x, 8), AIR.rgb, 255)) spilled++
+  }
+  assert(spilled > 0, 'the fixture never strands anything, so it proves nothing')
+  assert(looseStats.regions === 2, 'with no minimum the stranded strip should be its own ' +
+    'region, giving 2; got ' + looseStats.regions)
+
+  const strict = strandedWorld()
+  const strictStats = caves.carve(strict.buf, strict.profile,
+    Object.assign({}, base, { minRegion: 26 }), seedRng(strict.buf, 1, 1, chambers).next)
+  assert(strictStats.regions === 1, 'the stranded strip was still reported: ' +
+    strictStats.regions + ' regions, expected 1')
+  for (let x = 0; x < strict.buf.width; x++) {
+    assert(is(pixel(strict.buf, x, 8), ROCK.rgb, 255),
+      'a stranded corridor speck survived at ' + x + ',8')
+  }
+
+  // And the water itself was never carved, in either run.
+  const water = palette.byHex('#0000ff')
+  for (const wd of [loose, strict]) {
+    for (let x = 0; x < wd.buf.width; x++) {
+      assert(is(pixel(wd.buf, x, 7), water.rgb, 255),
+        'a corridor carved through water at ' + x + ',7')
+    }
+  }
 }
 
 /** Bad input carves nothing rather than guessing. */
@@ -376,6 +612,11 @@ try {
   testWritesAreOpaqueAirOnly()
   testRegionsAreCountedHonestly()
   testSmoothingBeatsRawNoise()
+  testCorridorsMakeOneSystem()
+  testDensityResponseIsPredictable()
+  testDefaultsGiveACaveSystem()
+  testCavernCountIsAControl()
+  testCorridorsStrandNothing()
   testRefusesWhatItCannotCarve()
   console.log('PASS map generator cave carving regression tests')
 } catch (e) {
