@@ -8501,7 +8501,12 @@ check('a transform runs on all six layers at once, as one undo step', () => {
 
     const grown = { w: MAPUI_W + 40, h: MAPUI_H + 30 }
     mapUiByText(mapUiNodes(overlay), 'Resize...').dispatch('click', { type: 'click' })
-    const inputs = mapUiNodes(overlay).filter((e) => e.tagName === 'INPUT' && e.className !== 'name')
+    // Scoped to the dialog, not to the whole overlay: the rail has fields of
+    // its own now - a colour and two numbers, on the layers that take them -
+    // and counting every input on screen would be counting those too.
+    const card = mapUiByClass(mapUiNodes(overlay), 'dialog')[0]
+    assert(card, 'the resize dialog did not open')
+    const inputs = mapUiNodes(card).filter((e) => e.tagName === 'INPUT' && e.className !== 'name')
     assert(inputs.length === 2, 'the resize dialog does not ask for a width and a height')
     inputs[0].value = String(grown.w)
     inputs[1].value = String(grown.h)
@@ -9569,12 +9574,13 @@ check('both flight-ceiling anchors resolve exactly once in the shipped bundle', 
 
 check('the flight ceiling scales with a short map and leaves the vanilla world alone', () => {
   // Restated rather than imported from the runtime, so this test states the
-  // measurement instead of agreeing with it: the world the game itself loads is
-  // map_blueprint_playtest.png at 1280x1280 cells, and cellSize is 4 (module
-  // 90823 in the bundle; the hard-bound site computes size.height*cellSize
-  // three characters earlier).
+  // measurement instead of agreeing with it: a loaded vanilla world reports
+  // `store.world.size` of {3840,3840}, and cellSize is 4 (module 90823 in the
+  // bundle; the hard-bound site computes size.height*cellSize three characters
+  // earlier). 3840 is the one number here that was read out of a running game
+  // rather than reasoned to, which is why it is the one that turned out right.
   const CELL = 4
-  const VANILLA_PX = 1280 * CELL
+  const VANILLA_PX = 3840 * CELL
 
   const load = (search) => {
     const box = {
@@ -9594,7 +9600,7 @@ check('the flight ceiling scales with a short map and leaves the vanilla world a
 
   // Not a custom map: every number the game shipped comes back untouched.
   const vanilla = load('').__SMLN__
-  for (const cells of [1280, 720, 201, 4000]) {
+  for (const cells of [3840, 720, 201, 4000]) {
     assert(vanilla.topBound(world(cells), 'soft', 600) === 600,
       'a non-custom ' + cells + '-cell world had its soft ceiling moved')
     assert(vanilla.topBound(world(cells), 'hard', 550) === 550,
@@ -9616,10 +9622,14 @@ check('the flight ceiling scales with a short map and leaves the vanilla world a
     (100 * 600 / VANILLA_PX).toFixed(1) + '%')
   assert(Math.abs(hard / px201 - 550 / VANILLA_PX) < 1e-9,
     'the hard strip does not keep the vanilla share on a 201-cell map')
+  // Pinned as absolutes too, not just as a ratio: a wrong VANILLA_PX satisfies
+  // the ratio above happily, and twice already it has been wrong.
+  assert(Math.abs(soft - 31.40625) < 1e-9, 'a 201-cell map got soft ' + soft + ', expected 31.40625')
+  assert(Math.abs(hard - 28.7890625) < 1e-9, 'a 201-cell map got hard ' + hard + ', expected 28.7890625')
 
   // A map at least as tall as vanilla keeps the number the game shipped: the
   // strip is capped by the vanilla absolute as well as by the vanilla share.
-  assert(custom.topBound(world(1280), 'soft', 600) === 600, 'a vanilla-sized custom map moved')
+  assert(custom.topBound(world(3840), 'soft', 600) === 600, 'a vanilla-sized custom map moved')
   assert(custom.topBound(world(4000), 'soft', 600) === 600, 'a 4000-cell map raised the soft ceiling')
   assert(custom.topBound(world(4000), 'hard', 550) === 550, 'a 4000-cell map raised the hard ceiling')
 

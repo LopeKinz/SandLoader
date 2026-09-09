@@ -429,10 +429,10 @@ const corePatches = [
    *
    * A SandLoader custom map leaves `store.world.externalMap` null, so both
    * fallbacks apply, and they were picked for the world the game itself ships:
-   * map_blueprint_playtest.png, 1280x1280 cells at cellSize 4, so 5120 pixels
-   * tall. There a 600-pixel strip is 11.7% of the world. Put the same 600
-   * pixels on the smallest map the editor will make - 201 cells, 804 pixels -
-   * and it is 75% of the world. The map gets shorter; the ceiling does not.
+   * 3840x3840 cells at cellSize 4, so 15360 pixels tall. There a 600-pixel
+   * strip is 3.9% of the world. Put the same 600 pixels on the smallest map
+   * the editor will make - 201 cells, 804 pixels - and it is 75% of the world.
+   * The map gets shorter; the ceiling does not.
    *
    * WHY NOT JUST SET `externalMap`
    *

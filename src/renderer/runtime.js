@@ -191,8 +191,8 @@
    * 550. See the smln:top-bound-* patches in src/patch/core-patches.js for the
    * two call sites those numbers come from.
    *
-   * Fixed pixels are the bug. The world the game ships is 1280x1280 cells at
-   * cellSize 4 - 5120 pixels tall - where 600 pixels is 11.7% of the height.
+   * Fixed pixels are the bug. The world the game ships is 3840x3840 cells at
+   * cellSize 4 - 15360 pixels tall - where 600 pixels is 3.9% of the height.
    * The same 600 pixels on a 201-cell map (804 pixels, the shortest the editor
    * will make) is 75% of it. Short maps get almost no sky.
    *
@@ -204,8 +204,23 @@
   /** Cells to world pixels. `cellSize:4` in the bundle's config module, and the
    *  hard-bound site itself computes `store.world.size.height*cellSize`. */
   var CELL_SIZE = 4
-  /** map_blueprint_playtest.png, the blueprint the Intro scene loads. */
-  var VANILLA_WORLD_CELLS = 1280
+  /**
+   * The vanilla world's height in cells.
+   *
+   * Measured in a loaded world - `store.world.size` reads {3840,3840} - not
+   * derived, and that distinction cost two wrong numbers before this one. The
+   * menu's background world is 720 and is not the game; the 1280x1280
+   * `map_blueprint_playtest.png` is the blueprint the loader falls back to and
+   * not the map you play. The shipped config sets `procgen.useProcgenMap` and
+   * the world is generated at `procgen.params.{width,height}`, both 3840:
+   *
+   *   g=procgen.params.width ?? map_blueprint.width    // 3840, not 1280
+   *
+   * The game agrees, twice: it identifies its own map with the literal test
+   * `3840===store.world.size.width`, and keeps `{worldWidth:3840*cellSize,
+   * worldHeight:3840*cellSize,horizonY:7646}` as that world's dimensions.
+   */
+  var VANILLA_WORLD_CELLS = 3840
   var VANILLA_WORLD_PX = VANILLA_WORLD_CELLS * CELL_SIZE
 
   /**
