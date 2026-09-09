@@ -266,6 +266,9 @@
   var brush = 1
   var panMode = false
 
+  /** Whether the document-operations menu is showing. */
+  var shapeOpen = false
+
   /** The palette entry the brush paints, and the one the eraser writes. */
   var ink = null
 
@@ -304,84 +307,212 @@
    * radius, #ffe700 as the one accent. The difference is the shape - this is
    * full-screen, not a dialog, because an editor is a workspace and a dialog
    * that big is a full screen wearing a border.
+   *
+   * Three rules this file adds on top of that, because a workspace has a
+   * problem a dialog does not: it holds forty controls at once, and they are
+   * not equally important.
+   *
+   *   - **Volume follows use.** A hand is on the drawing tools and the brush
+   *     size all day; zoom, history and the document operations are touched
+   *     between strokes at most. The first two get full-size plates, the rest
+   *     get small quiet ones, and the five operations that reshape the whole
+   *     document sit behind one control instead of five.
+   *   - **A cluster is one plate, not a row of pills.** Eight tools cut into a
+   *     single bordered plate read as one instrument; eight separate bordered
+   *     buttons read as eight things competing. The diagonal corner belongs to
+   *     the plate, so the signature is stated once per cluster.
+   *   - **Yellow stays scarce.** It is the masthead, the action that commits,
+   *     and the spawn cell - the one thing in the world an author cannot see
+   *     and must not bury. Selection is carried by an inverted plate or a
+   *     raised row instead, which is also what makes it survive grayscale.
    */
   var CSS = [
     '#smln-mapedit{position:fixed;inset:0;z-index:2147483500;display:none;',
-    'flex-direction:column;background:rgba(4,7,11,.98);',
+    'flex-direction:column;background:#04070b;',
     "font-family:'SMLN Play',system-ui,sans-serif;font-size:14px;line-height:1.55;color:#e2e8f0}",
     '#smln-mapedit.open{display:flex}',
 
+    // --- the plain button, which everything below either uses or overrides.
+    '#smln-mapedit button{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
+    'color:#e2e8f0;font:inherit;font-size:12px;padding:6px 13px;border-radius:0 4px 0 4px}',
+    '#smln-mapedit button:hover{background:rgba(148,163,184,.12)}',
+    '#smln-mapedit button[disabled]{opacity:.45;cursor:default;background:transparent}',
+    // Selected is an inverted plate: the strongest statement available without
+    // spending the accent, and legible with the colour taken out.
+    '#smln-mapedit button.on{background:#e2e8f0;border-color:#e2e8f0;color:#080c11;font-weight:700}',
+    '#smln-mapedit button.on:hover{background:#f1f5f9}',
+
     // --- masthead
     '#smln-mapedit header{display:flex;align-items:center;gap:16px;flex:none;',
-    'padding:14px 22px;border-bottom:1px solid rgba(100,116,139,.34)}',
+    'padding:13px 20px;border-bottom:1px solid rgba(100,116,139,.34);background:#070b10}',
     '#smln-mapedit h2{margin:0;font-size:16px;font-weight:700;letter-spacing:.16em;',
     'text-transform:uppercase;color:#ffe700;line-height:1;flex:none}',
+    // A field, not a caption that happens to be typeable: the resting rule
+    // says the name can be changed here before anything is hovered.
     '#smln-mapedit .name{flex:1;min-width:0;background:transparent;color:#f1f5f9;font:inherit;',
-    'font-size:15px;border:1px solid transparent;border-radius:0 4px 0 4px;padding:5px 8px}',
-    '#smln-mapedit .name:hover{border-color:rgba(100,116,139,.4)}',
+    'font-size:15px;border:1px solid transparent;border-bottom-color:rgba(100,116,139,.34);',
+    'border-radius:0 4px 0 4px;padding:5px 8px}',
+    '#smln-mapedit .name:hover{border-color:rgba(100,116,139,.5)}',
     '#smln-mapedit .name:focus{outline:none;border-color:rgba(255,231,0,.45)}',
-    '#smln-mapedit .dims{flex:none;color:#64748b;font-size:11px;letter-spacing:.09em;text-transform:uppercase}',
-
-    // --- toolbar
-    '#smln-mapedit .tools{display:flex;align-items:center;gap:18px;flex:none;flex-wrap:wrap;',
-    'padding:10px 22px;border-bottom:1px solid rgba(100,116,139,.34);background:rgba(2,6,10,.5)}',
-    '#smln-mapedit .group{display:flex;align-items:center;gap:6px}',
-    '#smln-mapedit .group .cap{color:#64748b;font-size:10px;letter-spacing:.1em;',
-    'text-transform:uppercase;margin-right:2px}',
-
-    '#smln-mapedit button{cursor:pointer;border:1px solid rgba(100,116,139,.68);background:transparent;',
-    'color:#e2e8f0;font:inherit;font-size:12px;padding:5px 12px;border-radius:0 4px 0 4px}',
-    '#smln-mapedit button:hover{background:rgba(148,163,184,.12)}',
-    '#smln-mapedit button[disabled]{opacity:.4;cursor:default;background:transparent}',
-    // Selected is never colour-only: the border thickens on the left and the
-    // label goes bold, so the current layer and tool survive being read in
-    // grayscale.
-    '#smln-mapedit button.on{border-color:rgba(255,231,0,.55);border-left-width:4px;',
-    'background:rgba(255,231,0,.08);color:#ffe700;font-weight:700}',
-    '#smln-mapedit .eye{padding:5px 7px;color:#94a3b8;min-width:26px}',
-    '#smln-mapedit .eye.off{color:#475569}',
-    '#smln-mapedit .zoomval{color:#94a3b8;font-size:11.5px;min-width:56px;text-align:center;',
+    '#smln-mapedit .dims{flex:none;color:#94a3b8;font-size:11.5px;letter-spacing:.06em;',
     "font-family:'Cascadia Mono',Consolas,monospace}",
 
-    // --- the working area: palette, stage, problems
+    // --- toolbar: one row. The caption sits above its cluster rather than
+    // beside it, which costs a few pixels of height and gives back the width
+    // that made three rows necessary.
+    // Stretch, not flex-end: every cluster is then the full height of the row,
+    // so the captions sit on one line, the plates sit on another, and the rule
+    // that separates the stroke from the document runs the whole way down.
+    '#smln-mapedit .tools{display:flex;align-items:stretch;gap:14px;flex:none;flex-wrap:wrap;',
+    'row-gap:10px;padding:9px 20px 10px;border-bottom:1px solid rgba(100,116,139,.34);',
+    'background:#070b10}',
+    '#smln-mapedit .cluster{display:flex;flex-direction:column;justify-content:flex-end;gap:5px}',
+    '#smln-mapedit .cap{color:#64748b;font-size:9.5px;letter-spacing:.13em;',
+    'text-transform:uppercase;line-height:1;padding-left:2px}',
+    '#smln-mapedit .push{margin-left:auto}',
+    // Everything left of this line changes the stroke; everything right of it
+    // changes the document.
+    '#smln-mapedit .apart{margin-left:6px;padding-left:16px;',
+    'border-left:1px solid rgba(100,116,139,.28)}',
+
+    '#smln-mapedit .seg{display:flex;align-items:stretch;overflow:hidden;',
+    'border:1px solid rgba(100,116,139,.5);border-radius:0 6px 0 6px;background:rgba(2,6,10,.6)}',
+    '#smln-mapedit .seg>*+*{border-left:1px solid rgba(100,116,139,.28)}',
+    '#smln-mapedit .seg button{border:0;border-radius:0;background:transparent;color:#cbd5e1;',
+    'font:inherit;font-size:11.5px;padding:5px 10px;line-height:1.5}',
+    '#smln-mapedit .seg button:hover{background:rgba(148,163,184,.12);color:#f1f5f9}',
+    '#smln-mapedit .seg button.on{background:#e2e8f0;color:#080c11;font-weight:700}',
+    '#smln-mapedit .seg button.on:hover{background:#f1f5f9;color:#080c11}',
+    // Disabled is a sunken cell, not a faded one: opacity alone drops the
+    // label under the contrast a person can still read it at.
+    '#smln-mapedit .seg button[disabled]{opacity:1;cursor:default;color:#5b6b80;',
+    'background:rgba(100,116,139,.07)}',
+    // The two clusters a hand is on all day.
+    '#smln-mapedit .loud button{font-size:12.5px;padding:7px 13px;color:#e2e8f0}',
+    '#smln-mapedit .loud button:hover{color:#f8fafc}',
+    '#smln-mapedit .sizes button{min-width:34px;text-align:center;',
+    "font-family:'Cascadia Mono',Consolas,monospace}",
+    '#smln-mapedit .zoomval{display:flex;align-items:center;justify-content:center;',
+    'color:#94a3b8;font-size:11px;min-width:54px;',
+    "font-family:'Cascadia Mono',Consolas,monospace}",
+
+    // --- the document operations, behind one control.
+    //
+    // Resize, crop, mirror and shift are used once or twice in a map's life
+    // and each one moves every pixel of all six layers. Sitting them beside
+    // Brush at the same size said they were the same kind of thing.
+    '#smln-mapedit .shapeBox{position:relative;display:flex;flex-direction:column;',
+    'justify-content:flex-end}',
+    '#smln-mapedit .shapeBtn{display:flex;align-items:center;gap:9px}',
+    // A disclosure triangle made of a border - no icon font, no asset, and it
+    // stays out of the label the button carries.
+    "#smln-mapedit .shapeBtn::after{content:'';width:0;height:0;flex:none;",
+    'border:4px solid transparent;border-top-color:currentColor;margin-top:3px}',
+    '#smln-mapedit .shapeMenu{position:absolute;top:calc(100% + 7px);right:0;z-index:6;',
+    'display:none;flex-direction:column;min-width:196px;padding:5px;background:#0b1017;',
+    'border:1px solid rgba(100,116,139,.6);border-radius:0 8px 0 8px;',
+    'box-shadow:0 6px 20px rgba(0,0,0,.5)}',
+    '#smln-mapedit .shapeMenu.open{display:flex}',
+    '#smln-mapedit .shapeMenu button{border:0;border-radius:0;text-align:left;padding:7px 11px;',
+    'font-size:12px;color:#e2e8f0;background:transparent}',
+    '#smln-mapedit .shapeMenu button:hover{background:rgba(148,163,184,.12)}',
+    '#smln-mapedit .shapeMenu button[disabled]{opacity:1;color:#5b6b80;background:transparent}',
+
+    // --- the working area: rail, stage, problems
     '#smln-mapedit .work{flex:1;min-height:0;display:flex;align-items:stretch}',
 
-    // --- palette
-    '#smln-mapedit .palette{flex:none;width:246px;display:flex;flex-direction:column;min-height:0;',
-    'border-right:1px solid rgba(100,116,139,.34);background:rgba(2,6,10,.45)}',
-    '#smln-mapedit .current{flex:none;display:flex;align-items:flex-start;gap:10px;padding:12px 14px;',
+    // --- rail: what is being painted with, then what there is to paint with,
+    // then which layer it lands on.
+    '#smln-mapedit .rail{flex:none;width:300px;display:flex;flex-direction:column;min-height:0;',
+    'border-right:1px solid rgba(100,116,139,.34);background:#070b10}',
+
+    // One line, and it stays one line: the label ellipsises rather than
+    // wrapping to three rows of a rail that has a palette to fit.
+    '#smln-mapedit .current{flex:none;display:flex;align-items:center;gap:11px;padding:11px 14px;',
     'border-bottom:1px solid rgba(100,116,139,.28)}',
-    '#smln-mapedit .current .chip{flex:none;width:34px;height:34px;border:1px solid rgba(226,232,240,.45);',
-    'border-radius:0 4px 0 4px}',
-    '#smln-mapedit .current .who{min-width:0;flex:1}',
-    '#smln-mapedit .current .who b{display:block;font-size:12px;font-weight:700;color:#f1f5f9}',
-    '#smln-mapedit .current .who span{display:block;color:#64748b;font-size:10.5px;',
+    '#smln-mapedit .current .chip{flex:none;width:24px;height:24px;',
+    'border:1px solid rgba(226,232,240,.5);border-radius:0 4px 0 4px}',
+    '#smln-mapedit .current .who{flex:1;min-width:0;display:flex;align-items:baseline;gap:10px}',
+    '#smln-mapedit .current .who b{flex:1;min-width:0;font-size:12.5px;font-weight:700;',
+    'color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '#smln-mapedit .current .who span{flex:none;color:#64748b;font-size:10.5px;white-space:nowrap;',
     "font-family:'Cascadia Mono',Consolas,monospace;letter-spacing:.04em}",
-    '#smln-mapedit .paletteKey{flex:none;padding:9px 14px 1px;color:#94a3b8;font-size:11px;',
-    'line-height:1.45}',
-    '#smln-mapedit .swatches{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 12px}',
-    '#smln-mapedit .kind{color:#94a3b8;font-size:10px;letter-spacing:.1em;text-transform:uppercase;',
-    'margin:12px 6px 5px;padding-bottom:3px;border-bottom:1px solid rgba(100,116,139,.24)}',
-    '#smln-mapedit .swatch{display:flex;align-items:center;gap:8px;width:100%;text-align:left;',
-    'padding:3px 6px;font-size:11.5px;line-height:1.35;border-color:transparent}',
-    '#smln-mapedit .swatch .chip{flex:none;width:15px;height:15px;',
-    'border:1px solid rgba(226,232,240,.35)}',
+
+    '#smln-mapedit .paletteKey{flex:none;padding:9px 14px 8px;color:#94a3b8;font-size:11px;',
+    'line-height:1.45;border-bottom:1px solid rgba(100,116,139,.2)}',
+    '#smln-mapedit .swatches{flex:1;min-height:0;overflow-y:auto;padding:0 8px 14px}',
+    '#smln-mapedit .swatches::-webkit-scrollbar{width:10px}',
+    '#smln-mapedit .swatches::-webkit-scrollbar-track{background:transparent}',
+    '#smln-mapedit .swatches::-webkit-scrollbar-thumb{background:rgba(100,116,139,.35);',
+    'border-radius:5px;border:3px solid transparent;background-clip:content-box}',
+    // The heading stays put while its own group scrolls past it, so "which
+    // bucket is this colour in" is never answered by scrolling back up.
+    '#smln-mapedit .kind{position:sticky;top:0;z-index:1;background:#070b10;color:#94a3b8;',
+    'font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin:9px -8px 0;',
+    // The space between groups is margin rather than padding on purpose: a
+    // stuck heading should be a band the height of its own words, not a band
+    // with the gap above the group still inside it.
+    'padding:5px 14px;border-bottom:1px solid rgba(100,116,139,.24)}',
+    '#smln-mapedit .swatch{display:flex;align-items:center;gap:10px;width:100%;text-align:left;',
+    'padding:5px 7px;margin-top:2px;font-size:11.5px;line-height:1.35;color:#cbd5e1;',
+    'border:1px solid transparent;border-left:3px solid transparent;border-radius:0}',
+    '#smln-mapedit .swatch:hover{background:rgba(148,163,184,.09);color:#f1f5f9}',
+    // Big enough to tell two pale yellows apart, which fifteen pixels was not.
+    '#smln-mapedit .swatch .chip{flex:none;width:26px;height:26px;',
+    'border:1px solid rgba(226,232,240,.35);border-radius:0 3px 0 3px}',
     '#smln-mapedit .swatch .txt{min-width:0;flex:1}',
-    '#smln-mapedit .paletteNote{padding:10px 14px;color:#f87171;font-size:11.5px}',
-    '#smln-mapedit .layerHint{flex:none;padding:8px 14px;color:#94a3b8;font-size:11px;',
-    'border-top:1px solid rgba(100,116,139,.28);display:none}',
+    '#smln-mapedit .swatch.on{border-color:transparent;border-left-color:#e2e8f0;',
+    'background:rgba(226,232,240,.09);color:#f8fafc;font-weight:700}',
+    '#smln-mapedit .swatch.on .chip{box-shadow:0 0 0 2px #070b10,0 0 0 4px #e2e8f0}',
+    '#smln-mapedit .paletteNote{padding:12px 14px;color:#f87171;font-size:11.5px}',
+
+    '#smln-mapedit .layerHint{flex:none;padding:9px 14px;color:#94a3b8;font-size:11px;',
+    'line-height:1.45;border-top:1px solid rgba(100,116,139,.28);display:none}',
     '#smln-mapedit .layerHint.on{display:block}',
 
+    // --- layers: a mode you set and leave, so they are in the rail rather
+    // than in the row a hand is in mid-stroke, and each carries its own
+    // visibility beside its name instead of trailing a loose dot.
+    '#smln-mapedit .layers{flex:none;border-top:1px solid rgba(100,116,139,.34);',
+    'background:rgba(2,6,10,.55)}',
+    '#smln-mapedit .layers .cap{display:block;padding:10px 14px 7px}',
+    '#smln-mapedit .layerRow{display:flex;align-items:stretch;',
+    'border-left:3px solid transparent;border-top:1px solid rgba(100,116,139,.14)}',
+    '#smln-mapedit .layerRow:hover{background:rgba(148,163,184,.06)}',
+    '#smln-mapedit .layerRow.on{border-left-color:#e2e8f0;background:rgba(226,232,240,.08)}',
+    '#smln-mapedit .layerPick{flex:1;text-align:left;border:0;border-radius:0;background:transparent;',
+    'padding:7px 11px;font-size:12px;color:#cbd5e1}',
+    '#smln-mapedit .layerPick:hover{background:transparent;color:#f1f5f9}',
+    '#smln-mapedit .layerRow.on .layerPick{color:#f8fafc;font-weight:700}',
+    '#smln-mapedit .eye{flex:none;width:36px;border:0;border-radius:0;background:transparent;',
+    'border-left:1px solid rgba(100,116,139,.2);color:#94a3b8;font-size:12px;padding:0}',
+    '#smln-mapedit .eye:hover{background:rgba(148,163,184,.12);color:#f1f5f9}',
+    '#smln-mapedit .eye.off{color:#5b6b80}',
+
     // --- stage
+    //
+    // Outside the world is flat and dark; inside it is the checkerboard. The
+    // pattern is not decoration on the stage any more, it is the map's own
+    // ground - so a document with nothing painted on it is still a rectangle
+    // an author can see the edges of, and panning it never loses them.
     '#smln-mapedit .stage{flex:1;min-width:0;min-height:0;position:relative;overflow:hidden;',
-    // The same two-tone checkerboard the maps overlay uses, so a transparent
-    // cell reads as an absence of world rather than as black rock.
+    'background:#05080c}',
+    '#smln-mapedit .plate{position:absolute;box-sizing:border-box;pointer-events:none;',
     'background-color:#0a0d11;background-image:',
-    'linear-gradient(45deg,#151a21 25%,transparent 25%),',
-    'linear-gradient(-45deg,#151a21 25%,transparent 25%),',
-    'linear-gradient(45deg,transparent 75%,#151a21 75%),',
-    'linear-gradient(-45deg,transparent 75%,#151a21 75%);',
-    'background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}',
+    'linear-gradient(45deg,#171d25 25%,transparent 25%),',
+    'linear-gradient(-45deg,#171d25 25%,transparent 25%),',
+    'linear-gradient(45deg,transparent 75%,#171d25 75%),',
+    'linear-gradient(-45deg,transparent 75%,#171d25 75%);',
+    'background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;',
+    'box-shadow:0 0 0 1px #05080c,0 0 0 3px rgba(148,163,184,.55)}',
+    // Corner marks, the way a drawing states its own extent: the frame is a
+    // hairline that terrain can be painted right up against, so the corners
+    // are where the world says out loud where it stops.
+    '#smln-mapedit .plate i{position:absolute;width:15px;height:15px;border:0 solid #e2e8f0}',
+    '#smln-mapedit .plate i.tl{left:-5px;top:-5px;border-left-width:3px;border-top-width:3px}',
+    '#smln-mapedit .plate i.tr{right:-5px;top:-5px;border-right-width:3px;border-top-width:3px}',
+    '#smln-mapedit .plate i.bl{left:-5px;bottom:-5px;border-left-width:3px;border-bottom-width:3px}',
+    '#smln-mapedit .plate i.br{right:-5px;bottom:-5px;border-right-width:3px;border-bottom-width:3px}',
     '#smln-mapedit .view{position:absolute;inset:0;display:block;cursor:crosshair;',
     // Belt and braces with ctx.imageSmoothingEnabled=false: this one covers
     // the browser scaling the canvas element itself on a HiDPI display.
@@ -392,13 +523,17 @@
 
     // --- problems
     '#smln-mapedit .issues{flex:none;width:320px;display:none;flex-direction:column;min-height:0;',
-    'border-left:1px solid rgba(100,116,139,.34);background:rgba(2,6,10,.55)}',
+    'border-left:1px solid rgba(100,116,139,.34);background:#070b10}',
     '#smln-mapedit .issues.open{display:flex}',
     '#smln-mapedit .issues .top{flex:none;display:flex;align-items:center;gap:10px;padding:11px 14px;',
     'border-bottom:1px solid rgba(100,116,139,.28)}',
     '#smln-mapedit .issues .top b{flex:1;font-size:11px;font-weight:700;letter-spacing:.14em;',
     'text-transform:uppercase;color:#e2e8f0}',
     '#smln-mapedit .issues .body{flex:1;min-height:0;overflow-y:auto;padding:4px 12px 16px}',
+    '#smln-mapedit .issues .body::-webkit-scrollbar{width:10px}',
+    '#smln-mapedit .issues .body::-webkit-scrollbar-track{background:transparent}',
+    '#smln-mapedit .issues .body::-webkit-scrollbar-thumb{background:rgba(100,116,139,.35);',
+    'border-radius:5px;border:3px solid transparent;background-clip:content-box}',
     '#smln-mapedit .sev{margin:12px 2px 6px;font-size:11px;line-height:1.45}',
     '#smln-mapedit .sev.error{color:#f87171}',
     '#smln-mapedit .sev.warning{color:#fbbf24}',
@@ -412,9 +547,10 @@
 
     // --- dialogs (resize, shift), the maps overlay's card on this background
     '#smln-mapedit .dialog{position:absolute;inset:0;display:flex;align-items:center;',
-    'justify-content:center;background:rgba(4,7,11,.75);z-index:5}',
-    '#smln-mapedit .dialog .card{width:min(380px,90%);padding:20px 22px;background:#080c11;',
-    'border:1px solid rgba(100,116,139,.5);border-radius:0 8px 0 8px}',
+    'justify-content:center;background:rgba(4,7,11,.78);z-index:5}',
+    '#smln-mapedit .dialog .card{width:min(380px,90%);padding:20px 22px;background:#0b1017;',
+    'border:1px solid rgba(100,116,139,.5);border-radius:0 8px 0 8px;',
+    'box-shadow:0 8px 24px rgba(0,0,0,.5)}',
     '#smln-mapedit .dialog h3{margin:0 0 14px;font-size:12px;font-weight:700;letter-spacing:.14em;',
     'text-transform:uppercase;color:#ffe700}',
     '#smln-mapedit .dialog label{display:block;color:#94a3b8;font-size:11px;letter-spacing:.09em;',
@@ -430,9 +566,10 @@
     '#smln-mapedit .anchors{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:150px}',
     '#smln-mapedit .anchors button{padding:8px 0;font-size:11px}',
 
-    // --- footer
+    // --- footer: what just happened at the left, what is under the cursor
+    // beside it, and the one action that commits at the right.
     '#smln-mapedit footer{flex:none;display:flex;align-items:center;gap:16px;',
-    'padding:11px 22px;border-top:1px solid rgba(100,116,139,.34);background:rgba(2,6,10,.5)}',
+    'padding:10px 20px;border-top:1px solid rgba(100,116,139,.34);background:#070b10}',
     '#smln-mapedit footer .note{flex:1;min-width:0;color:#94a3b8;font-size:11.5px;overflow:hidden;',
     'text-overflow:ellipsis;white-space:nowrap}',
     '#smln-mapedit footer .note.err{color:#f87171}',
@@ -441,8 +578,10 @@
     '#smln-mapedit footer .at{flex:none;color:#64748b;font-size:11px;',
     "font-family:'Cascadia Mono',Consolas,monospace;min-width:96px;text-align:right}",
     '#smln-mapedit .save{border-color:rgba(255,231,0,.45);background:rgba(255,231,0,.08);',
-    'color:#ffe700;letter-spacing:.06em;text-transform:uppercase;padding:7px 22px}',
+    'color:#ffe700;font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;padding:8px 26px;',
+    'transition:background .12s ease-out}',
     '#smln-mapedit .save:hover{background:rgba(255,231,0,.16)}',
+    '#smln-mapedit .save[disabled]{opacity:.45;background:transparent}',
   ].join('')
 
   // ------------------------------------------------------------- canvases
@@ -676,10 +815,24 @@
     work.className = 'work'
 
     var paletteSide = document.createElement('div')
-    paletteSide.className = 'palette'
+    paletteSide.className = 'rail'
 
     var stage = document.createElement('div')
     stage.className = 'stage'
+    // The world itself, as a piece of the page rather than as pixels on the
+    // view: it carries the ground the map sits on, the frame around it and
+    // the corner marks, and it is behind the canvas so nothing painted is
+    // covered by it. Drawn here rather than in render() because a scrim and
+    // a frame stroked onto the view are indistinguishable, to anything reading
+    // the view back, from map an author painted.
+    var plate = document.createElement('div')
+    plate.className = 'plate'
+    ;['tl', 'tr', 'bl', 'br'].forEach(function (corner) {
+      var mark = document.createElement('i')
+      mark.className = corner
+      plate.appendChild(mark)
+    })
+    stage.appendChild(plate)
     var canvas = document.createElement('canvas')
     canvas.className = 'view'
     stage.appendChild(canvas)
@@ -720,6 +873,7 @@
     overlay._dims = dims
     overlay._tools = tools
     overlay._stage = stage
+    overlay._plate = plate
     overlay._canvas = canvas
     overlay._busy = busy
     overlay._issues = issues
@@ -735,18 +889,27 @@
     bindStage(canvas)
   }
 
-  /** A labelled row of buttons. */
-  function group(parent, caption) {
-    var g = document.createElement('div')
-    g.className = 'group'
+  /**
+   * A captioned cluster of controls, cut into one plate.
+   *
+   * The caption goes above rather than beside, which is what buys back the
+   * width that used to make the toolbar three rows deep. What comes back is
+   * the plate, because that is what the buttons go into.
+   */
+  function cluster(parent, caption, extra) {
+    var box = document.createElement('div')
+    box.className = 'cluster' + (extra ? ' ' + extra : '')
     if (caption) {
       var cap = document.createElement('span')
       cap.className = 'cap'
       cap.textContent = caption
-      g.appendChild(cap)
+      box.appendChild(cap)
     }
-    parent.appendChild(g)
-    return g
+    var seg = document.createElement('div')
+    seg.className = 'seg'
+    box.appendChild(seg)
+    parent.appendChild(box)
+    return seg
   }
 
   function button(parent, text, title, onClick) {
@@ -758,96 +921,154 @@
     return b
   }
 
-  /** The toolbar: tools, brush, layers, zoom, transforms, history, checking. */
+  /**
+   * The toolbar: one row.
+   *
+   * Left to right it is what the hand does, then what the eye does, then what
+   * the document does - and it is ordered by how often each is reached for,
+   * not by how the code is organised. The drawing tools and the brush size
+   * carry full weight at the left; history and zoom are small and quiet; the
+   * five operations that reshape the whole document are behind one control,
+   * because they are used once or twice in a map's life and each one moves
+   * every pixel of all six layers.
+   *
+   * The layer selector is not here at all. It is in the rail (see
+   * `buildLayers`): choosing a layer is a mode you set and leave, and putting
+   * six more buttons plus six visibility dots in the row a hand is in
+   * mid-stroke is what made this a wall in the first place.
+   */
   function buildTools(tools) {
     var toolBtns = Object.create(null)
-    var toolGroup = group(tools, tx('editor.tool', 'Tool'))
+    var toolSeg = cluster(tools, tx('editor.tool', 'Tool'), 'loud')
     TOOLS.forEach(function (spec) {
-      var b = button(toolGroup, tx('editor.tool.' + spec.id, spec.label),
+      var b = button(toolSeg, tx('editor.tool.' + spec.id, spec.label),
         tx('editor.tool.' + spec.id + '.key', spec.label + '  (' + spec.key.toUpperCase() + ')'),
         function () { setTool(spec.id) })
       toolBtns[spec.id] = b
     })
 
     var brushBtns = []
-    var brushGroup = group(tools, tx('editor.brush', 'Brush'))
+    var brushSeg = cluster(tools, tx('editor.brush', 'Brush'), 'loud sizes')
     BRUSHES.forEach(function (size, i) {
-      var b = button(brushGroup, String(size),
+      var b = button(brushSeg, String(size),
         tx('editor.brushSize', size + ' cells across  (' + (i + 1) + ')', { size: size }),
         function () { brush = size; refreshTools() })
       b._size = size
       brushBtns.push(b)
     })
 
-    var layerBtns = Object.create(null)
-    var eyeBtns = Object.create(null)
-    var layerGroup = group(tools, tx('editor.layers', 'Layer'))
-    LAYERS.forEach(function (layer) {
-      var pick = button(layerGroup, tx('editor.layer.' + layer, LAYER_LABEL[layer]), null,
-        function () { setLayer(layer) })
-      var eye = document.createElement('button')
-      eye.className = 'eye'
-      eye.setAttribute('aria-label', tx('editor.visibility', 'Show or hide this layer'))
-      eye.addEventListener('click', function () {
-        visible[layer] = !visible[layer]
-        refreshTools()
-        render()
-      })
-      layerGroup.appendChild(eye)
-      layerBtns[layer] = pick
-      eyeBtns[layer] = eye
-    })
+    // Everything from here rides the right-hand edge, and keeps riding it if
+    // the row has to wrap on a narrow window.
+    var histSeg = cluster(tools, tx('editor.history', 'History'), 'push')
+    var panBtn = button(histSeg, tx('editor.pan', 'Pan'), null,
+      function () { panMode = !panMode; refreshTools() })
+    var undoBtn = button(histSeg, tx('editor.undo', 'Undo'),
+      tx('editor.undoTip', 'Undo  (Ctrl+Z)'), function () { stepBack() })
+    var redoBtn = button(histSeg, tx('editor.redo', 'Redo'),
+      tx('editor.redoTip', 'Redo  (Ctrl+Y)'), function () { stepForward() })
 
-    var zoomGroup = group(tools, tx('editor.zoom', 'Zoom'))
-    button(zoomGroup, '-', null, function () { zoomBy(0.5) })
+    var zoomSeg = cluster(tools, tx('editor.zoom', 'Zoom'))
+    button(zoomSeg, '-', null, function () { zoomBy(0.5) })
     var zoomVal = document.createElement('span')
     zoomVal.className = 'zoomval'
-    zoomGroup.appendChild(zoomVal)
-    button(zoomGroup, '+', null, function () { zoomBy(2) })
-    button(zoomGroup, '1:1', null, function () { setZoom(1); centreView(); render(); refreshTools() })
-    button(zoomGroup, tx('editor.fit', 'Fit'), null, function () { fitView(); render(); refreshTools() })
+    zoomSeg.appendChild(zoomVal)
+    button(zoomSeg, '+', null, function () { zoomBy(2) })
+    button(zoomSeg, '1:1', null, function () { setZoom(1); centreView(); render(); refreshTools() })
+    button(zoomSeg, tx('editor.fit', 'Fit'), null, function () { fitView(); render(); refreshTools() })
 
-    var shapeGroup = group(tools, tx('editor.shape', 'Shape'))
-    button(shapeGroup, tx('editor.resize', 'Resize...'),
+    // --- the document operations, behind one control.
+    //
+    // All five are built here and stay built, shown or not. A menu that
+    // constructs itself on the way open is a menu whose contents only exist
+    // once somebody has already found it, and these five are the operations
+    // an author most needs to be able to go looking for.
+    var shapeBox = document.createElement('div')
+    shapeBox.className = 'shapeBox apart'
+    var shapeBtn = document.createElement('button')
+    shapeBtn.className = 'shapeBtn'
+    shapeBtn.textContent = tx('editor.shape', 'Shape')
+    shapeBtn.setAttribute('aria-haspopup', 'true')
+    shapeBtn.setAttribute('aria-expanded', 'false')
+    shapeBtn.addEventListener('click', function () { setShapeMenu(!shapeOpen) })
+    var shapeMenu = document.createElement('div')
+    shapeMenu.className = 'shapeMenu'
+    shapeBox.appendChild(shapeBtn)
+    shapeBox.appendChild(shapeMenu)
+    tools.appendChild(shapeBox)
+
+    /** A menu entry: it does its thing, and the menu is done. */
+    var op = function (text, title, run) {
+      return button(shapeMenu, text, title, function () { setShapeMenu(false); run() })
+    }
+    op(tx('editor.resize', 'Resize...'),
       tx('editor.resizeTip', 'Change the map size, keeping what is painted anchored somewhere in it'),
       function () { openResize() })
-    var cropBtn = button(shapeGroup, tx('editor.crop', 'Crop'),
+    var cropBtn = op(tx('editor.crop', 'Crop'),
       tx('editor.cropTip', 'Cut the map down to the selection'),
       function () { cropToSelection() })
-    button(shapeGroup, tx('editor.mirrorX', 'Mirror ⇄'), null, function () { applyMirror('x') })
-    button(shapeGroup, tx('editor.mirrorY', 'Mirror ⇅'), null, function () { applyMirror('y') })
-    button(shapeGroup, tx('editor.shift', 'Shift...'),
+    op(tx('editor.mirrorX', 'Mirror ⇄'), null, function () { applyMirror('x') })
+    op(tx('editor.mirrorY', 'Mirror ⇅'), null, function () { applyMirror('y') })
+    op(tx('editor.shift', 'Shift...'),
       tx('editor.shiftTip', 'Move everything painted by a number of cells'),
       function () { openShift() })
 
-    var histGroup = group(tools, tx('editor.history', 'History'))
-    var panBtn = button(histGroup, tx('editor.pan', 'Pan'), null,
-      function () { panMode = !panMode; refreshTools() })
-    var undoBtn = button(histGroup, tx('editor.undo', 'Undo'),
-      tx('editor.undoTip', 'Undo  (Ctrl+Z)'), function () { stepBack() })
-    var redoBtn = button(histGroup, tx('editor.redo', 'Redo'),
-      tx('editor.redoTip', 'Redo  (Ctrl+Y)'), function () { stepForward() })
-
-    var checkGroup = group(tools, tx('editor.checkCap', 'Check'))
-    var checkBtn = button(checkGroup, tx('editor.check', 'Check map'),
+    var checkBox = document.createElement('div')
+    checkBox.className = 'cluster'
+    var checkCap = document.createElement('span')
+    checkCap.className = 'cap'
+    checkCap.textContent = tx('editor.checkCap', 'Check')
+    checkBox.appendChild(checkCap)
+    var checkBtn = button(checkBox, tx('editor.check', 'Check map'),
       tx('editor.checkTip', 'Read the map back and say what it will do to the player'),
       function () { runCheck(false) })
+    tools.appendChild(checkBox)
+
+    // A menu that can only be left by choosing something out of it is a trap;
+    // clicking anywhere else closes it, and so does Escape (see onKey). The
+    // guard is for the self-test's DOM, which has no document-level dispatch.
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('click', function (ev) {
+        if (!shapeOpen) return
+        var target = ev && ev.target
+        if (target && typeof shapeBox.contains === 'function' && shapeBox.contains(target)) return
+        setShapeMenu(false)
+      }, true)
+    }
 
     overlay._toolBtns = toolBtns
     overlay._brushBtns = brushBtns
-    overlay._layerBtns = layerBtns
-    overlay._eyeBtns = eyeBtns
     overlay._panBtn = panBtn
     overlay._undoBtn = undoBtn
     overlay._redoBtn = redoBtn
     overlay._cropBtn = cropBtn
     overlay._checkBtn = checkBtn
     overlay._zoomVal = zoomVal
+    overlay._shapeBtn = shapeBtn
+    overlay._shapeMenu = shapeMenu
+  }
+
+  /** Open or close the document-operations menu, and say which on the trigger. */
+  function setShapeMenu(open_) {
+    shapeOpen = !!open_
+    if (!overlay || !overlay._shapeMenu) return
+    overlay._shapeMenu.classList.toggle('open', shapeOpen)
+    overlay._shapeBtn.classList.toggle('on', shapeOpen)
+    overlay._shapeBtn.setAttribute('aria-expanded', shapeOpen ? 'true' : 'false')
   }
 
   /**
-   * The palette picker: the table's own groups, in the table's own order, with
-   * the table's own labels.
+   * The rail: what is being painted with, what there is to paint with, and
+   * which layer it lands on - in that order, top to bottom.
+   *
+   * The palette gets the room because it is the control reached for most
+   * often and had the least of it: one narrow column of fifteen-pixel squares
+   * under headings that scrolled away, so "which bucket is this" could only be
+   * answered by scrolling back up. It is now the tall part of the rail, the
+   * headings stay put while their own group scrolls, and a swatch is big
+   * enough to tell two pale yellows apart. One wide column rather than two,
+   * because the labels are the warning - "blocks until dug" is in one of them
+   * - and a second column would buy density by truncating exactly the words
+   * that must not be shortened.
    *
    * Only `paintable()` is offered, so the two colours that make the game give
    * up while loading a map cannot be reached from here at all - they stay in
@@ -935,11 +1156,61 @@
       })
     }
 
+    buildLayers(side)
+
     overlay._swatches = swatchBtns
     overlay._currentChip = chip
     overlay._currentLabel = label
     overlay._currentRgb = rgb
     overlay._layerHint = hint
+  }
+
+  /**
+   * The six layers, pinned to the foot of the rail.
+   *
+   * Each row is the name and its own visibility together, so "show me only the
+   * lights" is one click on the row it belongs to rather than a hunt along a
+   * line of loose dots. Which layer is active is carried by the row's left
+   * edge, its ground and its weight - three cues, none of them colour, so it
+   * reads the same in grayscale - and by aria-pressed, so it reads at all
+   * without eyes.
+   */
+  function buildLayers(side) {
+    var box = document.createElement('div')
+    box.className = 'layers'
+    var cap = document.createElement('span')
+    cap.className = 'cap'
+    cap.textContent = tx('editor.layers', 'Layer')
+    box.appendChild(cap)
+
+    var layerBtns = Object.create(null)
+    var layerRows = Object.create(null)
+    var eyeBtns = Object.create(null)
+    LAYERS.forEach(function (layer) {
+      var row = document.createElement('div')
+      row.className = 'layerRow'
+      var pick = button(row, tx('editor.layer.' + layer, LAYER_LABEL[layer]), null,
+        function () { setLayer(layer) })
+      pick.className = 'layerPick'
+      var eye = document.createElement('button')
+      eye.className = 'eye'
+      eye.setAttribute('aria-label', tx('editor.visibility', 'Show or hide this layer'))
+      eye.addEventListener('click', function () {
+        visible[layer] = !visible[layer]
+        refreshTools()
+        render()
+      })
+      row.appendChild(eye)
+      box.appendChild(row)
+      layerBtns[layer] = pick
+      layerRows[layer] = row
+      eyeBtns[layer] = eye
+    })
+
+    side.appendChild(box)
+    overlay._layerBtns = layerBtns
+    overlay._layerRows = layerRows
+    overlay._eyeBtns = eyeBtns
   }
 
   function buildIssues(issues) {
@@ -961,18 +1232,31 @@
 
   function refreshTools() {
     if (!overlay) return
+    // `aria-pressed` beside every one of these: the visual state is a plate
+    // that inverts or a row that raises, and neither of those reaches a screen
+    // reader on its own.
     TOOLS.forEach(function (spec) {
-      overlay._toolBtns[spec.id].classList.toggle('on', tool === spec.id)
+      var b = overlay._toolBtns[spec.id]
+      b.classList.toggle('on', tool === spec.id)
+      b.setAttribute('aria-pressed', tool === spec.id ? 'true' : 'false')
     })
-    overlay._brushBtns.forEach(function (b) { b.classList.toggle('on', b._size === brush) })
+    overlay._brushBtns.forEach(function (b) {
+      b.classList.toggle('on', b._size === brush)
+      b.setAttribute('aria-pressed', b._size === brush ? 'true' : 'false')
+    })
     LAYERS.forEach(function (layer) {
-      overlay._layerBtns[layer].classList.toggle('on', active === layer)
+      // The row carries the state, not the name inside it: the left edge, the
+      // ground and the weight all belong to the row the eye toggle sits in.
+      overlay._layerRows[layer].classList.toggle('on', active === layer)
+      overlay._layerBtns[layer].setAttribute('aria-pressed', active === layer ? 'true' : 'false')
       var eye = overlay._eyeBtns[layer]
       eye.classList.toggle('off', !visible[layer])
+      eye.setAttribute('aria-pressed', visible[layer] ? 'true' : 'false')
       // A glyph, not only a colour, so the state is readable without it.
       eye.textContent = visible[layer] ? '◉' : '◌'
     })
     overlay._panBtn.classList.toggle('on', panMode)
+    overlay._panBtn.setAttribute('aria-pressed', panMode ? 'true' : 'false')
     overlay._undoBtn.disabled = undo.depth() === 0
     overlay._redoBtn.disabled = redo.depth() === 0
     overlay._cropBtn.disabled = !selection || !xform
@@ -1114,6 +1398,7 @@
 
     var dw = Math.max(1, Math.round(doc.width * view.zoom))
     var dh = Math.max(1, Math.round(doc.height * view.zoom))
+    placePlate(dw, dh)
     for (var i = 0; i < LAYERS.length; i++) {
       var layer = LAYERS[i]
       if (!visible[layer]) continue
@@ -1122,16 +1407,37 @@
       ctx.drawImage(source, 0, 0, doc.width, doc.height, view.x, view.y, dw, dh)
     }
 
-    // The world's edge, so an empty map is still a rectangle you can see.
-    if (ctx.strokeRect) {
-      ctx.strokeStyle = 'rgba(100,116,139,.6)'
-      ctx.lineWidth = 1
-      ctx.strokeRect(view.x - 0.5, view.y - 0.5, dw + 1, dh + 1)
-    }
-
     drawSpawnMarker(ctx)
     drawSelection(ctx)
     drawBand(ctx)
+  }
+
+  /**
+   * Put the world's own rectangle under the view, at the size and place the
+   * map is drawn.
+   *
+   * This is the answer to "where does my map stop", and it is a piece of the
+   * page rather than a stroke on the canvas for one reason: the view canvas is
+   * read back - by the spawn check, and by anything else asking what is on
+   * screen - and a frame or a scrim painted onto it is indistinguishable there
+   * from terrain an author painted. Behind the canvas it can be as definite as
+   * it likes: the checkerboard is the world's ground and stops at its edge, so
+   * outside the map is flat and dark, a hairline separates the two, and the
+   * four corner marks state the extent outright.
+   */
+  function placePlate(dw, dh) {
+    var plate = overlay._plate
+    if (!plate) return
+    plate.style.display = 'block'
+    plate.style.left = Math.round(view.x) + 'px'
+    plate.style.top = Math.round(view.y) + 'px'
+    plate.style.width = dw + 'px'
+    plate.style.height = dh + 'px'
+  }
+
+  /** No document, no world: the frame must not outlive the map it framed. */
+  function hidePlate() {
+    if (overlay && overlay._plate) overlay._plate.style.display = 'none'
   }
 
   /** Screen position of a cell corner. */
@@ -1987,6 +2293,9 @@
     if (!isOpen) return
     if (ev.key === 'Escape') {
       ev.preventDefault()
+      // Innermost first, so a menu or a dialog is dismissed rather than the
+      // whole editor closing out from under whatever was open on top of it.
+      if (shapeOpen) { setShapeMenu(false); return }
       if (overlay && overlay._dialog) { closeDialog(); return }
       requestClose()
       return
@@ -2058,6 +2367,7 @@
       overlay._under.textContent = ''
       overlay._at.textContent = ''
       closeDialog()
+      setShapeMenu(false)
     }
     fitView()
     render()
@@ -2137,6 +2447,7 @@
     }
 
     doc = null
+    hidePlate()
     busy(tx('editor.loading', 'Loading map...'))
     return Promise.resolve(api.load(mapId)).then(function (raw) {
       var terrain = raw && raw.terrain
@@ -2194,6 +2505,7 @@
     isOpen = false
     escapeArmed = false
     closeDialog()
+    setShapeMenu(false)
     overlay.classList.toggle('open', false)
   }
 

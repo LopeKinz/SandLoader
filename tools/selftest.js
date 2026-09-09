@@ -8125,6 +8125,145 @@ check('a transform runs on all six layers at once, as one undo step', () => {
   })
 })
 
+// ------------------------------------------- the editor's controls, after
+// the toolbar was cut from three rows to one
+//
+// The redesign moved two things and hid five, and each of those moves is a way
+// for a control to quietly stop being reachable. These pin where the controls
+// went and that they still say what they said - not what they look like, which
+// is not a thing a test should have an opinion about.
+
+/** The button carrying exactly this text, ignoring captions that share it. */
+function mapUiButton(nodes, text) {
+  return nodes.find((e) => e.tagName === 'BUTTON' && e.textContent === text) || null
+}
+
+check('every drawing control is still on the toolbar, and the layers moved to the rail', () => {
+  const { S, dom } = bootEditor()
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Controls' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const tools = mapUiByClass(mapUiNodes(overlay), 'tools')[0]
+    const rail = mapUiByClass(mapUiNodes(overlay), 'rail')[0]
+    assert(tools && rail, 'the toolbar or the rail is gone from the editor')
+    const inTools = mapUiNodes(tools)
+    const inRail = mapUiNodes(rail)
+
+    // Every one of these words was written for a mapmaker holding a brush.
+    // "Box outline" is not "Outline" and "Eyedropper" is not "Pick": a label
+    // that shrank to fit a layout is a label that stopped saying what it does.
+    for (const label of ['Brush', 'Eraser', 'Fill', 'Line', 'Box', 'Box outline',
+      'Eyedropper', 'Select']) {
+      assert(mapUiButton(inTools, label), 'the ' + label + ' tool is not on the toolbar')
+    }
+    for (const size of ['1', '2', '4', '8']) {
+      assert(mapUiButton(inTools, size), 'brush size ' + size + ' is not on the toolbar')
+    }
+    for (const label of ['Pan', 'Undo', 'Redo', '-', '+', '1:1', 'Fit', 'Check map']) {
+      assert(mapUiButton(inTools, label), label + ' is not on the toolbar')
+    }
+
+    // Choosing a layer is a mode you set and leave, so it is not in the row a
+    // hand is in mid-stroke any more. Where it went is the claim worth
+    // pinning, because "still in the document somewhere" is not the same as
+    // "somewhere a person will find it".
+    for (const label of ['Terrain', 'Lights', 'Light tuning', 'Artifact markers',
+      'Zones', 'Backdrop']) {
+      const pick = mapUiButton(inRail, label)
+      assert(pick, 'the ' + label + ' layer is not in the rail')
+      assert(!mapUiButton(inTools, label), label + ' is still in the toolbar as well')
+
+      // Its visibility rides with its name rather than trailing behind it as a
+      // loose dot that belongs to whichever row you guess.
+      const eyes = (pick.parentNode.childNodes || []).filter((e) => mapUiHasClass(e, 'eye'))
+      assert(eyes.length === 1,
+        label + ' carries ' + eyes.length + ' visibility toggles instead of one')
+      assert(eyes[0].textContent === '◉', label + ' does not start out visible')
+    }
+
+    const eyeOf = (label) => mapUiButton(inRail, label).parentNode.childNodes
+      .filter((e) => mapUiHasClass(e, 'eye'))[0]
+    eyeOf('Lights').dispatch('click', { type: 'click' })
+    assert(eyeOf('Lights').textContent === '◌', 'hiding a layer did not change its own toggle')
+    assert(eyeOf('Terrain').textContent === '◉', 'hiding one layer hid another one too')
+    assert(eyeOf('Lights').getAttribute('aria-pressed') === 'false',
+      'a hidden layer does not say so anywhere but in its glyph')
+
+    // Selecting a layer shows it, because painting into a hidden layer is
+    // painting into nothing you can see.
+    mapUiButton(inRail, 'Lights').dispatch('click', { type: 'click' })
+    assert(eyeOf('Lights').textContent === '◉', 'choosing a hidden layer left it hidden')
+    return 'twenty toolbar controls where they were, six layers in the rail with their own toggles'
+  })
+})
+
+check('the five document operations are still reachable behind the one control', () => {
+  // Resize, crop, mirror and shift are used once or twice in a map's life and
+  // each one moves every pixel of all six layers, so they went behind one
+  // control rather than sitting beside Brush at the same size. Hiding
+  // something is the easiest way to lose it: this is the check that it is
+  // still there, still does the work, and can still be got out of.
+  const harness = require('./dom-harness')
+  const { S, dom } = bootEditor()
+
+  return S.mapEditor.open(null, { width: MAPUI_W, height: MAPUI_H, name: 'Ops' }).then(() => {
+    const overlay = dom.document.getElementById('smln-mapedit')
+    const nodes = mapUiNodes(overlay)
+    const trigger = mapUiByClass(nodes, 'shapeBtn')[0]
+    const menu = mapUiByClass(nodes, 'shapeMenu')[0]
+    assert(trigger && menu, 'the document-operations control is gone')
+    assert(trigger.textContent === 'Shape',
+      'the control lost its label: ' + JSON.stringify(trigger.textContent))
+
+    const held = menu.childNodes.map((e) => e.textContent)
+    for (const label of ['Resize...', 'Crop', 'Mirror ⇄', 'Mirror ⇅', 'Shift...']) {
+      assert(held.indexOf(label) >= 0,
+        label + ' is not behind the Shape control: ' + JSON.stringify(held))
+    }
+    assert(held.length === 5,
+      'something else moved in beside the document operations: ' + JSON.stringify(held))
+
+    // Shut until it is asked for, and it says which it is where a screen
+    // reader can hear it rather than only in how it is drawn.
+    assert(!menu.classList.contains('open'), 'the menu is open before anything opened it')
+    assert(trigger.getAttribute('aria-expanded') === 'false',
+      'a shut menu claims to be open')
+    trigger.dispatch('click', { type: 'click' })
+    assert(menu.classList.contains('open'), 'the Shape control does not open its menu')
+    assert(trigger.getAttribute('aria-expanded') === 'true',
+      'an open menu does not say it is open')
+
+    // And they still operate. Mirror is the one that needs no dialog, so it is
+    // the one that proves the wiring survived the move in a single click.
+    const layers = mapUiLayers(dom, MAPUI_W, MAPUI_H)
+    const view = mapUiByClass(nodes, 'view')[0]
+    view.dispatch('mousedown', harness.mouseEvent('mousedown', mapUiCentre(harness)))
+    dom.window.emit('mouseup', {})
+    const before = Array.from(layers[0]._data().pixels)
+
+    menu.childNodes.find((e) => e.textContent === 'Mirror ⇄').dispatch('click', { type: 'click' })
+    const after = layers[0]._data().pixels
+    for (let y = 0; y < MAPUI_H; y++) {
+      for (let x = 0; x < MAPUI_W; x++) {
+        const src = (y * MAPUI_W + x) * 4
+        const dst = (y * MAPUI_W + (MAPUI_W - 1 - x)) * 4
+        assert(after[dst] === before[src] && after[dst + 3] === before[src + 3],
+          'mirroring from the menu did not move terrain at ' + x + ', ' + y)
+      }
+    }
+    assert(!menu.classList.contains('open'), 'the menu stayed open after an operation ran')
+
+    // A menu that can only be left by choosing something out of it is a trap,
+    // and Escape must not take the whole editor with it.
+    trigger.dispatch('click', { type: 'click' })
+    assert(menu.classList.contains('open'), 'the menu did not open a second time')
+    dom.window.key({ key: 'Escape' })
+    assert(!menu.classList.contains('open'), 'Escape left the menu open')
+    assert(S.mapEditor.isOpen(), 'Escape closed the whole editor instead of the menu on top of it')
+    return 'five operations behind one control, still mirroring, and dismissable without leaving'
+  })
+})
+
 check('undo restores exactly the rectangle a tool reported dirty', () => {
   // mapeditor-tools.js returns a rectangle bounding exactly the bytes it
   // changed, and the editor's contract is to repaint and record from that and
