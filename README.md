@@ -1383,7 +1383,7 @@ An honest list:
 
 ### 0.4.0
 
-Verified against Sandustry 0.5.6. Self-test: 284 checks (+154) — **281 passing, 3
+Verified against Sandustry 0.5.6. Self-test: 290 checks (+160) — **287 passing, 3
 failing on purpose** (see the end of this entry).
 
 This run is about the game moving out from under the loader, and about what a mod
@@ -1908,7 +1908,7 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.4.0**, verified against **Sandustry 0.5.6**. Self-test: **281 passing,
+SandLoader **0.4.0**, verified against **Sandustry 0.5.6**. Self-test: **287 passing,
 3 known failures** — two host-ABI checks that assert the host still offers a loader
 slot and a `startGame` API, and one bundled third-party mod call this build cannot
 answer. They are red on purpose: they are how the project notices the host changing

@@ -238,9 +238,9 @@ setTimeout(() => {
   // ---- content sanity
   const text = doc.body.textContent;
   ok('states the self-test figure that the self-test actually prints',
-     /281 passing/.test(text) && /3 known failures/.test(text));
+     /287 passing/.test(text) && /3 known failures/.test(text));
   ok('does not claim an all-green self-test',
-     !/(281|282|284)\s*\/\s*(281|282|284)/.test(text));
+     !/(287|288|290)\s*\/\s*(287|288|290)/.test(text));
   ok('says why the three failures are expected',
      /loader slot/.test(text) && /startGame/.test(text) &&
      /player\.inventory\.addFromId/.test(text));
