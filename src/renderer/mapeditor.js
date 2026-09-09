@@ -347,15 +347,22 @@
     'padding:13px 20px;border-bottom:1px solid rgba(100,116,139,.34);background:#070b10}',
     '#smln-mapedit h2{margin:0;font-size:16px;font-weight:700;letter-spacing:.16em;',
     'text-transform:uppercase;color:#ffe700;line-height:1;flex:none}',
-    // A field, not a caption that happens to be typeable: the resting rule
-    // says the name can be changed here before anything is hovered.
-    '#smln-mapedit .name{flex:1;min-width:0;background:transparent;color:#f1f5f9;font:inherit;',
-    'font-size:15px;border:1px solid transparent;border-bottom-color:rgba(100,116,139,.34);',
+    // A field the size of a name.
+    //
+    // Stretched across the masthead it was over twelve hundred pixels wide and
+    // its resting rule read as a line ruled across the header rather than as
+    // the underside of a box - so it is bounded on all four sides now, and
+    // sized to what goes in it. A longer name scrolls inside the field, which
+    // is what a field does; nothing is truncated and nothing is lost.
+    '#smln-mapedit .name{flex:0 1 340px;min-width:120px;background:transparent;color:#f1f5f9;',
+    'font:inherit;font-size:15px;border:1px solid rgba(100,116,139,.28);',
     'border-radius:0 4px 0 4px;padding:5px 8px}',
-    '#smln-mapedit .name:hover{border-color:rgba(100,116,139,.5)}',
+    '#smln-mapedit .name:hover{border-color:rgba(100,116,139,.55)}',
     '#smln-mapedit .name:focus{outline:none;border-color:rgba(255,231,0,.45)}',
-    '#smln-mapedit .dims{flex:none;color:#94a3b8;font-size:11.5px;letter-spacing:.06em;',
-    "font-family:'Cascadia Mono',Consolas,monospace}",
+    // The size and the way out ride the right-hand edge, so the masthead reads
+    // title, name - space - size, Close.
+    "#smln-mapedit .dims{flex:none;margin-left:auto;color:#94a3b8;font-size:11.5px;",
+    "letter-spacing:.06em;font-family:'Cascadia Mono',Consolas,monospace}",
 
     // --- toolbar: one row. The caption sits above its cluster rather than
     // beside it, which costs a few pixels of height and gives back the width
@@ -423,14 +430,14 @@
 
     // --- rail: what is being painted with, then what there is to paint with,
     // then which layer it lands on.
-    '#smln-mapedit .rail{flex:none;width:300px;display:flex;flex-direction:column;min-height:0;',
+    '#smln-mapedit .rail{flex:none;width:316px;display:flex;flex-direction:column;min-height:0;',
     'border-right:1px solid rgba(100,116,139,.34);background:#070b10}',
 
     // One line, and it stays one line: the label ellipsises rather than
     // wrapping to three rows of a rail that has a palette to fit.
-    '#smln-mapedit .current{flex:none;display:flex;align-items:center;gap:11px;padding:11px 14px;',
+    '#smln-mapedit .current{flex:none;display:flex;align-items:center;gap:11px;padding:9px 14px;',
     'border-bottom:1px solid rgba(100,116,139,.28)}',
-    '#smln-mapedit .current .chip{flex:none;width:24px;height:24px;',
+    '#smln-mapedit .current .chip{flex:none;box-sizing:border-box;width:24px;height:24px;',
     'border:1px solid rgba(226,232,240,.5);border-radius:0 4px 0 4px}',
     '#smln-mapedit .current .who{flex:1;min-width:0;display:flex;align-items:baseline;gap:10px}',
     '#smln-mapedit .current .who b{flex:1;min-width:0;font-size:12.5px;font-weight:700;',
@@ -438,8 +445,13 @@
     '#smln-mapedit .current .who span{flex:none;color:#64748b;font-size:10.5px;white-space:nowrap;',
     "font-family:'Cascadia Mono',Consolas,monospace;letter-spacing:.04em}",
 
-    '#smln-mapedit .paletteKey{flex:none;padding:9px 14px 8px;color:#94a3b8;font-size:11px;',
-    'line-height:1.45;border-bottom:1px solid rgba(100,116,139,.2)}',
+    // Said once, and it scrolls away like anything else said once. It is the
+    // first thing in the palette's own scroller rather than a block above it,
+    // so it is read on the way in and then stops spending rail height that the
+    // colours need - and the first group heading, being sticky, covers it as
+    // soon as there is something better to look at.
+    '#smln-mapedit .paletteKey{margin:0 -8px;padding:6px 14px;color:#94a3b8;font-size:10.5px;',
+    'line-height:1.35;border-bottom:1px solid rgba(100,116,139,.2)}',
     '#smln-mapedit .swatches{flex:1;min-height:0;overflow-y:auto;padding:0 8px 14px}',
     '#smln-mapedit .swatches::-webkit-scrollbar{width:10px}',
     '#smln-mapedit .swatches::-webkit-scrollbar-track{background:transparent}',
@@ -453,12 +465,17 @@
     // stuck heading should be a band the height of its own words, not a band
     // with the gap above the group still inside it.
     'padding:5px 14px;border-bottom:1px solid rgba(100,116,139,.24)}',
+    // The chip sets the height of a row, so every pixel of padding around it is
+    // a pixel of a colour further down that nobody can see. The chip keeps its
+    // size; the air around it does not.
     '#smln-mapedit .swatch{display:flex;align-items:center;gap:10px;width:100%;text-align:left;',
-    'padding:5px 7px;margin-top:2px;font-size:11.5px;line-height:1.35;color:#cbd5e1;',
+    'padding:3px 7px;margin-top:2px;font-size:11.5px;line-height:1.3;color:#cbd5e1;',
     'border:1px solid transparent;border-left:3px solid transparent;border-radius:0}',
     '#smln-mapedit .swatch:hover{background:rgba(148,163,184,.09);color:#f1f5f9}',
     // Big enough to tell two pale yellows apart, which fifteen pixels was not.
-    '#smln-mapedit .swatch .chip{flex:none;width:26px;height:26px;',
+    // Border-box, so twenty-six is the whole square rather than the square
+    // plus a border the row then has to be tall enough to hold.
+    '#smln-mapedit .swatch .chip{flex:none;box-sizing:border-box;width:26px;height:26px;',
     'border:1px solid rgba(226,232,240,.35);border-radius:0 3px 0 3px}',
     '#smln-mapedit .swatch .txt{min-width:0;flex:1}',
     '#smln-mapedit .swatch.on{border-color:transparent;border-left-color:#e2e8f0;',
@@ -475,13 +492,16 @@
     // visibility beside its name instead of trailing a loose dot.
     '#smln-mapedit .layers{flex:none;border-top:1px solid rgba(100,116,139,.34);',
     'background:rgba(2,6,10,.55)}',
-    '#smln-mapedit .layers .cap{display:block;padding:10px 14px 7px}',
+    '#smln-mapedit .layers .cap{display:block;padding:8px 14px 5px}',
     '#smln-mapedit .layerRow{display:flex;align-items:stretch;',
     'border-left:3px solid transparent;border-top:1px solid rgba(100,116,139,.14)}',
     '#smln-mapedit .layerRow:hover{background:rgba(148,163,184,.06)}',
     '#smln-mapedit .layerRow.on{border-left-color:#e2e8f0;background:rgba(226,232,240,.08)}',
+    // A name and a toggle need twenty-seven pixels, not thirty-three. Six rows
+    // of a list you set once should not hold a third of the rail while the
+    // palette - which is touched on every stroke - shows a fifth of itself.
     '#smln-mapedit .layerPick{flex:1;text-align:left;border:0;border-radius:0;background:transparent;',
-    'padding:7px 11px;font-size:12px;color:#cbd5e1}',
+    'padding:4px 11px;font-size:12px;color:#cbd5e1}',
     '#smln-mapedit .layerPick:hover{background:transparent;color:#f1f5f9}',
     '#smln-mapedit .layerRow.on .layerPick{color:#f8fafc;font-weight:700}',
     '#smln-mapedit .eye{flex:none;width:36px;border:0;border-radius:0;background:transparent;',
@@ -1092,21 +1112,25 @@
     current.appendChild(who)
     side.appendChild(current)
 
+    var swatches = document.createElement('div')
+    swatches.className = 'swatches'
+    side.appendChild(swatches)
+
     // Said once, plainly, and nowhere else. A colour here is the code the map
     // format stores, not the material's appearance - the indestructible one is
     // bright red and the diggable one is pure black - and the view deliberately
     // does not show what the world will look like either. One line is the whole
     // remedy: this file does not know any material's real appearance and must
     // not invent one.
+    //
+    // It goes inside the palette's scroller rather than above it, as the first
+    // thing there. Said once means it can scroll away once it has been read,
+    // and a permanent block of it was fifty pixels of colours nobody could see.
     var codes = document.createElement('div')
     codes.className = 'paletteKey'
     codes.textContent = tx('editor.paletteCodes',
       'These squares are the codes the map format stores, not how the world will look.')
-    side.appendChild(codes)
-
-    var swatches = document.createElement('div')
-    swatches.className = 'swatches'
-    side.appendChild(swatches)
+    swatches.appendChild(codes)
 
     var hint = document.createElement('div')
     hint.className = 'layerHint'
