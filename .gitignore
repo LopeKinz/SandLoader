@@ -16,3 +16,8 @@ Fluxloader mods/
 
 # Subagent-driven-development scratch: ledger, briefs, review packages.
 .superpowers/
+
+# A scratch workspace that lives in this checkout and is not part of SandLoader.
+# Untracked by hand until now, which only held because nothing ever ran
+# `git add -A`. Naming it here is what actually keeps it out.
+mod-creator/
