@@ -72,6 +72,10 @@
   var warnedUnknownOwner = false
   var workerFlushTimer = null
 
+  /** Two different mods claiming one "type id"; one row per losing claim. */
+  var conflicts = []
+  var conflictSeen = Object.create(null)
+
   /** Content mirrored into the simulation workers by Sandustry's registries. */
   var WORKER_CONTENT = { matter: true, element: true, terrain: true, structure: true }
 
@@ -142,6 +146,79 @@
     return null
   }
 
+  // ------------------------------------------------- duplicate registrations
+  /*
+   * When two mods claim one id, the loader is the only thing that sees both.
+   * Left alone, the player gets a mod whose content is simply missing and no
+   * way to learn that another mod took its name.
+   *
+   * WHICH ONE IS IN EFFECT. Not an assumption - `execute()` above runs
+   * `duplicate()` before `job.run`, and a duplicate is rejected there, so the
+   * second claim never reaches FH at all. The registration already in the
+   * ledger is the one the game has. First claim wins; the later one is
+   * refused with E_DUPLICATE. Detection below only observes that; it does not
+   * change it. Reporting is the feature - flipping who wins would make this a
+   * second thing to debug.
+   */
+
+  /**
+   * Fire and forget, exactly like story-sdk's `report`: the Problems panel is
+   * where a player looks when a mod did not do what they expected, but a
+   * problem that cannot be filed must never disturb the registration path.
+   */
+  function reportConflict(modId, message) {
+    try { SMLN.log('warn', 'content conflict: ' + message) }
+    catch (_e) { /* logging must never throw */ }
+    try {
+      if (typeof SMLN.callMain !== 'function') return
+      var sent = SMLN.callMain('reportProblem', {
+        modId: modId, message: message, severity: 'warn',
+        code: 'E_CONTENT_CONFLICT', scope: 'content',
+      })
+      if (sent && typeof sent.catch === 'function') sent.catch(function () {})
+    } catch (_e) { /* the panel is a courtesy, never a dependency */ }
+  }
+
+  function conflictMessage(rec) {
+    return 'mods "' + rec.inEffect + '" and "' + rec.refused + '" both register the ' +
+      rec.type + ' "' + rec.id + '". ' + rec.inEffect + ' registered it first, so ' +
+      rec.inEffect + '\'s ' + rec.type + ' is the one in effect and ' + rec.refused +
+      '\'s was refused - that content is missing from the game. Disable one of the two ' +
+      'mods, or ask ' + rec.refused + '\'s author to rename its ' + rec.type + '.'
+  }
+
+  /**
+   * Record and report a losing claim. Returns the record, or null when there
+   * is nothing to say.
+   *
+   * Nothing here may throw: this runs inside the registration path, and a
+   * detector that took out a registration would be worse than the problem it
+   * reports.
+   */
+  function noteConflict(claimant, type, id) {
+    try {
+      var prior = registry[type + '\u0000' + id]
+      // No prior *mod* claim means the collision is with the game's own
+      // registry, which `duplicate()` already names. Nothing to attribute.
+      if (!prior) return null
+      // A mod re-registering its own id is its own business - it may well be
+      // a deliberate update - so it is not a conflict between mods.
+      if (prior.owner === claimant) return null
+
+      var seen = type + '\u0000' + id + '\u0000' + claimant
+      if (conflictSeen[seen]) return conflictSeen[seen]
+
+      var rec = { type: type, id: id, inEffect: prior.owner, refused: claimant, message: '' }
+      rec.message = conflictMessage(rec)
+      conflictSeen[seen] = rec
+      conflicts.push(rec)
+      reportConflict(claimant, rec.message)
+      return rec
+    } catch (_e) {
+      return null
+    }
+  }
+
   // ------------------------------------------------------------- the queue
   /**
    * Everything goes through here, before ready and after. `run` is called with
@@ -171,6 +248,7 @@
     if (job.register) {
       var dup = duplicate(job.modId, job.contentType, job.contentId, job.sandkitKey)
       if (dup) {
+        noteConflict(job.modId, job.contentType, job.contentId)
         job.reject(fail('E_DUPLICATE', job.modId, job.contentType, job.contentId, dup))
         return Promise.resolve()
       }
@@ -600,6 +678,34 @@
       failed: stats.failed,
       queued: queue.length,
       drained: drained,
+    }
+  }
+
+  /**
+   * Who is standing on whose id. Anyone can ask - the console's
+   * `content conflicts` is the player-facing form of this call.
+   *
+   * `ready` is the honest part. Registrations are queued and drained, so
+   * before `drain()` every ledger here is empty and an empty conflict list
+   * would read as a clean bill of health when in truth nothing has run yet.
+   * `ready` is true only once the queue has drained *and* something was
+   * actually registered or refused - i.e. once there has been something to
+   * have a conflict about. Until then, `count: 0` means "unknown", not "none".
+   */
+  root.conflicts = function () {
+    return {
+      ready: drained && queue.length === 0 && (stats.registered + stats.failed) > 0,
+      drained: drained,
+      queued: queue.length,
+      registered: stats.registered,
+      count: conflicts.length,
+      conflicts: conflicts.map(function (c) {
+        return {
+          type: c.type, id: c.id,
+          inEffect: c.inEffect, refused: c.refused,
+          message: c.message,
+        }
+      }),
     }
   }
   root.flush = function () { drain() }

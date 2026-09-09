@@ -672,16 +672,65 @@
     },
   })
 
+  /**
+   * "Did another mod take my id?" - the question a player has when a mod's
+   * content is simply absent, and the one thing only the loader can answer.
+   *
+   * The timing matters more than the list. Registrations are queued and
+   * drained at `game:ready`; asked before that, an empty ledger would read as
+   * "no conflicts" when it means "nothing has run". `ready` from
+   * SMLN.register.conflicts() is what separates the two, so a clean bill of
+   * health is only ever printed once there was something to have a conflict
+   * about.
+   */
+  function contentConflicts() {
+    var info = null
+    try {
+      if (SMLN.register && typeof SMLN.register.conflicts === 'function') {
+        info = SMLN.register.conflicts()
+      }
+    } catch (_) { /* fall through to the unavailable message */ }
+    if (!info) return ['the registration API is not installed, so nothing is tracking conflicts']
+
+    if (!info.drained) {
+      return ['content registration has not run yet (' + info.queued + ' queued) - ' +
+        'ask again once a world is loaded, or nothing has had the chance to collide']
+    }
+    if (!info.ready) {
+      return ['no mod content has been registered on this build, so there is nothing to conflict']
+    }
+    if (!info.count) {
+      return ['no content conflicts: ' + info.registered +
+        ' registration(s), every id claimed by exactly one mod']
+    }
+
+    var out = [info.count + ' content conflict(s), across ' + info.registered +
+      ' successful registration(s):']
+    info.conflicts.forEach(function (c) {
+      out.push('')
+      out.push('  ' + c.type + ' "' + c.id + '"  -  in effect: ' + c.inEffect +
+        ', refused: ' + c.refused)
+      out.push('  ' + c.message)
+    })
+    return out
+  }
+
   define({
     name: 'content',
-    summary: 'Content mods registered: elements, structures, items, tech',
+    summary: 'Content mods registered: elements, structures, items, tech, conflicts',
     usage: 'content [kind]',
     args: [{
       name: 'kind',
       optional: true,
-      values: function () { return ['elements', 'structures', 'items', 'terrains', 'matters', 'projectiles', 'misc', 'triggers', 'tech'] },
+      values: function () { return ['elements', 'structures', 'items', 'terrains', 'matters', 'projectiles', 'misc', 'triggers', 'tech', 'conflicts'] },
     }],
     run: function (a) {
+      // Conflicts come from SandLoader's own ledger, not the live state: the
+      // losing registration never reached the game, so sandkit.mods cannot
+      // show it. Answered before the state check for the same reason - it is
+      // worth asking even when no world is loaded.
+      if (a[0] === 'conflicts') return contentConflicts()
+
       var s = state()
       var reg = s && s.sandkit && s.sandkit.mods
       if (!reg) return ['no mod registry on the live state - is a world loaded?']
