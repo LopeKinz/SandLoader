@@ -169,6 +169,16 @@
         }
         return
       }
+      // One handle per registering mod, not one for all of them. The capture
+      // now records who called; before it did, everything arrived as corelib
+      // and a collision between two mods was invisible to the duplicate check,
+      // which only compares different owners.
+      var handles = Object.create(null)
+      function apiFor(rec) {
+        var who = (rec && rec.owner) || 'corelib'
+        if (!handles[who]) handles[who] = SMLN.register.as(who)
+        return handles[who]
+      }
       var api = SMLN.register.as('corelib')
       var elements = payload.elements || []
       var soils = payload.soils || []
@@ -234,17 +244,17 @@
       }
 
       for (var i = 0; i < elements.length; i++) {
-        hand(elements[i], api.element, 'element')
+        hand(elements[i], apiFor(elements[i]).element, 'element')
       }
 
       // Soils are mineable terrain in Sandustry's model, not elements.
       for (var j = 0; j < soils.length; j++) {
-        hand(soils[j], api.terrain, 'soil')
+        hand(soils[j], apiFor(soils[j]).terrain, 'soil')
       }
 
       // Blocks are structures here - the machines in the build inventory.
       for (var b = 0; b < blocks.length; b++) {
-        hand(blocks[b], api.structure, 'block')
+        hand(blocks[b], apiFor(blocks[b]).structure, 'block')
       }
 
       // Tech nodes go through the Sandkit shim rather than SMLN.register:

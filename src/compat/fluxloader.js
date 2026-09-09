@@ -824,6 +824,12 @@ function loadElectronEntrypoints(mods, ctx, logger) {
         modLog[lvl](parts.map((x) => (typeof x === 'string' ? x : String(x))).join(' '))
       }
 
+      // Tell the content capture whose registrations these are. The shims are
+      // shared, so without this every element a dependent mod registers is
+      // filed under corelib and two mods claiming one id read as one mod
+      // claiming it twice - which conflict detection skips on purpose.
+      if (content && typeof content.setOwner === 'function') content.setOwner(mod.id)
+
       new vm.Script(source, { filename: entry }).runInContext(sandbox)
 
       // Swap corelib's content modules for capturing shims the instant corelib

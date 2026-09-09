@@ -67,6 +67,18 @@ function install(sandboxGlobal, opts) {
   const matterEnum = o.matterEnum || {}
   const corelib = sandboxGlobal && sandboxGlobal.corelib
   const captured = { elements: [], soils: [], blocks: [], tech: [], upgrades: [], recipes: [], unsupported: [] }
+
+  /*
+   * Which mod is registering right now.
+   *
+   * The shims are installed once, on the corelib object every fluxloader mod
+   * shares, so `opts.modId` is always the same string and says nothing about who
+   * is actually calling. The loader knows - it runs the entrypoints one at a
+   * time - so it sets this around each one. Without it every captured element
+   * belongs to corelib, and two mods claiming one id look like one mod claiming
+   * it twice, which is the case conflict detection deliberately skips.
+   */
+  let owner = o.modId || 'corelib'
   const reasons = []
 
   if (!corelib || typeof corelib !== 'object') {
@@ -74,7 +86,7 @@ function install(sandboxGlobal, opts) {
   }
 
   function note(kind, id, reason) {
-    captured.unsupported.push({ kind, id, reason })
+    captured.unsupported.push({ kind, id, reason, owner: owner })
     log && log.warn(`${kind} "${id}" was not registered: ${reason}`)
   }
 
@@ -111,7 +123,7 @@ function install(sandboxGlobal, opts) {
         const r = translate.translateElement(config, matterEnum)
         if (!r.ok) { note('element', safeId(config), r.reason) }
         else {
-          captured.elements.push({ id: r.def.id, def: r.def })
+          captured.elements.push({ id: r.def.id, def: r.def, owner: owner })
           log && log.debug(`captured element ${r.def.id}`)
         }
       } catch (e) {
@@ -127,7 +139,7 @@ function install(sandboxGlobal, opts) {
         const r = translate.translateSoil(config, matterEnum)
         if (!r.ok) { note('soil', safeId(config), r.reason) }
         else {
-          captured.soils.push({ id: r.def.id, def: r.def })
+          captured.soils.push({ id: r.def.id, def: r.def, owner: owner })
           log && log.debug(`captured soil ${r.def.id}`)
         }
       } catch (e) {
@@ -154,7 +166,7 @@ function install(sandboxGlobal, opts) {
       try {
         const r = translate.translateBlock(config)
         if (!r.ok) { note('block', safeId(config), r.reason); return false }
-        captured.blocks.push({ id: r.def.id, def: r.def })
+        captured.blocks.push({ id: r.def.id, def: r.def, owner: owner })
         log && log.debug(`captured block ${r.def.id}`)
       } catch (e) {
         note('block', safeId(config), `reading the block definition threw: ${e && e.message}`)
@@ -179,7 +191,7 @@ function install(sandboxGlobal, opts) {
         const r = translate.translateTech(config)
         if (!r.ok) { note('tech', safeId(config), r.reason) }
         else {
-          captured.tech.push({ id: r.def.id, def: r.def })
+          captured.tech.push({ id: r.def.id, def: r.def, owner: owner })
           log && log.debug(`captured tech node ${r.def.id}`)
         }
       } catch (e) {
@@ -208,7 +220,7 @@ function install(sandboxGlobal, opts) {
           const r = translate.translateUpgrade(kind, config)
           if (!r.ok) { note('upgrade', safeId(config), r.reason) }
           else {
-            captured.upgrades.push({ id: r.def.id, kind, def: r.def })
+            captured.upgrades.push({ id: r.def.id, kind, def: r.def, owner: owner })
             log && log.debug(`captured upgrade ${kind} ${r.def.id}`)
           }
         } catch (e) {
@@ -258,7 +270,7 @@ function install(sandboxGlobal, opts) {
         try {
           id = safeRecipeId(config, fn)
           const r = translate.translateRecipe(fn, config)
-          if (r.ok) captured.recipes.push({ id, kind: r.kind, def: r.def })
+          if (r.ok) captured.recipes.push({ id, kind: r.kind, def: r.def, owner: owner })
           else note('recipe', id, r.reason)
         } catch (e) {
           note('recipe', id, `reading the recipe definition threw: ${e && e.message}`)
@@ -270,7 +282,11 @@ function install(sandboxGlobal, opts) {
     }
   }
 
-  return { ok: true, captured, reasons }
+  return {
+    ok: true, captured, reasons,
+    /** The loader calls this around each entrypoint; see `owner` above. */
+    setOwner: function (id) { if (typeof id === 'string' && id) owner = id },
+  }
 }
 
 module.exports = { install, shouldSuppress, SUPPRESSED_PREFIXES }
