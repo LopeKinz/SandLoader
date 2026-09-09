@@ -163,10 +163,16 @@ var SPEC = {
    * Stage two: the caves cut into that ground.
    */
   caves: {
-    // How much of the underground starts as open space before smoothing. Around
-    // 0.45 is where cellular smoothing usually settles into rooms rather than
-    // either static or a solid block; below 0.2 expect almost nothing.
-    caveDensity: { kind: 'fraction', def: 0.44, min: 0, max: 0.90 },
+    // How much of the underground ends up as open cave, as a fraction of every
+    // cell below the surface. A target, not a starting condition: the carver
+    // solves for it, so 0.10 really does come back as about a tenth.
+    //
+    // It used to say 0.44 and mean the noise fill before smoothing. The carver
+    // was rewritten to take a target instead, and the two meanings differ by
+    // about four times - so the old number, read under the new meaning, hollowed
+    // out 41% of the ground. Caught only when the two modules were finally run
+    // together, which is the whole argument for a composition test.
+    caveDensity: { kind: 'fraction', def: 0.10, min: 0, max: 0.45 },
     // How many smoothing rounds turn that noise into rooms. More rounds mean
     // fewer, rounder, larger caverns.
     smoothingPasses: { kind: 'int', def: 4, min: 0, max: 12 },
@@ -660,7 +666,7 @@ var PRESETS = deepFreeze({
         hardLayerDepth: 180,
       },
       caves: {
-        caveDensity: 0.46,
+        caveDensity: 0.05,
         smoothingPasses: 5,
         minCaveSize: 120,
         minDepthBelowSurface: 24,
@@ -692,7 +698,7 @@ var PRESETS = deepFreeze({
         hardLayerDepth: 70,
       },
       caves: {
-        caveDensity: 0.40,
+        caveDensity: 0.12,
         smoothingPasses: 2,
         minCaveSize: 30,
         minDepthBelowSurface: 8,
@@ -726,7 +732,7 @@ var PRESETS = deepFreeze({
         hardLayerDepth: 400,
       },
       caves: {
-        caveDensity: 0.55,
+        caveDensity: 0.3,
         smoothingPasses: 6,
         minCaveSize: 40,
         minDepthBelowSurface: 6,
@@ -761,7 +767,7 @@ var PRESETS = deepFreeze({
         hardLayerDepth: 90,
       },
       caves: {
-        caveDensity: 0.12,
+        caveDensity: 0.015,
         smoothingPasses: 8,
         minCaveSize: 400,
         minDepthBelowSurface: 40,

@@ -278,7 +278,7 @@ function testClamping() {
     [{ shape: { surfaceAmplitude: -50 } }, 'shape', 'surfaceAmplitude', 0],
     [{ shape: { floorThickness: 1e9 } }, 'shape', 'floorThickness', 512],
     [{ shape: { topsoilDepth: 7.6 } }, 'shape', 'topsoilDepth', 8],
-    [{ caves: { caveDensity: 2 } }, 'caves', 'caveDensity', 0.9],
+    [{ caves: { caveDensity: 2 } }, 'caves', 'caveDensity', 0.45],
     [{ caves: { smoothingPasses: 999 } }, 'caves', 'smoothingPasses', 12],
     [{ caves: { smoothingPasses: -4 } }, 'caves', 'smoothingPasses', 0],
     [{ caves: { tunnelWidth: 0 } }, 'caves', 'tunnelWidth', 1],
@@ -419,9 +419,14 @@ function testPresets() {
     assert(set.size === names.length,
       'every preset would have to differ in ' + path + ', but ' + (names.length - set.size) + ' agree')
   }
+  // A ratio, not a difference. This once demanded max - min > 0.3, which was
+  // calibrated to caveDensity when it meant a noise fill on a 0..0.9 scale. The
+  // knob now means the fraction of ground actually hollowed, on a 0..0.45
+  // scale, and an absolute threshold measures the scale rather than the
+  // spread - the same mistake a ratio assertion made elsewhere in this repo.
   const densities = values('caves.caveDensity')
-  assert(Math.max.apply(null, densities) - Math.min.apply(null, densities) > 0.3,
-    'the presets all carve about the same number of caves, so they are variations of one world')
+  assert(Math.max.apply(null, densities) / Math.min.apply(null, densities) > 4,
+    'the presets all carve about the same share of caves, so they are variations of one world')
 
   assert(Object.isFrozen(params.PRESETS), 'PRESETS is not frozen')
 }
