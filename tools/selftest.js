@@ -9184,3 +9184,37 @@ check('every key the permission panels ask for exists in both locales', () => {
 
   return asked.size + ' keys asked for, every one answered in both locales'
 })
+
+check('the mods overlay has no string that silently stays English', () => {
+  // tx() falls back to an English literal when a key is missing, so a missing
+  // key is invisible in development and permanent for everyone playing in
+  // another language. Nine of these shipped, including every dependency
+  // warning - the messages a confused player needs most.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'modsui.js'), 'utf8')
+  const locales = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'locales.js'), 'utf8')
+
+  const asked = new Set()
+  const call = /\btx\(\s*'([a-z][\w.]*)'\s*[,)]/g
+  let m
+  while ((m = call.exec(src))) asked.add(m[1])
+  assert(asked.size > 40, 'found ' + asked.size + ' tx() keys - the scan is broken, not the code')
+
+  const missing = []
+  for (const key of asked) {
+    const rows = locales.split('\n').filter((l) => l.includes("'" + key + "'"))
+    if (rows.length < 2) missing.push(key + ' (in ' + rows.length + ' locale(s))')
+  }
+  assert(!missing.length,
+    'these would show English to every other language: ' + missing.join(', '))
+
+  // The two independent chips a row can carry must not read as one sentence.
+  // "needs approval" beside "needs: corelib" is what shipped.
+  const dep = locales.split('\n').filter((l) => l.includes("'mods.depsMissing'"))
+  for (const row of dep) {
+    assert(!/'\s*needs:/.test(row),
+      'the dependency chip says "needs:" again beside "needs approval": ' + row.trim())
+  }
+  return asked.size + ' keys asked for, every one answered in both locales'
+})

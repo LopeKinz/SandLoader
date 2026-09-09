@@ -856,7 +856,7 @@
         var dep = document.createElement('span')
         dep.className = 'state warn'
         var names = required.map(describe).join(', ')
-        dep.textContent = '   ' + tx('mods.depsMissing', 'needs: ' + names, { list: names })
+        dep.textContent = '   ' + tx('mods.depsMissing', 'requires: ' + names, { list: names })
         dep.title = tx('mods.depsMissingHint',
           'This mod requires other mods that are not available, so it will not load. ' +
           'Install or enable them, then reload.')
