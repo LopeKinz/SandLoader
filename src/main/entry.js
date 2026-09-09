@@ -55,6 +55,7 @@ const watcher = require('../mods/watcher')
 const customMaps = require('../mods/custom-maps')
 const interceptor = require('./interceptor')
 const { corePatches, workerPatches } = require('../patch/core-patches')
+const patchEngine = require('../patch/engine')
 const autoheal = require('../patch/autoheal')
 const prelude = require('../renderer/prelude')
 const enums = require('../game/enums')
@@ -1220,7 +1221,42 @@ async function handleRpc(msg) {
 }
 
 function addPatches(target, list) {
+  // Stamp the destination on each patch. The engine reports conflicts from
+  // inside a run, where all it has is the source text and the patch list - and
+  // "two mods rewrite the same place" is not a usable sentence without the
+  // name of the file. Only filled when absent, so a patch that declared its
+  // own target keeps it and re-queuing on a reload changes nothing.
+  for (const p of list) {
+    if (p && !p.target) p.target = target
+  }
   ;(runtime.patchesByFile[target] || (runtime.patchesByFile[target] = [])).push(...list)
+}
+
+/**
+ * Name any two mods that are about to fight over the same anchor.
+ *
+ * The cheapest of the three conflict checks and the only one knowable before
+ * anything is applied: it needs no source, just the queue. Runs once per
+ * launch, after every mod has contributed. The other two - a patch whose
+ * anchor another mod rewrote away, and two mods rewriting overlapping text -
+ * can only be seen while the file is actually being patched, and the engine
+ * reports those itself.
+ */
+function reportAnchorConflicts() {
+  try {
+    for (const [target, list] of Object.entries(runtime.patchesByFile)) {
+      for (const c of patchEngine.anchorConflicts(list, target)) {
+        // A warning, never an error: the mods may well both work. This says
+        // what is about to happen, it does not stop it happening.
+        note(new SmlnError('E_PATCH_CONFLICT', c.message,
+          { detail: { kind: c.kind, target: c.target, owners: c.owners, patches: c.patches } }),
+        'patch', c.modId || null, 'warn')
+      }
+    }
+  } catch (e) {
+    // Diagnosis failing must never be what stops a load.
+    runtime.logger.warn(`conflict preflight failed, continuing: ${e.message}`)
+  }
 }
 
 // ------------------------------------------------------------ mod assembly
@@ -1520,6 +1556,9 @@ function assemble() {
 
   // ---- re-resolve the hooks if the game changed under us
   verifyAnchors()
+
+  // ---- say who is about to fight whom over the same anchor
+  reportAnchorConflicts()
 
   const total = Object.values(runtime.patchesByFile).reduce((n, l) => n + l.length, 0)
   const summary = problems.summary()
