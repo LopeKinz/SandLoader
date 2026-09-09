@@ -402,6 +402,20 @@
           { width: limits.minWidth, height: limits.minHeight })
         return
       }
+      // The upper bound is memory, not the game's per-axis limit, so it is a
+      // cell count: 16383 on both axes at once would be 268 million cells and
+      // could not open anywhere. Measured, the editor manages 32 million and is
+      // one step from failing there, so the cap is half of that.
+      if (limits.maxCells && w * h > limits.maxCells) {
+        hint.className = 'hint err'
+        hint.textContent = tx('maps.newTooBig',
+          'That is ' + Math.round(w * h / 1e6) + ' million cells. The editor holds six ' +
+          'layers plus a display copy and stops at ' + Math.round(limits.maxCells / 1e6) +
+          ' million - about ' + Math.round(Math.sqrt(limits.maxCells)) + ' by ' +
+          Math.round(Math.sqrt(limits.maxCells)) + ', or 8000 by 2000.',
+          { cells: Math.round(limits.maxCells / 1e6) })
+        return
+      }
       closePrompt()
       edit(null, { width: w, height: h, name: nameInput.value })
     })

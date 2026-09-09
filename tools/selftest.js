@@ -9497,3 +9497,32 @@ check('nothing invisible sits over the canvas when the editor is idle', () => {
 
   return 'busy() hides itself, [hidden] wins over display:flex, and it starts hidden'
 })
+
+check('the editor refuses a map bigger than it can hold, by cells not by axis', () => {
+  // 16383 is the game's per-axis limit - a Uint16 carries a shared mouse
+  // position - and the editor advertised it as its own. Both axes at once is
+  // 268 million cells, and the editor holds six layers plus a display copy.
+  // Measured: 8000x4000, 32 million cells, opened in 5.0 s and saved a 4.4 MB
+  // file, while driving the renderer to 1.78 GB resident and a 3.08 GB peak.
+  // It worked and was one step from not working.
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'mapeditor.js'), 'utf8')
+  const m = src.match(/var MAX_CELLS = (\d+)/)
+  assert(m, 'the editor has no total-cell ceiling, only a per-axis one')
+  const cap = Number(m[1])
+  assert(cap < 16383 * 16383,
+    'the cell cap allows the per-axis limit on both axes - 268 million cells')
+  assert(cap >= 4000000, 'the cell cap is so low it forbids ordinary large maps: ' + cap)
+
+  assert(/maxCells: MAX_CELLS/.test(src), 'limits() does not report the cell ceiling')
+  assert(/w \* h > MAX_CELLS/.test(src), 'the resize dialog does not enforce the ceiling')
+
+  const maps = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'renderer', 'mapsui.js'), 'utf8')
+  assert(/limits\.maxCells && w \* h > limits\.maxCells/.test(maps),
+    'the new-map dialog does not enforce the ceiling, so the first map made can be too big')
+  // Refusing without a number teaches nothing: the author retypes the same size.
+  assert(/million cells/.test(maps),
+    'the new-map refusal never says how many cells were asked for')
+  return 'capped at ' + Math.round(cap / 1e6) + ' million cells, enforced in both dialogs'
+})

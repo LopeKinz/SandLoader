@@ -159,6 +159,27 @@
    * is a Uint16 problem.
    */
   var MAX_SIZE = 16383
+
+  /*
+   * A ceiling on total cells, which is a different thing from the per-axis one.
+   *
+   * 16383 is the game's limit: a Uint16 carries a shared mouse position. The
+   * editor's limit is memory, and it does not care about shape - it holds six
+   * canvases plus a derived display canvas, so a map costs about 28 bytes a
+   * cell before a single PNG is encoded.
+   *
+   * Measured on this machine (16 GB, i9-13900H) rather than reasoned about:
+   * 8000x4000 - 32 million cells - opened in 5.0 s, filled in 1.6 s, checked in
+   * 2.4 s and saved a 4.4 MB file in 3.7 s. It also drove the renderer process
+   * to 1.78 GB resident with a 3.08 GB peak and left 2.1 GB of system memory
+   * free. It worked, and it was one step from not working. Accepting the
+   * per-axis limit on both axes at once would be 268 million cells, eight times
+   * that, which cannot work anywhere.
+   *
+   * So the cap is half of what was measured to work, which still allows
+   * 4000x4000 or 8000x2000, and refuses with the number rather than freezing.
+   */
+  var MAX_CELLS = 16000000
   var DEFAULT_SIZE = { width: 640, height: 400 }
 
   /**
@@ -2034,6 +2055,14 @@
       var bad = []
       if (!isFinite(w) || w < MIN_WIDTH || w > MAX_SIZE) bad.push(widthInput)
       if (!isFinite(h) || h < MIN_HEIGHT || h > MAX_SIZE) bad.push(heightInput)
+      if (!bad.length && w * h > MAX_CELLS) {
+        refuseResize(tx('editor.tooManyCells',
+          'That is ' + Math.round(w * h / 1e6) + ' million cells. The editor holds six' +
+          ' layers plus a display copy, so it stops at ' + Math.round(MAX_CELLS / 1e6) +
+          ' million - about ' + Math.round(Math.sqrt(MAX_CELLS)) + ' x ' +
+          Math.round(Math.sqrt(MAX_CELLS)) + ', or 8000 x 2000.'), [widthInput, heightInput])
+        return
+      }
       if (bad.length) {
         refuseResize(tx('editor.resizeRefused',
           'Between ' + MIN_WIDTH + ' × ' + MIN_HEIGHT + ' and ' + MAX_SIZE + ' × ' + MAX_SIZE +
@@ -2670,6 +2699,7 @@
         minWidth: MIN_WIDTH,
         minHeight: MIN_HEIGHT,
         maxSize: MAX_SIZE,
+        maxCells: MAX_CELLS,
         defaultWidth: DEFAULT_SIZE.width,
         defaultHeight: DEFAULT_SIZE.height,
         reason: minimumSentence(),
