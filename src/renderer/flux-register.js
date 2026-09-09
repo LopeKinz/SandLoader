@@ -273,12 +273,12 @@
       // namespace is read-only (getLevel / getAvailableLevel), and the bundle
       // contains no upgrade registration function at all - unlike structures
       // (registerStructure) and tech (addTechDefinition), both verified
-      // present on 0.5.5. So this is a real gap in the game, not a gap in the
+      // present on 0.5.6. So this is a real gap in the game, not a gap in the
       // bridge, and it is reported once with the count rather than pretending
       // per entry.
       if (upgrades.length) {
         SMLN.log('warn', 'fluxloader: ' + upgrades.length + ' upgrade entr(ies) ' +
-          '(tabs, categories and upgrades) were not registered - Sandustry 0.5.5 ' +
+          '(tabs, categories and upgrades) were not registered - Sandustry 0.5.6 ' +
           'exposes no way to add upgrades, so they cannot appear in the upgrade menu')
       }
 

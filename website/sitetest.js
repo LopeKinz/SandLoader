@@ -134,6 +134,30 @@ setTimeout(() => {
   ok('search finds the compatibility section', r0.length > 0,
      (r0[0] && r0[0].querySelector('.st').textContent) || '');
 
+  // ---- mission & story SDK
+  window.location.hash = '#/mods#missions';
+  window.dispatchEvent(new window.HashChangeEvent('hashchange'));
+  ok('missions & story section exists', !!doc.getElementById('missions'));
+  const storyTxt = doc.getElementById('view-mods').textContent;
+  ok('missions section names the scoped surface',
+     /SMLN\.forMod\(id\)\.story/.test(storyTxt));
+  ok('missions section says ids are namespaced',
+     /namespaced/i.test(storyTxt) && /example-missions:first-quota/.test(storyTxt));
+  ok('missions section covers all three cross-mod routes',
+     /requires:/.test(storyTxt) && /other\.mod:their-goal/.test(storyTxt) &&
+     /story\.emit/.test(storyTxt));
+  ok('missions section says why SandLoader ticks predicates itself',
+     /three event sites/.test(storyTxt));
+  ok('missions section says why completion is recorded separately',
+     /store\.smlnStory/.test(storyTxt));
+  ok('missions section admits the story half is unproven on screen',
+     /Not verified/i.test(storyTxt) && /portrait/i.test(storyTxt));
+  ok('missions section points at the example mod',
+     /mods\/example-missions/.test(storyTxt));
+  r0 = search0('objectives');
+  ok('search finds the missions section', r0.length > 0,
+     (r0[0] && r0[0].querySelector('.st').textContent) || '');
+
   // ---- theme toggle
   const before = doc.documentElement.getAttribute('data-theme');
   doc.getElementById('themeBtn').dispatchEvent(new window.MouseEvent('click', {bubbles:true}));
@@ -213,8 +237,14 @@ setTimeout(() => {
 
   // ---- content sanity
   const text = doc.body.textContent;
-  ok('states 159/159 self-test', /159\s*\/\s*159/.test(text));
-  ok('states 0.5.5 game version', /0\.5\.5/.test(text));
+  ok('states the self-test figure that the self-test actually prints',
+     /281 passing/.test(text) && /3 known failures/.test(text));
+  ok('does not claim an all-green self-test',
+     !/(281|282|284)\s*\/\s*(281|282|284)/.test(text));
+  ok('says why the three failures are expected',
+     /loader slot/.test(text) && /startGame/.test(text) &&
+     /player\.inventory\.addFromId/.test(text));
+  ok('states 0.5.6 game version', /Sandustry\s*0\.5\.6/.test(text));
   ok('no lorem/TODO text in copy', !/lorem ipsum|TODO|FIXME/i.test(text));
 
   console.log('\n' + (fail === 0 ? 'all site checks passed' : fail + ' FAILED'));

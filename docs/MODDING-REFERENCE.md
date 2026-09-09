@@ -14,6 +14,14 @@ Everything here was verified against **Sandustry 0.5.5** (Steam AppID 2764460).
 Where a number appears, it was measured from the real bundle or a real game
 start, not estimated.
 
+**Sandustry 0.5.6 has since shipped, and three things below changed with it:**
+the game's `main.js` no longer scans for a loader slot, so SandLoader attaches by
+taking over the `app.asar` name with the original renamed aside; a **recipe
+registry** exists where 0.5.5 had none; and the simulation worker's Sandkit is
+reachable through `SMLN.whenWorkerReady()`. The rest of this document has not
+been re-measured against 0.5.6 — where the two disagree, the
+[README](../README.md#changelog) is the current statement.
+
 ## Contents
 
 **The game**
@@ -774,9 +782,10 @@ copy. Only the game's own registration path reaches all of them.
 official for the Workshop and for running without SandLoader, Fluxloader for
 compatibility with what already exists.
 
-**4. Some things the game simply cannot do.** Upgrades and recipes have no
-registration function anywhere in 0.5.5. No loader can add one; the honest
-answer is to say so rather than fail quietly.
+**4. Some things the game simply cannot do.** Upgrades have no registration
+function anywhere in the bundle, on 0.5.5 or 0.5.6. No loader can add one; the
+honest answer is to say so rather than fail quietly. Recipes were in the same
+position until 0.5.6 added a registry — see the README.
 
 ---
 

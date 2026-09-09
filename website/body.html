@@ -2,7 +2,7 @@
   <a class="brand" href="#/" data-nav aria-label="SandLoader — home">
     <canvas id="brandmark" width="177" height="21" role="img" aria-label="SandLoader"></canvas>
   </a>
-  <span class="ver">0.3.4</span>
+  <span class="ver">0.4.0</span>
   <nav class="hnav" id="hnav">
     <a href="#/" data-nav data-view="home">Overview</a>
     <a href="#/docs" data-nav data-view="docs">Documentation</a>
@@ -35,12 +35,12 @@
   <section class="hero">
     <div class="hero-in">
       <canvas id="wordmark" aria-label="SandLoader"></canvas>
-      <h1>Mods for Sandustry, <em>without touching the game.</em></h1>
+      <h1>Mods for Sandustry, <em>without rewriting a file of it.</em></h1>
       <p class="lede">
         A mod loader with an in-game console, a mod manager, and support for existing
         <a href="https://fluxloader.app/">Fluxloader</a> mods. Patching happens in memory
-        while the game loads — so Steam's file verification stays green, and uninstalling
-        is deleting one folder.
+        while the game loads, so no file's content is ever modified and a game update
+        cannot leave a broken patched file behind. Uninstalling is one command.
       </p>
       <div class="cta">
         <a class="btn primary" href="#/docs" data-nav>
@@ -62,7 +62,7 @@
         </div>
       </div>
       <div class="trust">
-        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Zero game files modified</span>
+        <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> No game file rewritten</span>
         <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Steam · GOG · standalone</span>
         <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Windows · Linux · macOS</span>
         <span><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> MIT licensed</span>
@@ -74,7 +74,7 @@
     <div class="metric"><b>0</b><span>game files changed</span></div>
     <div class="metric"><b>79</b><span>API namespaces</span></div>
     <div class="metric"><b>1</b><span>patch to reach them</span></div>
-    <div class="metric"><b>123</b><span>self-tests passing</span></div>
+    <div class="metric"><b>281</b><span>self-tests passing</span></div>
     <div class="metric"><b>~50<span style="font-size:.5em"> ms</span></b><span>re-scan after update</span></div>
   </div></div></div>
 
@@ -225,11 +225,11 @@ i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pr
     <main class="doc">
       <h1>Documentation</h1>
       <p class="sub">Everything needed to install SandLoader, use it, and write mods for it.
-      Verified against Sandustry 0.5.5.</p>
+      Verified against Sandustry 0.5.6.</p>
 
       <h2 id="requirements">Requirements</h2>
       <div class="tablewrap"><table><tbody>
-        <tr><td><strong>Game</strong></td><td>Sandustry <strong>0.5.5</strong></td></tr>
+        <tr><td><strong>Game</strong></td><td>Sandustry <strong>0.5.6</strong></td></tr>
         <tr><td><strong>Branch</strong></td><td><strong>Vanilla only</strong> — Steam's default <code>public</code> branch. The experimental modded branch is <span class="pill no">not supported</span></td></tr>
         <tr><td><strong>Stores</strong></td><td>Steam, GOG, manual/standalone</td></tr>
         <tr><td><strong>OS</strong></td><td>Windows, Linux or macOS</td></tr>
@@ -248,7 +248,7 @@ i18n      upgrades  tools     energy   <span class="t-com">…</span></code></pr
           <dl>
             <dt>Steam branch</dt><dd><code>public</code> — the default, what you get unless you opted in</dd>
             <dt>Modding API</dt><dd>Legacy Sandkit — state-first calls such as <code>api.elements.createAt(state, …)</code></dd>
-            <dt>Status here</dt><dd>Built against it, verified against it, 159/159 self-tests green on 0.5.5</dd>
+            <dt>Status here</dt><dd>Built against it, verified against it, 281 self-tests passing on 0.5.6</dd>
           </dl>
         </div>
         <div class="branch no">
@@ -294,14 +294,16 @@ cd SandLoader</code></pre></div>
           <div class="codewrap"><pre><code>node install.js</code></pre></div>
           <div class="term" style="margin-top:.9rem">
             <div class="term-bar"><i></i><i></i><i></i><span>Steam install</span></div>
-            <pre><code>  <span class="t-com">game     </span> sandustry 0.5.5
+            <pre><code>  <span class="t-com">game     </span> sandustry 0.5.6
   <span class="t-com">at       </span> C:\Program Files (x86)\Steam\steamapps\common\Sandustry
   <span class="t-com">platform </span> steam (certain)  -  resources/steam_appid.txt
-  <span class="t-com">slot     </span> C:\...\workshop\content\2764460\smln
-  <span class="t-com">loader   </span> C:\...\sandloader\src\main\entry.js
+  <span class="t-com">attach   </span> asar-shadow-directory
+  <span class="t-com">attach   </span> C:\...\Sandustry\resources\app.asar
+  <span class="t-com">original </span> C:\...\Sandustry\resources\app.smln-original.asar
+  <span class="t-com">loader   </span> C:\...\sandloader\src\boot\bootstrap.js
 
   <span class="t-str">Installed.</span> Start Sandustry and press ^ (or F1) to open the console.
-  <span class="t-str">Nothing in the game directory was modified.</span></code></pre>
+  <span class="t-str">No file's content was modified; two paths were renamed.</span></code></pre>
           </div>
         </li>
         <li>
@@ -322,8 +324,10 @@ cd SandLoader</code></pre></div>
       <p>Editing SandLoader's own code needs no reinstall — just restart the game. To remove it
       entirely:</p>
       <div class="codewrap"><pre><code>node install.js --uninstall</code></pre></div>
-      <p>Deleting one folder is the whole operation, because nothing was ever written into the
-      game. To see what is currently installed, on what evidence:</p>
+      <p>That puts the install back exactly as it was found: on a build with a loader slot the
+      slot directory goes, and on 0.5.6 the two renamed paths get their names back.
+      <code>node install.js --repair</code> puts a half-applied or orphaned attach right and says
+      what it found. To see what is currently installed, on what evidence:</p>
       <div class="codewrap"><pre><code>node install.js --status</code></pre></div>
 
       <h2 id="console">The console</h2>
@@ -480,6 +484,7 @@ gold  gold: 0 -&gt; 1000 <span class="t-com">(save marked: achievements now disa
       <h6>Go further</h6>
       <a href="#/mods#commands" data-nav>Console commands</a>
       <a href="#/mods#content" data-nav>Registering content</a>
+      <a href="#/mods#missions" data-nav>Missions &amp; story</a>
       <a href="#/mods#patching" data-nav>Patching the game</a>
       <a href="#/mods#storage" data-nav>Storage &amp; settings</a>
       <h6>Ship it</h6>
@@ -711,6 +716,125 @@ SMLN.register.<span class="t-fn">recipe</span>(<span class="t-str">'smelter'</sp
   .<span class="t-fn">catch</span>((e) =&gt; SMLN.<span class="t-fn">log</span>(<span class="t-str">'warn'</span>, e.message))
   <span class="t-com">// "this Sandustry build has no recipe registry …"</span></code></pre></div>
 
+      <h2 id="missions">Missions &amp; story</h2>
+      <p>A mod can put objectives into the game's mission panel and beats into its story chain.
+      Neither table has a registry API — they are module-scope literals the game assumes it is the
+      only writer of — so the SDK's whole job is to put a mod's entry in, keep it there, and supply
+      the four things the game does not: <strong>running the predicate</strong>,
+      <strong>remembering the completion</strong>, <strong>keeping ids apart</strong>, and
+      <strong>refusing content whose mod is absent</strong>.</p>
+      <p>The surface is scoped per mod: <code>SMLN.forMod(id).story</code>. Inside a renderer mod
+      <code>SMLN</code> <em>is</em> that facade, so <code>SMLN.story</code> is the whole thing. A
+      commented, loadable version of the example below — with all three cross-mod mechanisms and a
+      console command to watch it work — ships as <code>mods/example-missions/</code>.</p>
+      <div class="codewrap"><pre><code>SMLN.story.<span class="t-fn">speaker</span>(<span class="t-str">'surveyor'</span>, { name: <span class="t-str">'MARA'</span>, portrait: PORTRAIT, color: <span class="t-str">'#8ec5ff'</span> })
+
+SMLN.story.<span class="t-fn">objective</span>({
+  id: <span class="t-str">'first-quota'</span>,                            <span class="t-com">// registers as &lt;modId&gt;:first-quota</span>
+  title: <span class="t-str">'Fill the survey quota'</span>,
+  description: <span class="t-str">'Hold 250 gold at one time.'</span>,
+  check: <span class="t-key">function</span> (state) { <span class="t-key">return</span> state.store.resources.gold &gt;= <span class="t-num">250</span> },
+})
+
+SMLN.story.<span class="t-fn">step</span>({
+  id: <span class="t-str">'briefing'</span>,
+  after: <span class="t-str">'establish_wet_sand_processing'</span>,      <span class="t-com">// a bare vanilla id means the game's own</span>
+  messages: [
+    { speaker: <span class="t-str">'surveyor'</span>, text: <span class="t-str">'Core sample says this seam runs deep.'</span> },
+    { speaker: <span class="t-str">'zoe'</span>, text: <span class="t-str">'File it once the sand is moving.'</span>, showObjective: <span class="t-key">true</span> },
+  ],
+  completeWhen: { objective: <span class="t-str">'first-quota'</span> },
+})</code></pre></div>
+
+      <h3>The surface</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Call</th><th>Does</th></tr></thead>
+        <tbody>
+          <tr><td><code>story.modId</code></td><td>This mod's namespace, as a string.</td></tr>
+          <tr><td><code>story.objective(def)</code></td><td>Registers an objective. <code>id</code> required and bare; <code>title</code>, <code>description</code>, <code>check</code>, <code>next</code>, <code>requires</code> optional.</td></tr>
+          <tr><td><code>story.complete(id)</code> · <code>story.isComplete(id)</code></td><td>Complete an objective, or ask whether it is done.</td></tr>
+          <tr><td><code>story.speaker(id, def)</code></td><td>Registers a character. <code>portrait</code> required — a <code>data:</code> URL or one of your own assets; <code>name</code>, <code>color</code> optional.</td></tr>
+          <tr><td><code>story.step(def)</code> · <code>story.isStepComplete(id)</code></td><td>Registers a story beat. <code>id</code> and at least one message required; <code>after</code>/<code>before</code> place it, <code>completeWhen</code> finishes it.</td></tr>
+          <tr><td><code>story.emit(name, payload)</code></td><td>Publishes <code>&lt;modId&gt;:name</code>.</td></tr>
+          <tr><td><code>story.on(event, fn)</code></td><td>Listens; returns an <code>off()</code>.</td></tr>
+        </tbody>
+      </table></div>
+      <p>A registration returns <code>true</code> for accepted — or queued until the game exists —
+      and <code>false</code> for refused, always with a named error carrying the mod id and a code
+      (<code>E_STORY_BAD_ID</code>, <code>E_STORY_MISSING_DEPENDENCY</code>,
+      <code>E_STORY_DUPLICATE_ID</code>, <code>E_STORY_NO_PORTRAIT</code>, …). It goes to the log
+      <em>and</em> to the in-game Problems panel, because a refusal only a log file ever sees is
+      invisible to exactly the person it is for. <strong>Nothing here throws at a mod</strong> — a
+      bad definition must not abort the mod that wrote it.</p>
+
+      <h3>Ids are namespaced, always</h3>
+      <p><code>objective({ id: 'first-quota' })</code> from <code>example-missions</code> registers
+      as <code>example-missions:first-quota</code>. Two mods cannot collide in a table the game
+      believes it owns alone, the author of a broken objective is in the log line without a lookup,
+      and a cross-mod reference has to name the mod it means. Vanilla ids stay bare:
+      <code>find_fluxite</code> means the game's own and cannot be shadowed, and writing a
+      <code>:</code> into a registration id is refused, because that is the one way a mod could aim
+      at another namespace by hand.</p>
+
+      <h3>Reaching across mods</h3>
+      <p>Three ways, in increasing order of coupling.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Write</th><th>Reach for it when</th></tr></thead>
+        <tbody>
+          <tr><td><code>requires: ['gas-pipes']</code></td><td>The content makes no sense without the other mod. Absent or disabled, it is not registered at all and the log names both mods. Per registration — your mod itself still loads.</td></tr>
+          <tr><td><code>completeWhen: { objective: 'other.mod:their-goal' }</code></td><td>The two pieces genuinely belong to one chain. <code>after</code> and <code>next</code> take a namespaced id the same way. A reference nothing ever registers is reported once, by name, instead of waited on forever.</td></tr>
+          <tr><td><code>story.emit('reactor-online')</code></td><td>The emitting mod should not have to know who is listening. It publishes <code>&lt;modId&gt;:reactor-online</code>; anyone finishes on <code>completeWhen: { event: 'my.mod:reactor-online' }</code>. This is what lets a mission pack ship for a machine mod that has never heard of it.</td></tr>
+        </tbody>
+      </table></div>
+      <p>Ordering is by declaration, never by load order: a step naming an <code>after</code> that
+      has not registered yet waits for it, and the queue is retried until it stops moving. After
+      five ticks the reference is declared missing, reported once by name, and the step is appended
+      to the end rather than dropped — load order is not something a mod author can control, so it
+      must not be something they have to reason about.</p>
+
+      <h3>Why SandLoader ticks the predicates</h3>
+      <p><code>check</code> is a field the game already has, and its evaluator is generic — but that
+      evaluator fires at only <strong>three event sites</strong>, and seven of the twelve shipped
+      objectives are completed by hard-coded calls elsewhere. A mod's predicate left in the game's
+      table would sit there unevaluated forever. So the SDK keeps the predicate and ticks it about
+      once a second, deliberately not per frame, because a mod's predicate must not become a cost
+      the simulation pays.</p>
+      <p>A mod's <code>check</code> is therefore never written into the game's table: the shipped
+      evaluator does not catch, so a predicate left there would throw inside the game's own
+      tech-unlock handler. Inside the SDK it is wrapped — a throw is logged against the mod that
+      wrote it, and after three throws that one predicate is switched off and reported rather than
+      throwing every second for the rest of the session.</p>
+
+      <h3>Why completion is recorded separately</h3>
+      <p>The game deletes a completed objective from <code>store.objectives.active</code> about five
+      seconds later, and again at world load, and keeps no completed set anywhere at all. Left to
+      that, a mod's objective would un-complete itself. That deletion is left strictly alone — it is
+      the game's behaviour. Instead the SDK keeps its own record in the saved half of the state,
+      under <code>store.smlnStory</code>, re-read whenever the state or its store is replaced, which
+      is what a world load looks like from here. It is re-read as a <em>replacement</em> and never as
+      a union: two saves have two different sets of finished missions, and carrying one into the
+      other would hand a player completions they never earned.</p>
+      <p>Unloading a mod takes its objectives out of the game's table <em>and</em> out of the active
+      list — an id left active in a save whose mod is gone is permanent, because the game refuses to
+      complete an id its table no longer defines. The saved record is deliberately kept: turning a
+      mod off and on again must not mean replaying its missions.</p>
+
+      <div class="note good">
+        <span class="lbl">Measured in the running game</span>
+        <p>A mod's objective completed <strong>1016 ms</strong> after its predicate turned true, and
+        unloading the mod returned the game's table to exactly its <strong>twelve</strong> vanilla
+        entries.</p>
+      </div>
+      <div class="note warn">
+        <span class="lbl">The story half is only half proven</span>
+        <p>Speakers and steps do register into the game's own live tables, a step inserts at the
+        position it names with the chain intact, and a mod's speaker sits beside the vanilla two.
+        <strong>Not verified: a dialogue beat actually appearing on screen, and a <code>data:</code>
+        URL portrait actually rendering.</strong> Reaching a mod's beat needs play up to a factory
+        rank, which nobody has done yet. Treat the pixels as unproven until someone has watched
+        them.</p>
+      </div>
+
       <h2 id="patching">Patching the game</h2>
       <p>Your mod can use the same anchor-based patch engine SandLoader uses for itself. Patches
       are contributed from the <a href="#/mods#main" data-nav>main-process half</a> — return them
@@ -829,8 +953,10 @@ api.player.getPosition(state)</code></pre>
       </div>
 
       <h3>2. Feature-detect anything that might not exist</h3>
-      <p>The adapter can rename a call. It cannot invent a namespace this build does not have.
-      <code>api.structures.recipes</code>, for instance, does not exist in 0.5.5 at all.</p>
+      <p>The adapter can rename a call. It cannot invent a namespace this build does not have —
+      and what exists moves between builds in both directions. <code>api.structures.recipes</code>
+      did not exist at all before 0.5.6, which added it; <b>upgrades</b> still have no registration
+      function anywhere in the bundle.</p>
       <div class="dodont">
         <div class="dd good">
           <header><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Do</header>
@@ -960,17 +1086,20 @@ api.player.getPosition(state)</code></pre>
       text in a bundle.</p>
       <p><b>Behaviour</b> lives in patches, and a patch needs its anchor text to still occur in
       the build. Many older mods were written against older Sandustry versions where it no longer
-      does. On 0.5.5 not one of corelib's own patches still matches, which is precisely why its
+      does. On 0.5.6 not one of corelib's own patches still matches, which is precisely why its
       content is bridged instead.</p>
       <p>So an older mod's machine can appear in the build inventory, place correctly, and still do
       nothing — the definition registered, the logic did not. Every skipped patch is named in the
       log with the reason.</p>
 
       <h3>What the game itself cannot do</h3>
-      <p>Two limits are the game's, not the loader's. Sandustry 0.5.5 contains no function for
-      registering <b>upgrades</b> or <b>recipes</b> anywhere in its bundle, so no loader can add
-      one. A mod declaring them loads fine and SandLoader says plainly in the log that those
-      entries could not be registered, rather than failing quietly.</p>
+      <p>One limit here is the game's, not the loader's. Sandustry 0.5.6 contains no function for
+      registering <b>upgrades</b> anywhere in its bundle, so no loader can add one. A mod declaring
+      them loads fine and SandLoader says plainly in the log that those entries could not be
+      registered, rather than failing quietly. <b>Recipes</b> were in the same position until
+      0.5.6 added a registry with nine machine categories; corelib's four recipe kinds are now
+      translated onto three of them, and contact recipes — element meets element — are reported
+      one by one, because this build gives them no machine id.</p>
 
       <h3>Registries are per-thread</h3>
       <p>The simulation runs across 18 worker threads, each holding its own copy of the element
@@ -1131,17 +1260,23 @@ docs/         mod authoring guide</code></pre></div>
       <h2 id="limits">Limitations</h2>
       <p>An honest list of what is not built yet.</p>
       <ul>
-        <li><strong>Recipes.</strong> Sandustry 0.5.5 has no recipe registry at all —
-        <code>recipes</code> appears nowhere in the build's API object, and
-        <code>api.structures.recipes</code> exists only in the newer Sandkit v1.
-        <code>SMLN.register.recipe()</code> feature-detects it and reports that it is unavailable
-        rather than pretending to have registered something.</li>
-        <li><strong>Worker entrypoints do not get a Sandkit API yet.</strong> A mod with a
-        <code>workerEntry</code> is injected into the simulation workers, but there is no
-        worker-side <code>sandkit</code> for it to call, so it fails loudly. Handing a mod the
-        main adapter inside a simulation worker would corrupt simulation state.</li>
-        <li><strong>Map mods.</strong> Custom-map blueprints are discovered and reported, but
-        loading them needs game-side support that is not exposed.</li>
+        <li><strong>Upgrades cannot be registered.</strong> Sandustry 0.5.6 has no upgrade
+        registration function anywhere in its bundle, so no loader can add one. A mod declaring
+        upgrades loads; the entries are reported as unregistered rather than silently dropped.</li>
+        <li><strong>Contact recipes cannot be registered.</strong> 0.5.6's recipe registry covers
+        nine machine categories, and element-meets-element reactions have no machine id among
+        them. Every other recipe kind registers; contacts are reported one by one.</li>
+        <li><strong>Fluxloader <em>worker</em> mods are translated, not run.</strong> SandLoader's
+        own worker mods get the simulation worker's Sandkit through
+        <code>SMLN.whenWorkerReady()</code>. A Fluxloader worker mod does not: corelib's worker
+        half is built from a patch against a bundle chunk 0.5.6 no longer emits, so SandLoader
+        publishes <code>corelib</code> and <code>fluxloaderAPI</code> itself with the calls the
+        bundled mods make reimplemented, and reports what has no equivalent.</li>
+        <li><strong>A dialogue beat has not been seen on screen.</strong> The story half of the
+        <a href="#/mods#missions" data-nav>mission and story SDK</a> registers into the game's own
+        tables and holds its ordering, but reaching a mod's beat needs play up to a factory rank
+        nobody has reached yet. The mission half has been watched completing in the running
+        game.</li>
         <li><strong>Renderer hot reload is partial by nature.</strong> SandLoader reclaims what
         it handed out — listeners, timers, messaging handlers, recorded registrations. A mod that
         monkey-patched a game function in place stays patched until the window reloads, and the
@@ -1150,9 +1285,9 @@ docs/         mod authoring guide</code></pre></div>
 
       <h2 id="status">Status</h2>
       <div class="tablewrap"><table><tbody>
-        <tr><td><strong>Version</strong></td><td>SandLoader 0.3.4</td></tr>
-        <tr><td><strong>Verified against</strong></td><td>Sandustry 0.5.5</td></tr>
-        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">159 / 159 passing</span></td></tr>
+        <tr><td><strong>Version</strong></td><td>SandLoader 0.4.0</td></tr>
+        <tr><td><strong>Verified against</strong></td><td>Sandustry 0.5.6</td></tr>
+        <tr><td><strong>Self-test</strong></td><td><span class="pill ok dot">281 passing</span> <span class="pill no dot">3 known failures</span><br>Two host-ABI checks ask the installed build whether it still exposes the loader slot and a <code>startGame</code> API; 0.5.6 has neither. The third reports a bundled third-party mod calling <code>player.inventory.addFromId</code>, which this build cannot answer. They are kept red on purpose &mdash; they are how the project notices the host changing under it.</td></tr>
         <tr><td><strong>Dependencies</strong></td><td>None</td></tr>
         <tr><td><strong>License</strong></td><td>MIT</td></tr>
       </tbody></table></div>
@@ -1173,8 +1308,12 @@ docs/         mod authoring guide</code></pre></div>
         <div class="a"><p>No. Not one byte. Patching happens in memory as files are served to
         the renderer.</p></div></details>
       <details><summary>Will Steam file verification flag it?</summary>
-        <div class="a"><p>No, because nothing in the game folder changes. On Steam, SandLoader
-        lives in the Workshop content folder.</p></div></details>
+        <div class="a"><p>It depends on the build. Up to 0.5.5 SandLoader lived in the Workshop
+        content folder and nothing in the game folder changed. Sandustry <b>0.5.6</b> removed that
+        loader slot, so SandLoader renames <code>app.asar</code> aside and puts its own directory
+        in its place — no file's content is modified, but <em>Verify integrity of game files</em>
+        does undo the attach. Running <code>node install.js --repair</code> puts the pieces
+        back.</p></div></details>
       <details><summary>What about GOG?</summary>
         <div class="a"><p>Supported. Since GOG builds never scan for a loader, SandLoader adds
         its own <code>resources/app/</code> directory — three new files beside the untouched
@@ -1225,7 +1364,7 @@ docs/         mod authoring guide</code></pre></div>
         machines and tech nodes are translated and handed to the game's own registries, so they
         appear and work. A mod's <i>patches</i> need anchor text that still occurs in the current
         bundle — and many older mods were written against older Sandustry builds where that text
-        has since changed. On 0.5.5, none of corelib's own patches still match, which is exactly
+        has since changed. On 0.5.6, none of corelib's own patches still match, which is exactly
         why SandLoader bridges its content instead of relying on them.</p>
         <p>The practical shape of that: a machine from an older mod shows up in the build
         inventory and can be placed, but may do nothing until the mod itself is updated. The log
@@ -1243,7 +1382,7 @@ docs/         mod authoring guide</code></pre></div>
   <div class="foot">
     <div>
       <span class="fb">Sand<i>Loader</i></span>
-      <p>A mod loader for Sandustry that never modifies your game files. MIT licensed, no
+      <p>A mod loader for Sandustry that never rewrites a game file. MIT licensed, no
       dependencies, no build step.</p>
     </div>
     <div>
@@ -1264,7 +1403,7 @@ docs/         mod authoring guide</code></pre></div>
     </div>
   </div>
   <div class="legal">
-    <span>SandLoader 0.3.4 · verified against Sandustry 0.5.5 · self-test 159/159</span>
+    <span>SandLoader 0.4.0 · verified against Sandustry 0.5.6 · self-test 281 passing, 3 known failures</span>
     <span>Not affiliated with the authors of Sandustry.</span>
   </div>
 </footer>

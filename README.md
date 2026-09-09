@@ -4,9 +4,13 @@ A mod loader for **[Sandustry](https://store.steampowered.com/app/2764460/Sandus
 in-game console, a mod manager, and support for existing
 [Fluxloader](https://fluxloader.app/) mods.
 
-**It never modifies your game files.** Patching happens in memory while the game
-loads, so Steam's file verification stays green and a game update can't leave a
-broken patched file behind. Uninstalling is deleting one folder.
+**No file's content is ever modified.** Patching happens in memory while the game
+loads, so a game update can never leave a broken patched file behind. Where the
+build still offers a loader slot, nothing in the install is touched at all.
+Sandustry **0.5.6** removed that slot, so there SandLoader renames `app.asar`
+aside and puts a directory of its own in its place — renaming the two paths back
+is the uninstall, and Steam's *Verify integrity of game files* undoes it
+(`node install.js --repair` puts it back).
 
 Works on **Steam**, **GOG** and **manual/standalone** installs.
 
@@ -58,17 +62,20 @@ Main menu → "SandLoader Mods"    →  install / enable / remove mods
 
 | Store | Status | How SandLoader attaches |
 |---|---|---|
-| **Steam** | supported | the game's own Workshop loader slot — writes nothing into the install |
+| **Steam** | supported | the game's own Workshop loader slot where the build still offers one (up to 0.5.5); on 0.5.6 a shadow `app.asar` directory, with the original renamed aside |
 | **GOG** | supported | an added `resources/app/` bootstrap — no original file is modified |
 | **Manual / standalone** | supported | same bootstrap |
 | **Microsoft Store** | **not supported** | package is ACL-protected and signature-verified |
 | **Game Pass** | **not supported** | same package, same reason |
 
-Sandustry only scans for a mod loader on Steam — its own `main.js` starts that
-check with `if (PLATFORM_NAME !== 'steam') return null`. On GOG and standalone
-builds SandLoader supplies its own entry point instead, by *adding* a directory
-Electron already looks for. Nothing is overwritten and uninstalling removes it
-again. Details in [Non-Steam builds](#non-steam-builds).
+Up to 0.5.5, Sandustry scanned for a mod loader on Steam and nowhere else — its
+own `main.js` started that check with `if (PLATFORM_NAME !== 'steam') return
+null`. **0.5.6 removed the scan entirely**, so on every store SandLoader now
+supplies its own entry point by adding a directory Electron already looks for:
+`resources/app/` on GOG and standalone builds, and on Steam a directory that
+takes over the `app.asar` name with the original renamed aside. No file's
+content is overwritten and uninstalling puts the names back. Details in
+[Non-Steam builds](#non-steam-builds).
 
 Microsoft Store and Game Pass builds live under `WindowsApps`, which refuses
 writes even to an administrator and verifies its own signature. There is no file
@@ -111,8 +118,10 @@ On **Steam** you should see:
   game      sandustry 0.5.6
   at        C:\Program Files (x86)\Steam\steamapps\common\Sandustry
   platform  steam (certain)  -  resources/steam_appid.txt
-  slot      C:\Program Files (x86)\Steam\steamapps\workshop\content\2764460\smln
-  loader    C:\...\sandloader\src\main\entry.js
+  attach    asar-shadow-directory
+  attach    C:\...\steamapps\common\Sandustry\resources\app.asar
+  original  C:\...\common\Sandustry\resources\app.smln-original.asar
+  loader    C:\...\sandloader\src\boot\bootstrap.js
 
   Fetching SteamCMD - needed for "Install from Workshop".
   fetching  https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip
@@ -283,7 +292,7 @@ Platform
 SandLoader
   path      C:\GOG Games\Sandustry\resources\app
   status    INSTALLED
-  version   0.3.4
+  version   0.4.0
   steamcmd  C:\...\sandloader\vendor\steamcmd\steamcmd.exe
 ```
 
@@ -803,11 +812,12 @@ and say nothing.
 
 ## How it works
 
-### On Steam, the game has a loader slot
+### Where the game has a loader slot, SandLoader fills it
 
-Sandustry's own `main.js` scans `steamapps/workshop/content/2764460/*/` for a
-`modinfo.json` declaring `modID: "fluxloader"`, `require`s the
-`fluxloader.bundle.js` next to it, and drives it through a fixed interface:
+Up to 0.5.5, Sandustry's own `main.js` scanned
+`steamapps/workshop/content/2764460/*/` for a `modinfo.json` declaring
+`modID: "fluxloader"`, `require`d the `fluxloader.bundle.js` next to it, and
+drove it through a fixed interface:
 
 ```js
 initialize(hostAPI) → { success }    // hostAPI: { ipcMain, shell, dialog, screen,
@@ -818,12 +828,16 @@ setGameWindow(win) · onGameStarted() · closeGame()
 
 That is the **game's ABI** — the contract a host offers a loader. SandLoader
 implements it directly. It shares no code with the Fluxloader project; it answers
-the same phone number, and separately knows how to read Fluxloader's mods.
+the same phone number, and separately knows how to read Fluxloader's mods. Two
+self-test checks still ask the installed build for that slot and that ABI, and
+on 0.5.6 they fail on purpose: that is how the project finds out the day a host
+stops offering them.
 
-### Everywhere else, SandLoader brings its own
+### Everywhere else — which is now everywhere — SandLoader brings its own
 
-That Workshop scan is Steam-gated, so on GOG and standalone builds nothing ever
-looks for a loader. There SandLoader adds a `resources/app/` directory: Electron
+That Workshop scan was Steam-gated and 0.5.6 dropped it, so on GOG, standalone
+and now Steam nothing ever looks for a loader. There SandLoader adds a
+`resources/app/` directory: Electron
 resolves its app package by searching `resources/` for `app`, then `app.asar`,
 then `default_app.asar`, so an added `app/` loads first. It initialises the
 loader, installs the file interceptor, and only then `require`s the real
@@ -1108,6 +1122,176 @@ An honest list:
 ---
 
 ## Changelog
+
+### 0.4.0
+
+Verified against Sandustry 0.5.6. Self-test: 284 checks (+154) — **281 passing, 3
+failing on purpose** (see the end of this entry).
+
+This run is about the game moving out from under the loader, and about what a mod
+can put *into* the game once it is back in. Sandustry 0.5.6 removed the loader
+slot SandLoader had been living in, so the first half of the work was attaching
+to a build that offers nothing — and then re-earning every capability against a
+bundle that had changed shape. The second half is new ground: maps a mod (or a
+player) can draw and play, and missions and story beats a mod can write.
+
+Grouped by subsystem, and by what each one changed for someone using SandLoader.
+
+**Added — the shadow attach: SandLoader runs on 0.5.6 at all**
+
+- 0.5.6 deleted the Workshop loader scan from the game's own `main.js` and the
+  `startGame` half of the host API with it. There is no slot left to occupy, so
+  the installer parks `app.asar` as `app.smln-original.asar` — its `.unpacked`
+  sibling moves with it — and puts a three-file directory in its place, which is
+  what Electron loads first. **No file's content is modified**, and renaming the
+  two paths back is the uninstall.
+- The strategy is chosen from what the installed build actually offers, not from
+  its version number: the installer probes for the loader slot and takes it where
+  it is still there. A build that restores the slot is attached the old way again
+  with no code change.
+- `node install.js --repair` puts a half-applied or orphaned attach right and
+  names what it found — including the case where Steam's *Verify integrity of
+  game files* restored the archive and left our copy of the original behind.
+  Nothing that SandLoader did not create is ever renamed or removed.
+- Measured, not assumed: the attach was proven by starting the game the way a
+  player does and watching it come up modded.
+
+**Added — content reaches the game's own registries**
+
+- Fluxloader mods' **elements, soils, blocks and tech nodes** now arrive in the
+  registries the game itself reads, rather than through patches whose anchors
+  0.5.6 no longer contains. Blocks and tech nodes are new here; elements and
+  soils were bridged in 0.3.4 and now travel the same route.
+- **Recipes work on 0.5.6**, and only there. The build added a registry with nine
+  machine categories, `SMLN.register.recipe()` registers into it, and corelib's
+  four recipe kinds are translated onto three of them — shakers, kinetic presses
+  and growers (the game calls the grower `planterBox`). Contact recipes — element
+  meets element — have no machine id on this build and are reported per recipe
+  instead of vanishing. Element names in a recipe are resolved to the type
+  numbers the registration returned, so a mod's own element can be an ingredient.
+- Element type numbers are asked of the game instead of read from a vendored
+  table of 18, and `getApi` is anchored on the assignment rather than on a
+  literal 0.5.6 stopped emitting.
+- Four compatibility gaps, each of which had been silently costing a whole mod,
+  were fixed after installing five more real Fluxloader mods; map and skin mods
+  now apply their content rather than loading and doing nothing.
+
+**Added — the simulation worker's Sandkit**
+
+- `ReferenceError: sandkit is not defined` inside a worker mod never meant a
+  missing API. The worker builds a full one; the state holding it was
+  module-local. SandLoader publishes that state and hands it over through
+  `SMLN.whenWorkerReady(fn)`, which waits because mod code runs before the game's
+  worker code does. `SMLN.worker.onEvent` and `SMLN.worker.onInterceptor` carry
+  the mod's name into any failure and cannot take a simulation tick down.
+- Only the **simulation worker** builds a Sandkit. A `workerEntry` in the utility
+  worker still gets messaging and no more, and says so.
+- **Fluxloader worker mods are translated, not run.** corelib's worker half is
+  built from a patch against `js/336.bundle.js`, a chunk 0.5.6 no longer emits;
+  nothing can revive it. SandLoader publishes `corelib` and `fluxloaderAPI`
+  itself with the calls the bundled mods actually make reimplemented against the
+  game's worker API, skips corelib's own worker entry, and reports what has no
+  equivalent through `SMLN.unsupported()`. A Fluxloader worker mod does **not**
+  get the worker's Sandkit.
+
+**Added — custom maps**
+
+- A map mod's blueprints are assembled into the `.custommap` file the game
+  already reads and written into `custom_maps` under its user data folder. The
+  support was exposed all along: four IPC handlers for those files sit outside
+  the build's `MODDING_ENABLED` gate.
+- The main menu's **Maps** button opens SandLoader's own browser, with previews,
+  instead of the game's own screen, which ships switched off and unfinished. A
+  `.custommap` from anywhere on disk can be imported from there.
+- **Only files SandLoader wrote are ever pruned.** A mod's map is named
+  `smln.<modId>.custommap` and nothing else is considered; an imported map is
+  deliberately renamed if its name would look like one of ours. Measured: pruning
+  removed an orphan and left a player's own file named one character away from it
+  untouched. Measured too: a generated map loaded and played.
+
+**Added — the map editor**
+
+- Create a map from nothing at a size you choose, paint it, check it, save it,
+  play it. Measured end to end: a 320x240 map made in the editor started in the
+  game with the player at exactly the spawn the formula predicts.
+- The colour palette is labelled by **what the player gets** — what a colour
+  gives you when you dig it — rather than by colour name, because the bytes are
+  not the thing the mapmaker is choosing.
+- **Nine validation rules** written for mapmakers, run before a save: a map too
+  small for the spawn the game will not move is refused, and the rest are named
+  with what to do about them. Errors block a save; warnings do not.
+- Drawing tools and pure resize/crop/mirror/shift transforms, proven against
+  pixels rather than eyeballed.
+- **Limits are measured, not estimated.** 8000x4000 — 32 million cells — opened
+  in 5.0 s and saved a 4.4 MB file, while driving the renderer to 1.78 GB with a
+  3.08 GB peak. The editor now caps by total cells at half of that, and shows a
+  live memory figure while a size is being typed (about 34 bytes a cell, measured
+  against a 1162 MB baseline). A refused resize now looks like a refusal instead
+  of like nothing happening.
+
+**Added — the mission and story SDK**
+
+`SMLN.forMod(id).story` — inside a renderer mod, `SMLN.story` — lets a mod
+register objectives, speakers and story beats under namespaced ids. Neither of
+the game's tables has a registry API; they are module-scope literals it assumes
+it is the only writer of. Documented in full under
+[Missions and story](#missions-and-story), with a loadable example in
+[`mods/example-missions/`](mods/example-missions/).
+
+- **Missions are proven in the running game.** A mod registers an objective under
+  a namespaced id and SandLoader ticks its predicate itself — the game's own
+  evaluator fires at only three event sites and would never run it. Measured:
+  completion landed 1016 ms after the predicate turned true, and unloading the
+  mod returned the game's table to exactly its twelve vanilla entries.
+- **Completion is recorded separately**, under `store.smlnStory`, because the
+  game deletes a completed objective from its active list seconds later and keeps
+  no completed set anywhere. That deletion is left alone; `isComplete()` answers
+  from SandLoader's record, which is re-read as a replacement on world load and
+  never merged, so two saves keep two different sets of finished missions.
+- **Three ways to reach across mods**, in increasing order of coupling: a
+  declared `requires` dependency, a reference by namespaced id, and events.
+  Ordering is by declaration, never by load order.
+- **Story is half proven, and this is the half.** Speakers and steps register
+  into the game's own live tables, a step inserts at the position it names with
+  the chain intact, and a mod's speaker sits beside the vanilla two. **Not
+  verified: a dialogue beat actually appearing on screen, and a `data:` URL
+  portrait actually rendering.** Reaching a mod's beat needs play up to a factory
+  rank, which nobody has done. The table writes, namespacing, ordering, refusals
+  and the completion record are covered by the self-test against fakes of both
+  tables; the pixels have not been watched.
+- Nothing here throws at a mod. A refusal is named, coded (`E_STORY_BAD_ID`,
+  `E_STORY_MISSING_DEPENDENCY`, …) and reported against the mod that wrote it.
+
+**Fixed — what a mod author and a player actually see**
+
+- A mod's refusals reach the player through the Problems panel, not only the log
+  — a refusal only a log file ever sees is invisible to the person it is for.
+- Stack traces are folded out of the problem log, so the reason is readable
+  without scrolling past the trace.
+- The eight mod warnings that had never left English are translated.
+- The install dialog names the mod it is asking about.
+- The main menu no longer reads through the console overlay, and the completion
+  rail no longer covers what you are reading.
+- Three async self-test checks stopped failing for work that happens elsewhere;
+  the map editor's canvas lost the invisible sheet that sat over it, and its
+  layer list and name field stopped taking the room the palette needed.
+
+**Docs**
+
+- `docs/MODDING-REFERENCE.md`: how Sandustry is built, and all three mod formats
+  that run on it.
+- The website says what Fluxloader compatibility actually delivers — content
+  bridges, behaviour needs anchors that still match — and now documents the
+  mission and story SDK.
+
+**Three self-test checks fail on purpose**
+
+Two ask the installed host whether it still exposes the loader slot and the
+`startGame` API; 0.5.6 has neither. One reports that a bundled third-party mod
+calls `player.inventory.addFromId`, which this build cannot answer. They are the
+project's tripwires for the host changing under it, so they are kept red rather
+than deleted or weakened: a green run would only mean the questions stopped being
+asked.
 
 ### 0.3.4
 
@@ -1466,7 +1650,11 @@ game's own loader slot, and Fluxloader mod compatibility.
 
 ## Status
 
-SandLoader **0.3.4**, verified against **Sandustry 0.5.5**. Self-test: **130/130**.
+SandLoader **0.4.0**, verified against **Sandustry 0.5.6**. Self-test: **281 passing,
+3 known failures** — two host-ABI checks that assert the host still offers a loader
+slot and a `startGame` API, and one bundled third-party mod call this build cannot
+answer. They are red on purpose: they are how the project notices the host changing
+under it.
 
 ## License
 
